@@ -90,6 +90,9 @@ add_custom_command(
     VERBATIM
 )
 
+option(GGML_HRX_BUNDLE_RUNTIME_LIBS "Bundle HRX/ROCm runtime libraries next to the HRX backend" OFF)
+set(GGML_HRX_BUNDLE_LIBRARY_DIRS "" CACHE STRING "Library directories to scan when GGML_HRX_BUNDLE_RUNTIME_LIBS=ON")
+
 add_library(ggml-hrx-graph STATIC
     graph/command-program.cpp
     graph/command-program.h
@@ -154,6 +157,11 @@ ggml_add_backend_library(ggml-hrx
 target_link_libraries(ggml-hrx PRIVATE hrx::hrx loomc::loomc)
 target_link_libraries(ggml-hrx PRIVATE ggml-hrx-executable)
 target_compile_definitions(ggml-hrx PRIVATE GGML_USE_HRX)
+
+if (GGML_HRX_BUNDLE_RUNTIME_LIBS)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BundleRuntime.cmake")
+    ggml_hrx_bundle_runtime(ggml-hrx)
+endif()
 
 add_executable(ggml-hrx-compile-kernel
     tools/compile-kernel.cpp
