@@ -12,6 +12,8 @@ struct ggml_cgraph;
 
 namespace ggml::hrx {
 
+struct ImportedGraph;
+
 using StorageId = uint32_t;
 using ValueId = uint32_t;
 using OperationId = uint32_t;
@@ -59,6 +61,8 @@ struct Value {
     OperationId producer = kInvalidId;
     ValueId view_source = kInvalidId;
     std::string name;
+
+    static const char * boundary_kind_name(BoundaryKind kind);
 };
 
 struct Effect {
@@ -90,6 +94,11 @@ struct Graph {
     std::string fingerprint;
 
     bool valid() const { return errors.empty(); }
+
+    static Graph import(const ggml_cgraph * graph);
+    static Graph deserialize_json(const std::string & json);
+    static std::string serialize_json(const Graph & graph);
+    static bool semantically_equal(const Graph & lhs, const Graph & rhs);
 };
 
 // Runtime tensor identity is deliberately kept out of Graph so that cached
@@ -98,12 +107,8 @@ struct ImportedGraph {
     Graph graph;
     std::vector<const ggml_tensor *> value_tensors;
     std::vector<const ggml_tensor *> storage_roots;
-};
 
-Graph import_graph(const ggml_cgraph * graph);
-ImportedGraph import_graph_with_bindings(const ggml_cgraph * graph);
-Graph deserialize_graph_json(const std::string & json);
-std::string serialize_graph_json(const Graph & graph);
-const char * boundary_kind_name(BoundaryKind kind);
+    static ImportedGraph import(const ggml_cgraph * graph);
+};
 
 } // namespace ggml::hrx

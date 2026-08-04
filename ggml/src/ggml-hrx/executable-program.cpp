@@ -166,7 +166,7 @@ PreparedExecutableProgram & PreparedExecutableProgram::operator=(PreparedExecuta
 
 ErrorResult PreparedExecutableProgram::rebind(const ExecutableBindings & bindings) {
     if (!valid()) return "cannot rebind an invalid prepared executable";
-    if (fingerprint_bindings(bindings.snapshot) != allocation_fingerprint_) {
+    if (BindingSnapshot::fingerprint(bindings.snapshot) != allocation_fingerprint_) {
         return "live allocation fingerprint does not match prepared executable";
     }
     for (Impl::HostStaging & staging : impl_->host_staging) {
@@ -272,9 +272,9 @@ bool ExecutableProgramPreparer::validate_and_initialize() {
     if (!weights.valid()) result.errors_.push_back("valid weight residency cache is required: " + weights.initialization_error());
     if (!commands.valid()) result.errors_.insert(result.errors_.end(), commands.errors.begin(), commands.errors.end());
     if (commands.target != options.target) result.errors_.push_back("preparation target does not match command program");
-    const VerificationResult verification = verify_command_program(plan, corpus, commands);
+    const VerificationResult verification = CommandProgram::verify(plan, corpus, commands);
     result.errors_.insert(result.errors_.end(), verification.errors.begin(), verification.errors.end());
-    const VerificationResult binding_verification = verify_binding_snapshot(plan, bindings.snapshot);
+    const VerificationResult binding_verification = BindingSnapshot::verify(plan, bindings.snapshot);
     result.errors_.insert(result.errors_.end(), binding_verification.errors.begin(), binding_verification.errors.end());
     if (bindings.storages.size() != bindings.snapshot.bindings.size()) {
         result.errors_.push_back("executable binding table does not match binding snapshot");
@@ -287,7 +287,7 @@ bool ExecutableProgramPreparer::validate_and_initialize() {
     result.command_prefix_ = record_command_count != commands.commands.size();
     result.split_commands_ = options.split_commands;
     result.serialized_commands_ = options.serialize_commands || options.split_commands;
-    result.allocation_fingerprint_ = fingerprint_bindings(bindings.snapshot);
+    result.allocation_fingerprint_ = BindingSnapshot::fingerprint(bindings.snapshot);
     return true;
 }
 
@@ -741,7 +741,7 @@ std::string PreparedExecutableProgram::format() const {
             << " bindings=" << artifact.binding_count << '\n';
     }
     for (const PreparedCommandDiagnostic & command : program.commands()) {
-        out << "command " << command.ordinal << ' ' << command_kind_name(command.kind)
+        out << "command " << command.ordinal << ' ' << Command::kind_name(command.kind)
             << " label=" << command.label << " constants=" << command.constant_bytes
             << " bindings=" << command.binding_count;
         if (!command.artifact_key.empty()) out << " artifact=" << command.artifact_key;
@@ -776,7 +776,7 @@ std::string PreparedExecutableProgram::serialize_json() const {
     });
     root["commands"] = nlohmann::json::array();
     for (const PreparedCommandDiagnostic & command : program.commands()) root["commands"].push_back({
-        { "ordinal", command.ordinal }, { "kind", command_kind_name(command.kind) }, { "label", command.label },
+        { "ordinal", command.ordinal }, { "kind", Command::kind_name(command.kind) }, { "label", command.label },
         { "artifact", command.artifact_key }, { "constant_bytes", command.constant_bytes },
         { "binding_count", command.binding_count },
     });

@@ -39,6 +39,9 @@ struct RoutedTransformerFacts {
     std::string rms_epsilon;
 };
 
+class QwenBindingImplementation {
+public:
+
 static OperationId layer_start(size_t layer) {
     return layer < 47 ? kFirstLayerOperation + static_cast<OperationId>(layer * kRegularLayerOperationCount)
                       : kTerminalLayerOperation;
@@ -598,15 +601,17 @@ static void bind_endpoint(const Graph & graph, Invocation & invocation, const Sc
     }
 }
 
+};
+
 } // namespace
 
-VerificationResult materialize_qwen3_moe_dispatch_bindings(Graph & graph, Schedule & schedule) {
+VerificationResult QwenProgramProof::materialize_dispatch_bindings(Graph & graph, Schedule & schedule) {
     VerificationResult result;
     if (schedule.invocations.size() != 50 || graph.operations.size() != 3030) {
         result.errors.push_back("cannot materialize bindings for a noncanonical Qwen program");
         return result;
     }
-    RoutedTransformerFacts facts = recover_transformer_facts(graph, schedule, result.errors);
+    RoutedTransformerFacts facts = QwenBindingImplementation::recover_transformer_facts(graph, schedule, result.errors);
     if (!result.errors.empty()) return result;
     const bool prefill = schedule.workload.rfind("prefill-", 0) == 0;
     const bool decode = schedule.workload.rfind("decode-", 0) == 0;
@@ -621,41 +626,41 @@ VerificationResult materialize_qwen3_moe_dispatch_bindings(Graph & graph, Schedu
         return result;
     }
     const size_t kv_blocks = (facts.context_count + kSplitAttentionKvTileSize - 1) / kSplitAttentionKvTileSize;
-    Scratch scratch;
-    scratch.control = append_scratch(graph, "request_control", sizeof(int32_t));
-    scratch.inverse_frequencies = append_scratch(graph, "inverse_frequencies", (facts.head_size / 2) * sizeof(float));
-    scratch.q8_hidden = append_scratch(graph, "q8_hidden", facts.token_count * q8_row_bytes(facts.hidden_size));
+    QwenBindingImplementation::Scratch scratch;
+    scratch.control = QwenBindingImplementation::append_scratch(graph, "request_control", sizeof(int32_t));
+    scratch.inverse_frequencies = QwenBindingImplementation::append_scratch(graph, "inverse_frequencies", (facts.head_size / 2) * sizeof(float));
+    scratch.q8_hidden = QwenBindingImplementation::append_scratch(graph, "q8_hidden", facts.token_count * QwenBindingImplementation::q8_row_bytes(facts.hidden_size));
     if (decode) {
-        scratch.q8_attention = append_scratch(graph, "q8_attention", q8_row_bytes(facts.query_size));
-        scratch.q8_swiglu = append_scratch(graph, "q8_swiglu",
-                                           facts.token_count * facts.route_count * q8_row_bytes(facts.expert_intermediate_size));
-        scratch.partial_max = append_scratch(graph, "attention_partial_max",
+        scratch.q8_attention = QwenBindingImplementation::append_scratch(graph, "q8_attention", QwenBindingImplementation::q8_row_bytes(facts.query_size));
+        scratch.q8_swiglu = QwenBindingImplementation::append_scratch(graph, "q8_swiglu",
+                                           facts.token_count * facts.route_count * QwenBindingImplementation::q8_row_bytes(facts.expert_intermediate_size));
+        scratch.partial_max = QwenBindingImplementation::append_scratch(graph, "attention_partial_max",
                                              facts.key_value_head_count * kv_blocks * kSplitAttentionQueryCapacity * sizeof(float));
-        scratch.partial_sum = append_scratch(graph, "attention_partial_sum",
+        scratch.partial_sum = QwenBindingImplementation::append_scratch(graph, "attention_partial_sum",
                                              facts.key_value_head_count * kv_blocks * kSplitAttentionQueryCapacity * sizeof(float));
-        scratch.partial_output = append_scratch(graph, "attention_partial_output",
+        scratch.partial_output = QwenBindingImplementation::append_scratch(graph, "attention_partial_output",
                                                 facts.key_value_head_count * kv_blocks * kSplitAttentionQueryCapacity *
                                                     facts.head_size * sizeof(uint16_t));
-        scratch.completion_counter = append_scratch(graph, "attention_completion_counter",
+        scratch.completion_counter = QwenBindingImplementation::append_scratch(graph, "attention_completion_counter",
                                                     facts.key_value_head_count * sizeof(int32_t));
     } else {
-        scratch.expert_table = append_scratch(graph, "expert_table",
+        scratch.expert_table = QwenBindingImplementation::append_scratch(graph, "expert_table",
                                               (facts.expert_count + facts.expert_count * facts.token_count) * sizeof(int32_t));
         const size_t route_tiles = (facts.token_count * facts.route_count + kExpertPartitionRouteTileSize - 1) /
                                    kExpertPartitionRouteTileSize;
-        scratch.partition_table = append_scratch(graph, "partition_table",
+        scratch.partition_table = QwenBindingImplementation::append_scratch(graph, "partition_table",
                                                  (1 + facts.expert_count + route_tiles) * sizeof(int32_t));
     }
 
-    const ValueId hidden_state = op_output(graph, 0);
-    bind_preamble(graph, schedule.invocations[0], scratch, facts, result.errors);
+    const ValueId hidden_state = QwenBindingImplementation::op_output(graph, 0);
+    QwenBindingImplementation::bind_preamble(graph, schedule.invocations[0], scratch, facts, result.errors);
     for (size_t layer = 0; layer < facts.layer_count; ++layer) {
-        if (prefill) bind_prefill_layer(graph, schedule.invocations[layer + 1], scratch, layer, facts,
+        if (prefill) QwenBindingImplementation::bind_prefill_layer(graph, schedule.invocations[layer + 1], scratch, layer, facts,
                                        hidden_state, result.errors);
-        else bind_decode_layer(graph, schedule.invocations[layer + 1], scratch, layer, facts,
+        else QwenBindingImplementation::bind_decode_layer(graph, schedule.invocations[layer + 1], scratch, layer, facts,
                                hidden_state, result.errors);
     }
-    bind_endpoint(graph, schedule.invocations.back(), scratch, facts, hidden_state, result.errors);
+    QwenBindingImplementation::bind_endpoint(graph, schedule.invocations.back(), scratch, facts, hidden_state, result.errors);
     return result;
 }
 

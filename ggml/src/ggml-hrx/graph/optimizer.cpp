@@ -13,19 +13,24 @@ struct Candidate {
     std::vector<OperationId> operations;
 };
 
+class SelectionImplementation {
+public:
+
 static std::vector<OperationId> matched_operations(const Match & match) {
     return match.covered_operations;
 }
 
+};
+
 } // namespace
 
-Selection select_regions(const Graph & graph, const std::vector<FusionRule> & rules) {
+Selection Selection::select(const Graph & graph, const std::vector<FusionRule> & rules) {
     std::vector<Candidate> candidates;
     for (size_t rule_id = 0; rule_id < rules.size(); ++rule_id) {
         for (OperationId root = 0; root < graph.operations.size(); ++root) {
-            Match match = match_automaton(graph, rules[rule_id].automaton, root);
+            Match match = MatchAutomaton::match(graph, rules[rule_id].automaton, root);
             if (match.found()) {
-                candidates.push_back({ rule_id, root, rules[rule_id].priority, matched_operations(match) });
+                candidates.push_back({ rule_id, root, rules[rule_id].priority, SelectionImplementation::matched_operations(match) });
             }
         }
     }
@@ -55,7 +60,7 @@ Selection select_regions(const Graph & graph, const std::vector<FusionRule> & ru
     return selection;
 }
 
-Schedule materialize_schedule(const Graph & graph, const std::vector<FusionRule> & rules, const Selection & selection) {
+Schedule Schedule::materialize(const Graph & graph, const std::vector<FusionRule> & rules, const Selection & selection) {
     Schedule schedule;
     schedule.graph_fingerprint = graph.fingerprint;
     std::vector<size_t> region_for_operation(graph.operations.size(), SIZE_MAX);
@@ -104,7 +109,7 @@ Schedule materialize_schedule(const Graph & graph, const std::vector<FusionRule>
     return schedule;
 }
 
-Schedule materialize_schedule_with_cpu_fallback(const Graph & graph, const std::vector<FusionRule> & rules, const Selection & selection) {
+Schedule Schedule::materialize_with_cpu_fallback(const Graph & graph, const std::vector<FusionRule> & rules, const Selection & selection) {
     std::vector<FusionRule> augmented_rules = rules;
     Selection augmented_selection = selection;
     for (OperationId operation : selection.uncovered_operations) {
@@ -121,7 +126,7 @@ Schedule materialize_schedule_with_cpu_fallback(const Graph & graph, const std::
     std::sort(augmented_selection.regions.begin(), augmented_selection.regions.end(), [](const SelectedRegion & lhs, const SelectedRegion & rhs) {
         return lhs.operations.front() < rhs.operations.front();
     });
-    return materialize_schedule(graph, augmented_rules, augmented_selection);
+    return Schedule::materialize(graph, augmented_rules, augmented_selection);
 }
 
 } // namespace ggml::hrx

@@ -198,15 +198,15 @@ static void test_priority_growth_and_overlap() {
     ggml::hrx::SearchOptions options;
     options.require_complete_coverage = true;
     options.record_trace = true;
-    const ggml::hrx::SearchResult result = ggml::hrx::search_fusions(index, configuration, options);
+    const ggml::hrx::SearchResult result = ggml::hrx::SearchResult::search(index, configuration, options);
     REQUIRE(result.valid());
     REQUIRE(result.selected.size() == 1);
     REQUIRE(result.selected.front().family == "fused");
     REQUIRE(result.uncovered_operations.empty());
     REQUIRE(result.report.expanded == 1);
     REQUIRE(result.report.invalidated >= 1);
-    REQUIRE(ggml::hrx::format_search_report(result).find("family=fused") != std::string::npos);
-    REQUIRE(ggml::hrx::serialize_search_report_json(result).find("ggml-hrx-fusion-search-v1") != std::string::npos);
+    REQUIRE(ggml::hrx::SearchResult::format_report(result).find("family=fused") != std::string::npos);
+    REQUIRE(ggml::hrx::SearchResult::serialize_report_json(result).find("ggml-hrx-fusion-search-v1") != std::string::npos);
 }
 
 static void test_fact_disagreement() {
@@ -225,17 +225,17 @@ int main(int argc, char ** argv) {
         std::ifstream input(argv[1]);
         REQUIRE(input.good());
         const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-        const ggml::hrx::Graph graph = ggml::hrx::deserialize_graph_json(text);
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(text);
         REQUIRE(graph.valid());
         const ggml::hrx::GraphIndex index(graph);
-        const ggml::hrx::RoutedTransformerModel model = ggml::hrx::analyze_routed_transformer(index);
+        const ggml::hrx::RoutedTransformerModel model = ggml::hrx::RoutedTransformerModel::analyze(index);
         for (const std::string & error : model.errors) std::fprintf(stderr, "analysis: %s\n", error.c_str());
         REQUIRE(model.valid());
         REQUIRE(model.preamble_operations.size() + model.endpoint_operations.size() +
             [&] { size_t count = 0; for (const auto & block : model.blocks) count += block.operations.size(); return count; }() ==
             graph.operations.size());
-        const ggml::hrx::SearchResult result = ggml::hrx::search_fusions(
-            index, ggml::hrx::make_structural_routed_transformer_planner(), { true, true });
+        const ggml::hrx::SearchResult result = ggml::hrx::SearchResult::search(
+            index, ggml::hrx::RoutedTransformerProvider::make_planner(), { true, true });
         for (const std::string & error : result.errors) std::fprintf(stderr, "search: %s\n", error.c_str());
         REQUIRE(result.valid());
         REQUIRE(result.uncovered_operations.empty());
@@ -254,8 +254,8 @@ int main(int argc, char ** argv) {
             kDecodeGateUpNextQ8, kDecodeDownNextQ8,
             kPrefillExpertPartition, kPrefillDownNextNorm,
         };
-        const ggml::hrx::SearchResult future = ggml::hrx::search_fusions(
-            index, ggml::hrx::make_structural_routed_transformer_planner(future_catalog), { true, true });
+        const ggml::hrx::SearchResult future = ggml::hrx::SearchResult::search(
+            index, ggml::hrx::RoutedTransformerProvider::make_planner(future_catalog), { true, true });
         for (const std::string & error : future.errors) std::fprintf(stderr, "future search: %s\n", error.c_str());
         REQUIRE(future.valid());
         REQUIRE(future.uncovered_operations.empty());
@@ -269,9 +269,9 @@ int main(int argc, char ** argv) {
             ? model.blocks.size() * 5
             : (model.blocks.size() - 1) * 2;
         REQUIRE(current_dispatches == future_dispatches + expected_reduction);
-        const ggml::hrx::QwenProgramProof legacy = ggml::hrx::recover_owned_qwen3_moe_program(graph);
+        const ggml::hrx::QwenProgramProof legacy = ggml::hrx::QwenProgramProof::recover(graph);
         ggml::hrx::RoutedTransformerProgramProof structural =
-            ggml::hrx::recover_structural_routed_transformer_program(graph);
+            ggml::hrx::RoutedTransformerProgramProof::recover(graph);
         if (model.output_token_count != 1) {
             REQUIRE(!legacy.recognized());
             REQUIRE(!structural.valid());
@@ -289,8 +289,8 @@ int main(int argc, char ** argv) {
         for (const std::string & error : structural.errors) std::fprintf(stderr, "program: %s\n", error.c_str());
         REQUIRE(structural.valid());
         REQUIRE(structural.schedule.workload == legacy.schedule.workload);
-        REQUIRE(ggml::hrx::schedule_dispatch_count(structural.schedule) ==
-                ggml::hrx::schedule_dispatch_count(legacy.schedule));
+        REQUIRE(ggml::hrx::Schedule::dispatch_count(structural.schedule) ==
+                ggml::hrx::Schedule::dispatch_count(legacy.schedule));
         auto flatten = [](const ggml::hrx::Schedule & schedule) {
             std::vector<const ggml::hrx::Dispatch *> dispatches;
             for (const auto & invocation : schedule.invocations) {
@@ -309,10 +309,10 @@ int main(int argc, char ** argv) {
         }
         ggml::hrx::Graph legacy_bound_graph = graph;
         ggml::hrx::Schedule legacy_bound_schedule = legacy.schedule;
-        REQUIRE(ggml::hrx::materialize_qwen3_moe_dispatch_bindings(
+        REQUIRE(ggml::hrx::QwenProgramProof::materialize_dispatch_bindings(
             legacy_bound_graph, legacy_bound_schedule).valid());
         ggml::hrx::Graph structural_bound_graph = graph;
-        REQUIRE(ggml::hrx::materialize_routed_transformer_dispatch_bindings(
+        REQUIRE(ggml::hrx::RoutedTransformerProgramProof::materialize_dispatch_bindings(
             structural_bound_graph, structural.schedule).valid());
         REQUIRE(legacy_bound_graph.values.size() == structural_bound_graph.values.size());
         REQUIRE(legacy_bound_graph.storages.size() == structural_bound_graph.storages.size());
@@ -331,7 +331,7 @@ int main(int argc, char ** argv) {
             REQUIRE(expected.dependencies == actual.dependencies);
         }
         const ggml::hrx::VerificationResult verification =
-            ggml::hrx::verify_schedule(structural_bound_graph, structural.schedule);
+            ggml::hrx::Schedule::verify(structural_bound_graph, structural.schedule);
         for (const std::string & error : verification.errors) std::fprintf(stderr, "verification: %s\n", error.c_str());
         REQUIRE(verification.valid());
         std::printf("routed-transformer blocks=%zu components=%zu Tq=%lld Tout=%lld Tkv=%lld\n",

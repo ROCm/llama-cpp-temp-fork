@@ -35,9 +35,8 @@ struct Decision {
     static Decision allow();
     static Decision reject(DecisionReason reason, std::string detail,
                            std::vector<uint32_t> implicated_ids = {});
+    static const char * reason_name(DecisionReason reason);
 };
-
-const char * decision_reason_name(DecisionReason reason);
 
 struct RegionBoundary {
     std::vector<ValueId> inputs;

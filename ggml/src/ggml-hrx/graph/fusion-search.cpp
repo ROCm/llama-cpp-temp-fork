@@ -12,6 +12,9 @@
 namespace ggml::hrx {
 namespace {
 
+class FusionSearchImplementation {
+public:
+
 static bool same_fact_value(const FactValue & lhs, const FactValue & rhs) {
     return lhs == rhs;
 }
@@ -72,6 +75,8 @@ static std::string event_kind_name(SearchEventKind kind) {
     return "unknown";
 }
 
+};
+
 } // namespace
 
 Decision FactDatabase::observe(std::string key, FactValue value, FactEvidence evidence) {
@@ -83,13 +88,13 @@ Decision FactDatabase::observe(std::string key, FactValue value, FactEvidence ev
         fact.evidence.push_back(std::move(evidence));
         return Decision::allow();
     }
-    if (!same_fact_value(fact.value, value)) {
+    if (!FusionSearchImplementation::same_fact_value(fact.value, value)) {
         std::vector<uint32_t> ids;
         for (const FactEvidence & prior : fact.evidence) if (prior.graph_id != kInvalidId) ids.push_back(prior.graph_id);
         if (evidence.graph_id != kInvalidId) ids.push_back(evidence.graph_id);
         return Decision::reject(DecisionReason::InconsistentFact,
-                                "fact " + fact.key + " disagrees: " + fact_value_text(fact.value) +
-                                " versus " + fact_value_text(value), std::move(ids));
+                                "fact " + fact.key + " disagrees: " + FusionSearchImplementation::fact_value_text(fact.value) +
+                                " versus " + FusionSearchImplementation::fact_value_text(value), std::move(ids));
     }
     fact.evidence.push_back(std::move(evidence));
     return Decision::allow();
@@ -127,7 +132,7 @@ std::string PlannerConfiguration::identity() const {
     return out.str();
 }
 
-CandidateScore score_candidate(const FusionCandidate & candidate) {
+CandidateScore FusionCandidate::score(const FusionCandidate & candidate) {
     CandidateScore result;
     result.evidence = candidate.economics.evidence;
     result.covered_operations = candidate.operations.size();
@@ -142,7 +147,7 @@ CandidateScore score_candidate(const FusionCandidate & candidate) {
     return result;
 }
 
-SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration & configuration,
+SearchResult SearchResult::search(const GraphIndex & index, const PlannerConfiguration & configuration,
                             const SearchOptions & options) {
     SearchResult result;
     if (!index.valid()) {
@@ -160,7 +165,7 @@ SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration
     std::vector<FusionCandidate> candidates;
     std::vector<size_t> provider_for_candidate;
     std::set<std::string> candidate_keys;
-    std::priority_queue<QueueEntry, std::vector<QueueEntry>, WorseQueueEntry> queue;
+    std::priority_queue<FusionSearchImplementation::QueueEntry, std::vector<FusionSearchImplementation::QueueEntry>, FusionSearchImplementation::WorseQueueEntry> queue;
     std::vector<uint64_t> generations;
     std::vector<uint8_t> expanded;
     std::vector<uint8_t> active;
@@ -177,13 +182,13 @@ SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration
         if (!candidate_keys.insert(candidate.key).second) return;
         const Decision legality = index.validate_region(candidate.operations, candidate.materialized_outputs,
                                                         candidate.allow_disconnected);
-        const CandidateScore score = score_candidate(candidate);
+        const CandidateScore score = FusionCandidate::score(candidate);
         if (!legality.allowed || (!score.positive() && !candidate.correctness_baseline)) {
             ++result.report.rejected;
             Decision rejection = legality.allowed
                 ? Decision::reject(DecisionReason::NoComparableCost,
                                    "candidate has no positive comparable benefit") : legality;
-            record(result, options, SearchEventKind::Rejected, candidate, score, std::move(rejection));
+            FusionSearchImplementation::record(result, options, SearchEventKind::Rejected, candidate, score, std::move(rejection));
             return;
         }
         const size_t id = candidates.size();
@@ -195,7 +200,7 @@ SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration
         queue.push({ score, candidates.back().key, id, generations.back() });
         if (event_kind == SearchEventKind::Seeded) ++result.report.seeded;
         else ++result.report.expanded;
-        record(result, options, event_kind, candidates.back(), score, Decision::allow());
+        FusionSearchImplementation::record(result, options, event_kind, candidates.back(), score, Decision::allow());
     };
 
     for (size_t provider_index = 0; provider_index < configuration.providers().size(); ++provider_index) {
@@ -208,27 +213,27 @@ SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration
     std::vector<uint8_t> claimed(index.graph().operations.size(), 0);
     size_t expansion_count = 0;
     while (!queue.empty()) {
-        const QueueEntry entry = queue.top();
+        const FusionSearchImplementation::QueueEntry entry = queue.top();
         queue.pop();
         if (entry.candidate >= candidates.size() || !active[entry.candidate] ||
             entry.generation != generations[entry.candidate]) {
             ++result.report.stale;
             if (entry.candidate < candidates.size()) {
-                record(result, options, SearchEventKind::Stale, candidates[entry.candidate], entry.score,
+                FusionSearchImplementation::record(result, options, SearchEventKind::Stale, candidates[entry.candidate], entry.score,
                        Decision::reject(DecisionReason::Overlap, "queue entry is stale"));
             }
             continue;
         }
         FusionCandidate & candidate = candidates[entry.candidate];
         ++result.report.popped;
-        record(result, options, SearchEventKind::Popped, candidate, entry.score, Decision::allow());
+        FusionSearchImplementation::record(result, options, SearchEventKind::Popped, candidate, entry.score, Decision::allow());
 
         const auto overlap = std::find_if(candidate.operations.begin(), candidate.operations.end(),
                                           [&](OperationId operation) { return claimed[operation] != 0; });
         if (overlap != candidate.operations.end()) {
             active[entry.candidate] = 0;
             ++result.report.invalidated;
-            record(result, options, SearchEventKind::Invalidated, candidate, entry.score,
+            FusionSearchImplementation::record(result, options, SearchEventKind::Invalidated, candidate, entry.score,
                    Decision::reject(DecisionReason::Overlap, "candidate overlaps a committed region", { *overlap }));
             continue;
         }
@@ -257,7 +262,7 @@ SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration
         result.selected.push_back(candidate);
         active[entry.candidate] = 0;
         ++result.report.committed;
-        record(result, options, SearchEventKind::Committed, candidate, entry.score, Decision::allow());
+        FusionSearchImplementation::record(result, options, SearchEventKind::Committed, candidate, entry.score, Decision::allow());
 
         // Incremental invalidation is deliberately local to overlapping
         // candidates. Boundary-dependent rescoring can later use the same
@@ -270,7 +275,7 @@ SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration
                 active[other] = 0;
                 ++generations[other];
                 ++result.report.invalidated;
-                record(result, options, SearchEventKind::Invalidated, candidates[other], score_candidate(candidates[other]),
+                FusionSearchImplementation::record(result, options, SearchEventKind::Invalidated, candidates[other], FusionCandidate::score(candidates[other]),
                        Decision::reject(DecisionReason::Overlap, "candidate overlaps a committed region"));
             }
         }
@@ -299,7 +304,7 @@ SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration
     return result;
 }
 
-std::string format_search_report(const SearchResult & result) {
+std::string SearchResult::format_report(const SearchResult & result) {
     std::ostringstream out;
     out << "fusion-search valid=" << (result.valid() ? "yes" : "no")
         << " facts=" << result.facts.facts().size()
@@ -310,7 +315,7 @@ std::string format_search_report(const SearchResult & result) {
         << " expanded=" << result.report.expanded << " invalidated=" << result.report.invalidated
         << " committed=" << result.report.committed << '\n';
     for (const auto & item : result.facts.facts()) {
-        out << "fact " << item.first << '=' << fact_value_text(item.second.value) << " evidence=";
+        out << "fact " << item.first << '=' << FusionSearchImplementation::fact_value_text(item.second.value) << " evidence=";
         for (const FactEvidence & evidence : item.second.evidence) {
             out << evidence.source;
             if (evidence.graph_id != kInvalidId) out << '#' << evidence.graph_id;
@@ -319,7 +324,7 @@ std::string format_search_report(const SearchResult & result) {
         out << '\n';
     }
     for (const FusionCandidate & candidate : result.selected) {
-        const CandidateScore score = score_candidate(candidate);
+        const CandidateScore score = FusionCandidate::score(candidate);
         out << "select " << candidate.key << " family=" << candidate.family
             << " operations=" << candidate.operations.size()
             << " dispatches=" << candidate.economics.planned_dispatches
@@ -327,9 +332,9 @@ std::string format_search_report(const SearchResult & result) {
             << " score=" << score.primary_benefit << '/' << score.secondary_benefit << '\n';
     }
     for (const SearchEvent & event : result.report.events) {
-        out << "event " << event_kind_name(event.kind) << ' ' << event.candidate
+        out << "event " << FusionSearchImplementation::event_kind_name(event.kind) << ' ' << event.candidate
             << " score=" << event.score.primary_benefit << '/' << event.score.secondary_benefit
-            << " decision=" << decision_reason_name(event.decision.reason);
+            << " decision=" << Decision::reason_name(event.decision.reason);
         if (!event.decision.detail.empty()) out << " detail=" << event.decision.detail;
         out << '\n';
     }
@@ -337,7 +342,7 @@ std::string format_search_report(const SearchResult & result) {
     return out.str();
 }
 
-std::string serialize_search_report_json(const SearchResult & result) {
+std::string SearchResult::serialize_report_json(const SearchResult & result) {
     nlohmann::ordered_json root = {
         { "schema", "ggml-hrx-fusion-search-v1" },
         { "valid", result.valid() },
@@ -347,7 +352,7 @@ std::string serialize_search_report_json(const SearchResult & result) {
         { "errors", result.errors },
     };
     for (const auto & item : result.facts.facts()) {
-        nlohmann::ordered_json fact = { { "key", item.first }, { "value", fact_value_text(item.second.value) },
+        nlohmann::ordered_json fact = { { "key", item.first }, { "value", FusionSearchImplementation::fact_value_text(item.second.value) },
                                         { "evidence", nlohmann::ordered_json::array() } };
         for (const FactEvidence & evidence : item.second.evidence) {
             fact["evidence"].push_back({ { "source", evidence.source }, { "graph_id", evidence.graph_id } });
@@ -355,7 +360,7 @@ std::string serialize_search_report_json(const SearchResult & result) {
         root["facts"].push_back(std::move(fact));
     }
     for (const FusionCandidate & candidate : result.selected) {
-        const CandidateScore score = score_candidate(candidate);
+        const CandidateScore score = FusionCandidate::score(candidate);
         root["selected"].push_back({
             { "key", candidate.key }, { "provider", candidate.provider }, { "family", candidate.family },
             { "hero", candidate.hero }, { "operations", candidate.operations },
@@ -379,7 +384,7 @@ std::string serialize_search_report_json(const SearchResult & result) {
     return root.dump();
 }
 
-std::string fusion_region_dot(const GraphIndex & index, const SearchResult & result) {
+std::string SearchResult::region_dot(const GraphIndex & index, const SearchResult & result) {
     auto quoted = [](const std::string & text) {
         std::string escaped;
         escaped.reserve(text.size());

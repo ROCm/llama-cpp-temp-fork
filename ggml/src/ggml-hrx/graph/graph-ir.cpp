@@ -15,6 +15,9 @@
 namespace ggml::hrx {
 namespace {
 
+class GraphImplementation {
+public:
+
 static bool is_layout_op(enum ggml_op op) {
     return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE;
 }
@@ -204,9 +207,11 @@ static void validate_graph(Graph & graph) {
     }
 }
 
+};
+
 } // namespace
 
-Graph deserialize_graph_json(const std::string & text) {
+Graph Graph::deserialize_json(const std::string & text) {
     Graph graph;
     try {
         const nlohmann::json root = nlohmann::json::parse(text);
@@ -230,7 +235,7 @@ Graph deserialize_graph_json(const std::string & text) {
         auto parse_boundary = [](const std::string & name) {
             for (BoundaryKind kind : { BoundaryKind::Internal, BoundaryKind::Input, BoundaryKind::Weight,
                                        BoundaryKind::MutableState, BoundaryKind::Output }) {
-                if (name == boundary_kind_name(kind)) return kind;
+                if (name == Value::boundary_kind_name(kind)) return kind;
             }
             return BoundaryKind::Internal;
         };
@@ -296,8 +301,8 @@ Graph deserialize_graph_json(const std::string & text) {
         }
         graph.roots = root.at("roots").get<std::vector<ValueId>>();
         graph.errors = root.at("errors").get<std::vector<std::string>>();
-        validate_graph(graph);
-        const std::string computed_fingerprint = fingerprint_graph(graph);
+        GraphImplementation::validate_graph(graph);
+        const std::string computed_fingerprint = GraphImplementation::fingerprint_graph(graph);
         if (computed_fingerprint != graph.fingerprint) graph.errors.emplace_back("graph fixture fingerprint does not match contents");
     } catch (const std::exception & error) {
         graph.errors.emplace_back(std::string("invalid graph fixture: ") + error.what());
@@ -305,7 +310,7 @@ Graph deserialize_graph_json(const std::string & text) {
     return graph;
 }
 
-Graph import_graph(const ggml_cgraph * cgraph) {
+Graph Graph::import(const ggml_cgraph * cgraph) {
     Graph graph;
     if (cgraph == nullptr) {
         graph.errors.emplace_back("null cgraph");
@@ -334,7 +339,7 @@ Graph import_graph(const ggml_cgraph * cgraph) {
 
     std::unordered_map<const ggml_tensor *, StorageId> storage_ids;
     for (const ggml_tensor * tensor : ordered) {
-        const ggml_tensor * root = storage_root(tensor);
+        const ggml_tensor * root = GraphImplementation::storage_root(tensor);
         if (root == nullptr || storage_ids.count(root) != 0) {
             continue;
         }
@@ -343,7 +348,7 @@ Graph import_graph(const ggml_cgraph * cgraph) {
         storage.root = ids.at(root);
         storage.size = ggml_nbytes(root);
         storage.external = root->op == GGML_OP_NONE;
-        storage.weight = buffer_is_weight(root);
+        storage.weight = GraphImplementation::buffer_is_weight(root);
         storage_ids.emplace(root, storage.id);
         graph.storages.push_back(storage);
     }
@@ -363,7 +368,7 @@ Graph import_graph(const ggml_cgraph * cgraph) {
         value.flags = tensor->flags;
         value.name = tensor->name;
         value.view_source = tensor->view_src != nullptr ? ids.at(tensor->view_src) : kInvalidId;
-        const ggml_tensor * root = storage_root(tensor);
+        const ggml_tensor * root = GraphImplementation::storage_root(tensor);
         value.access.storage = storage_ids.at(root);
         value.access.version = versions[value.access.storage];
         value.access.offset = tensor->view_src != nullptr ? tensor->view_offs : 0;
@@ -396,13 +401,13 @@ Graph import_graph(const ggml_cgraph * cgraph) {
                     read.before_version = versions[read.storage];
                     read.after_version = read.before_version;
                     read.offset = input.access.offset;
-                    read.size = access_span(input.access, input.type);
+                    read.size = GraphImplementation::access_span(input.access, input.type);
                     read.exact = true;
                     operation.effects.push_back(read);
                 }
             }
 
-            const bool aliases_storage = tensor->view_src != nullptr && !is_layout_op(tensor->op);
+            const bool aliases_storage = tensor->view_src != nullptr && !GraphImplementation::is_layout_op(tensor->op);
             if (aliases_storage) {
                 Effect write;
                 write.kind = EffectKind::Write;
@@ -410,7 +415,7 @@ Graph import_graph(const ggml_cgraph * cgraph) {
                 write.before_version = versions[write.storage];
                 write.after_version = ++versions[write.storage];
                 write.offset = value.access.offset;
-                write.size = tensor->op == GGML_OP_SET_ROWS ? graph.storages[write.storage].size : access_span(value.access, value.type);
+                write.size = tensor->op == GGML_OP_SET_ROWS ? graph.storages[write.storage].size : GraphImplementation::access_span(value.access, value.type);
                 write.exact = tensor->op != GGML_OP_SET_ROWS;
                 operation.effects.push_back(write);
                 value.access.version = write.after_version;
@@ -439,12 +444,12 @@ Graph import_graph(const ggml_cgraph * cgraph) {
     if (graph.roots.empty() && !graph.operations.empty()) {
         graph.roots.push_back(graph.operations.back().output);
     }
-    validate_graph(graph);
-    graph.fingerprint = fingerprint_graph(graph);
+    GraphImplementation::validate_graph(graph);
+    graph.fingerprint = GraphImplementation::fingerprint_graph(graph);
     return graph;
 }
 
-ImportedGraph import_graph_with_bindings(const ggml_cgraph * cgraph) {
+ImportedGraph ImportedGraph::import(const ggml_cgraph * cgraph) {
     ImportedGraph result;
     if (cgraph == nullptr) {
         result.graph.errors.emplace_back("null cgraph");
@@ -455,7 +460,7 @@ ImportedGraph import_graph_with_bindings(const ggml_cgraph * cgraph) {
     // nodes, which also makes raw and post-split imports canonical.
     ggml_cgraph execution_graph = *cgraph;
     execution_graph.n_leafs = 0;
-    result.graph = import_graph(&execution_graph);
+    result.graph = Graph::import(&execution_graph);
     if (!result.graph.valid()) return result;
 
     std::unordered_map<const ggml_tensor *, ValueId> ids;
@@ -487,7 +492,7 @@ ImportedGraph import_graph_with_bindings(const ggml_cgraph * cgraph) {
     return result;
 }
 
-const char * boundary_kind_name(BoundaryKind kind) {
+const char * Value::boundary_kind_name(BoundaryKind kind) {
     switch (kind) {
         case BoundaryKind::Internal: return "internal";
         case BoundaryKind::Input: return "input";
@@ -498,7 +503,7 @@ const char * boundary_kind_name(BoundaryKind kind) {
     return "unknown";
 }
 
-std::string serialize_graph_json(const Graph & graph) {
+std::string Graph::serialize_json(const Graph & graph) {
     std::ostringstream out;
     out << "{\"version\":1,\"fingerprint\":\"" << graph.fingerprint << "\",\"storages\":[";
     for (size_t i = 0; i < graph.storages.size(); ++i) {
@@ -519,7 +524,7 @@ std::string serialize_graph_json(const Graph & graph) {
             << ",\"version\":" << value.access.version << ",\"offset\":" << value.access.offset
             << ",\"flags\":" << value.flags << ",\"producer\":" << value.producer
             << ",\"view_source\":" << value.view_source
-            << ",\"boundary\":\"" << boundary_kind_name(value.boundary) << "\",\"shape\":[";
+            << ",\"boundary\":\"" << Value::boundary_kind_name(value.boundary) << "\",\"shape\":[";
         for (int d = 0; d < GGML_MAX_DIMS; ++d) {
             if (d != 0) out << ',';
             out << value.access.shape[d];
@@ -529,7 +534,7 @@ std::string serialize_graph_json(const Graph & graph) {
             if (d != 0) out << ',';
             out << value.access.strides[d];
         }
-        out << "],\"name\":\"" << escape_json(value.name) << "\"}";
+        out << "],\"name\":\"" << GraphImplementation::escape_json(value.name) << "\"}";
     }
     out << "],\"operations\":[";
     for (size_t i = 0; i < graph.operations.size(); ++i) {
@@ -537,7 +542,7 @@ std::string serialize_graph_json(const Graph & graph) {
         if (i != 0) out << ',';
         out << "{\"id\":" << operation.id << ",\"op\":\"" << ggml_op_name(operation.op)
             << "\",\"output\":" << operation.output << ",\"ordinal\":" << operation.original_ordinal
-            << ",\"params\":\"" << bytes_as_hex(operation.raw_params.data(), operation.raw_params.size())
+            << ",\"params\":\"" << GraphImplementation::bytes_as_hex(operation.raw_params.data(), operation.raw_params.size())
             << "\",\"inputs\":[";
         for (size_t j = 0; j < operation.inputs.size(); ++j) {
             if (j != 0) out << ',';
@@ -562,7 +567,7 @@ std::string serialize_graph_json(const Graph & graph) {
     out << "],\"errors\":[";
     for (size_t i = 0; i < graph.errors.size(); ++i) {
         if (i != 0) out << ',';
-        out << '\"' << escape_json(graph.errors[i]) << '\"';
+        out << '\"' << GraphImplementation::escape_json(graph.errors[i]) << '\"';
     }
     out << "]}";
     return out.str();

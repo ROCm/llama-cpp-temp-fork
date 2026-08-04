@@ -9,6 +9,9 @@ namespace {
 
 static constexpr size_t kAttentionKvTileSize = 64;
 
+class RoutedTransformerProgramImplementation {
+public:
+
 static enum ggml_type weight_type(const Graph & graph, OperationId operation) {
     if (operation >= graph.operations.size() || graph.operations[operation].inputs.empty()) return GGML_TYPE_COUNT;
     const ValueId weight = graph.operations[operation].inputs[0];
@@ -151,16 +154,18 @@ static void append_decode(const Graph & graph, const RoutedTransformerModel & mo
         : "qwen3_moe_attention_rmsnorm_quantize_q8_1_x4", layer, token_count), ordinal);
 }
 
+};
+
 } // namespace
 
-RoutedTransformerProgramProof recover_structural_routed_transformer_program(const Graph & graph) {
+RoutedTransformerProgramProof RoutedTransformerProgramProof::recover(const Graph & graph) {
     RoutedTransformerProgramProof proof;
     const GraphIndex index(graph);
     if (!index.valid()) {
         proof.errors = index.errors();
         return proof;
     }
-    auto model = std::make_shared<const RoutedTransformerModel>(analyze_routed_transformer(index));
+    auto model = std::make_shared<const RoutedTransformerModel>(RoutedTransformerModel::analyze(index));
     if (!model->valid()) {
         proof.errors = model->errors;
         return proof;
@@ -174,7 +179,7 @@ RoutedTransformerProgramProof recover_structural_routed_transformer_program(cons
     SearchOptions search_options;
     search_options.require_complete_coverage = true;
     search_options.record_trace = true;
-    proof.search = search_fusions(index, make_structural_routed_transformer_planner({}, model), search_options);
+    proof.search = SearchResult::search(index, RoutedTransformerProvider::make_planner({}, model), search_options);
     if (!proof.search.valid()) {
         proof.errors = proof.search.errors;
         return proof;
@@ -196,17 +201,17 @@ RoutedTransformerProgramProof recover_structural_routed_transformer_program(cons
     size_t dispatch_ordinal = 0;
     Invocation preamble;
     preamble.stage = "program.preamble";
-    preamble.kernel = kernel("owned_program_preamble", -1, model->query_token_count);
+    preamble.kernel = RoutedTransformerProgramImplementation::kernel("owned_program_preamble", -1, model->query_token_count);
     preamble.covered_operations = model->preamble_operations;
-    calculate_boundaries(index, preamble);
-    KernelSpecialization embedding = kernel("qwen_token_embedding_q4k_bringup_workaround", -1, model->query_token_count);
+    RoutedTransformerProgramImplementation::calculate_boundaries(index, preamble);
+    KernelSpecialization embedding = RoutedTransformerProgramImplementation::kernel("qwen_token_embedding_q4k_bringup_workaround", -1, model->query_token_count);
     embedding.integer_parameters["vocabulary_count"] = graph.values[graph.operations[model->preamble_operations.front()].inputs[0]].access.shape[1];
     embedding.integer_parameters["hidden_size"] = model->hidden_size;
-    add_dispatch(preamble, std::move(embedding), dispatch_ordinal);
-    KernelSpecialization metadata = kernel("qwen_attention_metadata_bringup_workaround", -1, model->query_token_count);
+    RoutedTransformerProgramImplementation::add_dispatch(preamble, std::move(embedding), dispatch_ordinal);
+    KernelSpecialization metadata = RoutedTransformerProgramImplementation::kernel("qwen_attention_metadata_bringup_workaround", -1, model->query_token_count);
     metadata.integer_parameters["context_capacity"] = model->key_value_token_count;
-    add_dispatch(preamble, std::move(metadata), dispatch_ordinal);
-    if (!prefill) add_dispatch(preamble, kernel("qwen3_moe_attention_rmsnorm_quantize_q8_1_x4",
+    RoutedTransformerProgramImplementation::add_dispatch(preamble, std::move(metadata), dispatch_ordinal);
+    if (!prefill) RoutedTransformerProgramImplementation::add_dispatch(preamble, RoutedTransformerProgramImplementation::kernel("qwen3_moe_attention_rmsnorm_quantize_q8_1_x4",
                                                -1, model->query_token_count), dispatch_ordinal);
     schedule.invocations.push_back(std::move(preamble));
 
@@ -214,26 +219,26 @@ RoutedTransformerProgramProof recover_structural_routed_transformer_program(cons
         Invocation invocation;
         invocation.stage = block.ordinal + 1 == model->blocks.size() ? "program.terminal_block" : "program.block";
         invocation.layer = static_cast<int32_t>(block.ordinal);
-        invocation.kernel = kernel(prefill ? "owned_prefill_block" : "owned_decode_block",
+        invocation.kernel = RoutedTransformerProgramImplementation::kernel(prefill ? "owned_prefill_block" : "owned_decode_block",
                                    invocation.layer, model->query_token_count);
         invocation.covered_operations = block.operations;
-        calculate_boundaries(index, invocation);
-        if (prefill) append_prefill(graph, *model, block, invocation, dispatch_ordinal, proof.native_gaps);
-        else append_decode(graph, *model, block, invocation, dispatch_ordinal, proof.native_gaps);
+        RoutedTransformerProgramImplementation::calculate_boundaries(index, invocation);
+        if (prefill) RoutedTransformerProgramImplementation::append_prefill(graph, *model, block, invocation, dispatch_ordinal, proof.native_gaps);
+        else RoutedTransformerProgramImplementation::append_decode(graph, *model, block, invocation, dispatch_ordinal, proof.native_gaps);
         schedule.invocations.push_back(std::move(invocation));
     }
 
     Invocation endpoint;
     endpoint.stage = "program.endpoint";
-    endpoint.kernel = kernel("owned_program_endpoint", -1, 1);
+    endpoint.kernel = RoutedTransformerProgramImplementation::kernel("owned_program_endpoint", -1, 1);
     endpoint.covered_operations = model->endpoint_operations;
-    calculate_boundaries(index, endpoint);
-    if (prefill) add_dispatch(endpoint, kernel("qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", -1, 1), dispatch_ordinal);
-    add_dispatch(endpoint, kernel("ggml_linear_q6k_q8_1_x4", -1, 1), dispatch_ordinal);
+    RoutedTransformerProgramImplementation::calculate_boundaries(index, endpoint);
+    if (prefill) RoutedTransformerProgramImplementation::add_dispatch(endpoint, RoutedTransformerProgramImplementation::kernel("qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", -1, 1), dispatch_ordinal);
+    RoutedTransformerProgramImplementation::add_dispatch(endpoint, RoutedTransformerProgramImplementation::kernel("ggml_linear_q6k_q8_1_x4", -1, 1), dispatch_ordinal);
     schedule.invocations.push_back(std::move(endpoint));
     // The count is a derived schedule contract, not a model identity. Recipe
     // additions are expected to change it while preserving full graph coverage.
-    schedule.expected_dispatch_count = schedule_dispatch_count(schedule);
+    schedule.expected_dispatch_count = Schedule::dispatch_count(schedule);
     return proof;
 }
 

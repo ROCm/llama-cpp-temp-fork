@@ -9,6 +9,8 @@
 
 namespace ggml::hrx {
 
+struct Match;
+
 struct InputTypeConstraint {
     size_t input_index = 0;
     std::vector<enum ggml_type> alternatives;
@@ -56,6 +58,8 @@ struct MatchAutomaton {
     size_t root_state = 0;
     std::vector<MatchState> states;
     bool require_internal_single_use = true;
+
+    static Match match(const Graph & graph, const MatchAutomaton & automaton, OperationId root);
 };
 
 struct Match {
@@ -65,7 +69,5 @@ struct Match {
 
     bool found() const { return !state_operations.empty(); }
 };
-
-Match match_automaton(const Graph & graph, const MatchAutomaton & automaton, OperationId root);
 
 } // namespace ggml::hrx

@@ -11,6 +11,9 @@ namespace {
 
 static const std::vector<OperationId> kEmptyOperations;
 
+class GraphIndexImplementation {
+public:
+
 static void add_edge(std::vector<std::vector<OperationId>> & predecessors,
                      std::vector<std::vector<OperationId>> & successors,
                      OperationId from, OperationId to) {
@@ -44,6 +47,8 @@ static std::string format_hash(uint64_t hash) {
     return out.str();
 }
 
+};
+
 } // namespace
 
 Decision Decision::allow() { return { true, DecisionReason::Allowed, {}, {} }; }
@@ -53,7 +58,7 @@ Decision Decision::reject(DecisionReason reason, std::string detail,
     return { false, reason, std::move(detail), std::move(implicated_ids) };
 }
 
-const char * decision_reason_name(DecisionReason reason) {
+const char * Decision::reason_name(DecisionReason reason) {
     switch (reason) {
         case DecisionReason::Allowed: return "allowed";
         case DecisionReason::EmptyRegion: return "empty_region";
@@ -95,7 +100,7 @@ GraphIndex::GraphIndex(const Graph & graph) : graph_(graph) {
             }
             consumers_[input].push_back(operation.id);
             const OperationId producer = graph.values[input].producer;
-            if (producer != kInvalidId) add_edge(predecessors_, successors_, producer, operation.id);
+            if (producer != kInvalidId) GraphIndexImplementation::add_edge(predecessors_, successors_, producer, operation.id);
         }
         for (const Effect & effect : operation.effects) {
             if (effect.kind == EffectKind::Write) {
@@ -113,12 +118,12 @@ GraphIndex::GraphIndex(const Graph & graph) : graph_(graph) {
         for (const Effect & effect : operation.effects) {
             if (effect.before_version == 0) continue;
             const auto writer = writers_.find({ effect.storage, effect.before_version });
-            if (writer != writers_.end()) add_edge(predecessors_, successors_, writer->second, operation.id);
+            if (writer != writers_.end()) GraphIndexImplementation::add_edge(predecessors_, successors_, writer->second, operation.id);
         }
     }
-    for (auto & ids : consumers_) canonicalize(ids);
-    for (auto & ids : predecessors_) canonicalize(ids);
-    for (auto & ids : successors_) canonicalize(ids);
+    for (auto & ids : consumers_) GraphIndexImplementation::canonicalize(ids);
+    for (auto & ids : predecessors_) GraphIndexImplementation::canonicalize(ids);
+    for (auto & ids : successors_) GraphIndexImplementation::canonicalize(ids);
 
     // Forward structural colors deliberately omit names and raw operation IDs.
     // The operation ID is used only as a final tie-break for truly symmetric
@@ -126,28 +131,28 @@ GraphIndex::GraphIndex(const Graph & graph) : graph_(graph) {
     std::vector<uint64_t> colors(graph.values.size(), UINT64_C(1469598103934665603));
     for (const Value & value : graph.values) {
         uint64_t color = UINT64_C(1469598103934665603);
-        color = hash_value(color, value.type);
-        color = hash_value(color, value.op);
-        color = hash_bytes(color, value.access.shape.data(), sizeof(value.access.shape));
-        color = hash_bytes(color, value.access.strides.data(), sizeof(value.access.strides));
-        color = hash_value(color, value.access.offset);
-        color = hash_value(color, value.access.version);
+        color = GraphIndexImplementation::hash_value(color, value.type);
+        color = GraphIndexImplementation::hash_value(color, value.op);
+        color = GraphIndexImplementation::hash_bytes(color, value.access.shape.data(), sizeof(value.access.shape));
+        color = GraphIndexImplementation::hash_bytes(color, value.access.strides.data(), sizeof(value.access.strides));
+        color = GraphIndexImplementation::hash_value(color, value.access.offset);
+        color = GraphIndexImplementation::hash_value(color, value.access.version);
         colors[value.id] = color;
     }
     for (const Operation & operation : graph.operations) {
         uint64_t color = UINT64_C(1469598103934665603);
-        color = hash_value(color, operation.op);
-        color = hash_bytes(color, operation.raw_params.data(), operation.raw_params.size());
-        for (ValueId input : operation.inputs) color = hash_value(color, colors[input]);
+        color = GraphIndexImplementation::hash_value(color, operation.op);
+        color = GraphIndexImplementation::hash_bytes(color, operation.raw_params.data(), operation.raw_params.size());
+        for (ValueId input : operation.inputs) color = GraphIndexImplementation::hash_value(color, colors[input]);
         for (const Effect & effect : operation.effects) {
-            color = hash_value(color, effect.kind);
-            color = hash_value(color, effect.before_version);
-            color = hash_value(color, effect.after_version);
-            color = hash_value(color, effect.offset);
-            color = hash_value(color, effect.size);
+            color = GraphIndexImplementation::hash_value(color, effect.kind);
+            color = GraphIndexImplementation::hash_value(color, effect.before_version);
+            color = GraphIndexImplementation::hash_value(color, effect.after_version);
+            color = GraphIndexImplementation::hash_value(color, effect.offset);
+            color = GraphIndexImplementation::hash_value(color, effect.size);
         }
         colors[operation.output] = color;
-        structural_keys_[operation.id] = format_hash(color) + ":" + ggml_op_name(operation.op);
+        structural_keys_[operation.id] = GraphIndexImplementation::format_hash(color) + ":" + ggml_op_name(operation.op);
     }
 }
 

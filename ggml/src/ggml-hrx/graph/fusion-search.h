@@ -58,6 +58,8 @@ struct CandidatePayload {
     virtual ~CandidatePayload() = default;
 };
 
+struct CandidateScore;
+
 struct FusionCandidate {
     std::string provider;
     std::string family;
@@ -76,6 +78,8 @@ struct FusionCandidate {
     SemanticBindings bindings;
     CandidateEconomics economics;
     std::shared_ptr<const CandidatePayload> payload;
+
+    static CandidateScore score(const FusionCandidate & candidate);
 };
 
 struct CandidateScore {
@@ -153,13 +157,12 @@ struct SearchResult {
     std::vector<std::string> errors;
 
     bool valid() const { return errors.empty(); }
-};
 
-CandidateScore score_candidate(const FusionCandidate & candidate);
-SearchResult search_fusions(const GraphIndex & index, const PlannerConfiguration & configuration,
-                            const SearchOptions & options = {});
-std::string format_search_report(const SearchResult & result);
-std::string serialize_search_report_json(const SearchResult & result);
-std::string fusion_region_dot(const GraphIndex & index, const SearchResult & result);
+    static SearchResult search(const GraphIndex & index, const PlannerConfiguration & configuration,
+                               const SearchOptions & options = {});
+    static std::string format_report(const SearchResult & result);
+    static std::string serialize_report_json(const SearchResult & result);
+    static std::string region_dot(const GraphIndex & index, const SearchResult & result);
+};
 
 } // namespace ggml::hrx

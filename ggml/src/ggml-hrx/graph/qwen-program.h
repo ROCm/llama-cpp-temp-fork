@@ -16,10 +16,10 @@ struct QwenProgramProof {
     bool recognized() const { return errors.empty() && !schedule.invocations.empty(); }
     bool structurally_sufficient() const;
     bool natively_complete() const;
+    static QwenProgramProof recover(const Graph & graph);
+    static VerificationResult verify(const Graph & graph, const QwenProgramProof & proof);
+    static std::string signature(const QwenProgramProof & proof);
+    static VerificationResult materialize_dispatch_bindings(Graph & graph, Schedule & schedule);
 };
-
-QwenProgramProof recover_owned_qwen3_moe_program(const Graph & graph);
-VerificationResult verify_owned_qwen3_moe_program(const Graph & graph, const QwenProgramProof & proof);
-std::string qwen_program_signature(const QwenProgramProof & proof);
 
 } // namespace ggml::hrx

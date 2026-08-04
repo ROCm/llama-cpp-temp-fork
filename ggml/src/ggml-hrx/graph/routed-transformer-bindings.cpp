@@ -47,6 +47,9 @@ struct Scratch {
     ValueId completion_counter = kInvalidId;
 };
 
+class RoutedTransformerBindingImplementation {
+public:
+
 static OperationId operation(const SemanticBindings & bindings, const char * role) {
     const auto position = bindings.operations.find(role);
     return position == bindings.operations.end() ? kInvalidId : position->second;
@@ -581,12 +584,14 @@ static void bind_endpoint(const Graph & graph, const RoutedTransformerModel & mo
     }
 }
 
+};
+
 } // namespace
 
-VerificationResult materialize_routed_transformer_dispatch_bindings(Graph & graph, Schedule & schedule) {
+VerificationResult RoutedTransformerProgramProof::materialize_dispatch_bindings(Graph & graph, Schedule & schedule) {
     VerificationResult result;
     const GraphIndex index(graph);
-    const RoutedTransformerModel model = analyze_routed_transformer(index);
+    const RoutedTransformerModel model = RoutedTransformerModel::analyze(index);
     if (!model.valid()) {
         result.errors = model.errors;
         return result;
@@ -601,7 +606,7 @@ VerificationResult materialize_routed_transformer_dispatch_bindings(Graph & grap
         result.errors.push_back("unsupported routed-transformer workload " + schedule.workload);
         return result;
     }
-    Facts facts = recover_facts(graph, model, result.errors);
+    Facts facts = RoutedTransformerBindingImplementation::recover_facts(graph, model, result.errors);
     if (!result.errors.empty()) return result;
     const std::string expected = prefill ? "prefill-" + std::to_string(facts.token_count)
                                          : "decode-" + std::to_string(facts.context_count);
@@ -609,15 +614,15 @@ VerificationResult materialize_routed_transformer_dispatch_bindings(Graph & grap
         result.errors.push_back("routed-transformer workload disagrees with graph facts");
         return result;
     }
-    const Scratch scratch = allocate_scratch(graph, facts, decode);
-    const ValueId hidden_state = value(model.bindings, "program.hidden_state");
-    bind_preamble(graph, model, schedule.invocations.front(), scratch, facts, result.errors);
+    const Scratch scratch = RoutedTransformerBindingImplementation::allocate_scratch(graph, facts, decode);
+    const ValueId hidden_state = RoutedTransformerBindingImplementation::value(model.bindings, "program.hidden_state");
+    RoutedTransformerBindingImplementation::bind_preamble(graph, model, schedule.invocations.front(), scratch, facts, result.errors);
     for (const RoutedTransformerBlock & block : model.blocks) {
         Invocation & invocation = schedule.invocations[block.ordinal + 1];
-        if (prefill) bind_prefill_block(graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
-        else bind_decode_block(graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
+        if (prefill) RoutedTransformerBindingImplementation::bind_prefill_block(graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
+        else RoutedTransformerBindingImplementation::bind_decode_block(graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
     }
-    bind_endpoint(graph, model, schedule.invocations.back(), scratch, facts, hidden_state, result.errors);
+    RoutedTransformerBindingImplementation::bind_endpoint(graph, model, schedule.invocations.back(), scratch, facts, hidden_state, result.errors);
     return result;
 }
 

@@ -19,6 +19,8 @@ struct ResourceUse {
     uint32_t before_version = 0;
     uint32_t after_version = 0;
     ResourceAccess access = ResourceAccess::Read;
+
+    static const char * access_name(ResourceAccess access);
 };
 
 struct ResourceContract {
@@ -38,6 +40,11 @@ struct ResourceContract {
 struct ResourceProgram {
     std::vector<ResourceContract> resources;
     std::vector<ResourceUse> uses;
+
+    static ResourceProgram build(const Graph & graph, const Schedule & schedule);
+    static VerificationResult verify(const Graph & graph, const Schedule & schedule,
+                                     const ResourceProgram & resources);
+    static std::string format(const ResourceProgram & resources);
 };
 
 struct ProgramPlan {
@@ -54,6 +61,9 @@ struct ProgramPlan {
     std::vector<std::string> errors;
 
     bool valid() const { return errors.empty(); }
+
+    static bool eager_capability_declared(enum ggml_op op);
+    static ProgramPlan build(const Graph & graph, const std::string & target);
 };
 
 struct ExecutionFrame {
@@ -71,13 +81,6 @@ struct PlanCacheStats {
     uint64_t semantic_collisions = 0;
     uint64_t failures = 0;
 };
-
-bool eager_capability_declared(enum ggml_op op);
-ResourceProgram build_resource_program(const Graph & graph, const Schedule & schedule);
-VerificationResult verify_resource_program(const Graph & graph, const Schedule & schedule, const ResourceProgram & resources);
-bool graph_semantically_equal(const Graph & lhs, const Graph & rhs);
-std::string schedule_semantic_witness(const Graph & graph, const Schedule & schedule);
-ProgramPlan build_reactive_plan(const Graph & graph, const std::string & target);
 
 class ReactivePlanCache {
 public:

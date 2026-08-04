@@ -5,6 +5,9 @@
 namespace ggml::hrx {
 namespace {
 
+class MatchImplementation {
+public:
+
 static int tensor_rank(const Value & value) {
     int rank = GGML_MAX_DIMS;
     while (rank > 1 && value.access.shape[rank - 1] == 1) {
@@ -43,9 +46,11 @@ static bool satisfies(const Graph & graph, const Operation & operation, const Op
     return true;
 }
 
+};
+
 } // namespace
 
-Match match_automaton(const Graph & graph, const MatchAutomaton & automaton, OperationId root) {
+Match MatchAutomaton::match(const Graph & graph, const MatchAutomaton & automaton, OperationId root) {
     Match result;
     if (automaton.states.empty() || automaton.root_state >= automaton.states.size() || root >= graph.operations.size()) {
         return result;
@@ -105,7 +110,7 @@ Match match_automaton(const Graph & graph, const MatchAutomaton & automaton, Ope
         active[state_id] = 1;
         const MatchState & state = automaton.states[state_id];
         const Operation & operation = graph.operations[operation_id];
-        if (operation.output >= graph.values.size() || !satisfies(graph, operation, state.constraint)) {
+        if (operation.output >= graph.values.size() || !MatchImplementation::satisfies(graph, operation, state.constraint)) {
             active[state_id] = 0;
             return false;
         }

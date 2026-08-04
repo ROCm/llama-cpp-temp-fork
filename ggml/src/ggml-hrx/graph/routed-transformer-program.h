@@ -16,11 +16,11 @@ struct RoutedTransformerProgramProof {
         return structurally_recognized && errors.empty() && !schedule.invocations.empty() &&
             search.valid() && search.uncovered_operations.empty();
     }
+    static RoutedTransformerProgramProof recover(const Graph & graph);
+    static VerificationResult materialize_dispatch_bindings(Graph & graph, Schedule & schedule);
 };
 
 // Materializes the currently executable Qwen-derived recipes from structural
 // routed-transformer candidates. Kernel names retain their heritage; graph
 // discovery and specialization facts do not depend on a Qwen model identity.
-RoutedTransformerProgramProof recover_structural_routed_transformer_program(const Graph & graph);
-
 } // namespace ggml::hrx

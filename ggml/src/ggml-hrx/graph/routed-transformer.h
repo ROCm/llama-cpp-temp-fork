@@ -39,9 +39,8 @@ struct RoutedTransformerModel {
     std::vector<std::string> errors;
 
     bool valid() const { return errors.empty() && !blocks.empty(); }
+    static RoutedTransformerModel analyze(const GraphIndex & index);
 };
-
-RoutedTransformerModel analyze_routed_transformer(const GraphIndex & index);
 
 // A schedule family is offered to the search only when its physical recipe is
 // available. Keeping this as a recipe catalog (rather than a model mode) lets
@@ -79,14 +78,13 @@ public:
     void expand(const GraphIndex & index, const FactDatabase & facts,
                 const FusionCandidate & candidate,
                 std::vector<FusionCandidate> & expansions) const override;
+    static PlannerConfiguration make_planner(
+        RoutedTransformerRecipeCatalog catalog = {},
+        std::shared_ptr<const RoutedTransformerModel> supplied_model = {});
 
 private:
     RoutedTransformerRecipeCatalog catalog_;
     std::shared_ptr<const RoutedTransformerModel> supplied_model_;
 };
-
-PlannerConfiguration make_structural_routed_transformer_planner(
-    RoutedTransformerRecipeCatalog catalog = {},
-    std::shared_ptr<const RoutedTransformerModel> supplied_model = {});
 
 } // namespace ggml::hrx
