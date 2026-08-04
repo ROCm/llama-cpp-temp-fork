@@ -343,6 +343,11 @@ if (TARGET ggml-hrx-graph)
     target_include_directories(test-hrx-graph PRIVATE ../ggml/include)
     add_test(NAME test-hrx-graph COMMAND test-hrx-graph)
 
+    add_executable(test-hrx-fusion-search test-hrx-fusion-search.cpp)
+    target_link_libraries(test-hrx-fusion-search PRIVATE ggml-hrx-graph ggml-base)
+    target_include_directories(test-hrx-fusion-search PRIVATE ../ggml/include)
+    add_test(NAME test-hrx-fusion-search COMMAND test-hrx-fusion-search)
+
     if (TARGET ggml-hrx-executable)
         add_executable(test-hrx-executable test-hrx-executable.cpp)
         target_link_libraries(test-hrx-executable PRIVATE ggml-hrx-executable)

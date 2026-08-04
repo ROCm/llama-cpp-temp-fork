@@ -45,6 +45,11 @@ struct ProgramPlan {
     Schedule schedule;
     ResourceProgram resources;
     std::string semantic_witness;
+    std::string planner_identity;
+    std::string fusion_search_text;
+    std::string fusion_search_json;
+    std::string fusion_regions_dot;
+    bool legacy_oracle_equivalent = false;
     std::string target;
     std::vector<std::string> errors;
 

@@ -94,6 +94,10 @@ option(GGML_HRX_BUNDLE_RUNTIME_LIBS "Bundle HRX/ROCm runtime libraries next to t
 set(GGML_HRX_BUNDLE_LIBRARY_DIRS "" CACHE STRING "Library directories to scan when GGML_HRX_BUNDLE_RUNTIME_LIBS=ON")
 
 add_library(ggml-hrx-graph STATIC
+    graph/fusion-search.cpp
+    graph/fusion-search.h
+    graph/graph-index.cpp
+    graph/graph-index.h
     graph/command-program.cpp
     graph/command-program.h
     graph/graph-ir.cpp
@@ -111,6 +115,12 @@ add_library(ggml-hrx-graph STATIC
     graph/reactive-plan.cpp
     graph/reactive-plan.h
     graph/resource-access.h
+    graph/routed-transformer.cpp
+    graph/routed-transformer.h
+    graph/routed-transformer-bindings.cpp
+    graph/routed-transformer-bindings.h
+    graph/routed-transformer-program.cpp
+    graph/routed-transformer-program.h
     graph/schedule.cpp
     graph/schedule.h
     kernel-corpus-json.cpp

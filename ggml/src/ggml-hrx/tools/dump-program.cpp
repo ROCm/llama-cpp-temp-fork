@@ -49,6 +49,11 @@ int main(int argc, char ** argv) {
         write_file(output_directory / "program-summary.txt", readable_program);
         write_file(output_directory / "semantic-witness.txt", plan.semantic_witness);
         write_file(output_directory / "program.json", ggml::hrx::serialize_schedule_json(plan.schedule));
+        if (!plan.fusion_search_text.empty()) {
+            write_file(output_directory / "fusion-search.txt", plan.fusion_search_text);
+            write_file(output_directory / "fusion-search.json", plan.fusion_search_json);
+            write_file(output_directory / "fusion-regions.dot", plan.fusion_regions_dot);
+        }
         write_file(output_directory / "resources.txt", ggml::hrx::format_resource_program(plan.resources));
         write_file(output_directory / "kernels.txt", ggml::hrx::format_kernel_corpus(corpus));
         write_file(output_directory / "kernels.json", ggml::hrx::serialize_kernel_corpus_json(corpus));
@@ -61,6 +66,8 @@ int main(int argc, char ** argv) {
                << "workload=" << plan.schedule.workload << '\n'
                << "target=" << target << '\n'
                << "graph=" << graph.fingerprint << '\n'
+               << "planner=" << plan.planner_identity << '\n'
+               << "legacy_oracle_equivalent=" << (plan.legacy_oracle_equivalent ? "true" : "false") << '\n'
                << "operations=" << graph.operations.size() << '\n'
                << "dispatches=" << ggml::hrx::schedule_dispatch_count(plan.schedule) << '\n'
                << "commands=" << commands.commands.size() << '\n'

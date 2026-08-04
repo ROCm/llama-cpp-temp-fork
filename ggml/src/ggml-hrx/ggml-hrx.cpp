@@ -428,6 +428,11 @@ static void dump_plan(const ggml_backend_hrx_context::DiagnosticOptions & option
             ? ggml::hrx::qwen_program_signature(proof) : plan.semantic_witness);
         write_atomic(directory / "semantic-witness.txt", plan.semantic_witness);
         write_atomic(directory / "program.json", ggml::hrx::serialize_schedule_json(plan.schedule));
+        if (!plan.fusion_search_text.empty()) {
+            write_atomic(directory / "fusion-search.txt", plan.fusion_search_text);
+            write_atomic(directory / "fusion-search.json", plan.fusion_search_json);
+            write_atomic(directory / "fusion-regions.dot", plan.fusion_regions_dot);
+        }
         write_atomic(directory / "resources.txt", ggml::hrx::format_resource_program(plan.resources));
         write_atomic(directory / "kernels.txt", ggml::hrx::format_kernel_corpus(corpus));
         write_atomic(directory / "kernels.json", ggml::hrx::serialize_kernel_corpus_json(corpus));
@@ -437,7 +442,9 @@ static void dump_plan(const ggml_backend_hrx_context::DiagnosticOptions & option
         std::ostringstream status;
         status << "schema=ggml-hrx-plan-diagnostics-v1\nlevel=" << options.level << "\nvalid="
                << (command_verification.valid() ? "true" : "false") << '\n';
-        status << ggml::hrx::format_verification_summary(command_verification.errors);
+        status << "planner=" << plan.planner_identity << '\n'
+               << "legacy_oracle_equivalent=" << (plan.legacy_oracle_equivalent ? "true" : "false") << '\n'
+               << ggml::hrx::format_verification_summary(command_verification.errors);
         write_atomic(directory / "status.txt", status.str());
         write_atomic(directory / "verification-errors.txt", ggml::hrx::format_verification_errors(command_verification.errors));
     } catch (const std::exception & error) {

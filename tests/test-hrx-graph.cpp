@@ -614,6 +614,11 @@ int main(int argc, char ** argv) {
         const ggml::hrx::ProgramPlan reactive = ggml::hrx::build_reactive_plan(graph, "fixture-target");
         for (const std::string & error : reactive.errors) std::fprintf(stderr, "reactive plan: %s\n", error.c_str());
         REQUIRE(reactive.valid());
+        REQUIRE(reactive.planner_identity.find("llm.routed_transformer@") != std::string::npos);
+        REQUIRE(reactive.legacy_oracle_equivalent);
+        REQUIRE(!reactive.fusion_search_text.empty());
+        REQUIRE(!reactive.fusion_search_json.empty());
+        REQUIRE(reactive.fusion_regions_dot.find("digraph fusion_regions") != std::string::npos);
         REQUIRE(reactive.semantic_witness.find(proof.schedule.workload) != std::string::npos);
         REQUIRE(reactive.graph.values.size() > graph.values.size());
         REQUIRE(ggml::hrx::verify_resource_program(reactive.graph, reactive.schedule, reactive.resources).valid());
@@ -713,7 +718,7 @@ int main(int argc, char ** argv) {
         const ggml::hrx::ProgramPlan rejected_routes = ggml::hrx::build_reactive_plan(mismatched_route_layout, "fixture-target");
         REQUIRE(!rejected_routes.valid());
         REQUIRE(std::any_of(rejected_routes.errors.begin(), rejected_routes.errors.end(), [](const std::string & error) {
-            return error.find("layer 1 route layout mismatch") != std::string::npos;
+            return error.find("route layout mismatch") != std::string::npos;
         }));
         std::ofstream schedule_file(argv[3], std::ios::trunc);
         REQUIRE(schedule_file.good());

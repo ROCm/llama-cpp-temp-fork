@@ -4,6 +4,8 @@
 #include "qwen-bindings.h"
 #include "qwen-program.h"
 #include "qwen-rules.h"
+#include "routed-transformer-bindings.h"
+#include "routed-transformer-program.h"
 
 #include <algorithm>
 #include <map>
@@ -13,7 +15,7 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr const char * kPlannerRevision = "reactive-plan-v1";
+static constexpr const char * kPlannerRevision = "reactive-plan-v2";
 
 static bool same_access(const AccessPath & lhs, const AccessPath & rhs) {
     return lhs.storage == rhs.storage && lhs.version == rhs.version && lhs.offset == rhs.offset &&
@@ -27,6 +29,55 @@ static bool same_effect(const Effect & lhs, const Effect & rhs) {
 
 static void append_error(VerificationResult & result, const std::string & error) {
     result.errors.push_back(error);
+}
+
+static bool same_kernel(const KernelSpecialization & lhs, const KernelSpecialization & rhs) {
+    return lhs.family == rhs.family && lhs.variant == rhs.variant &&
+        lhs.integer_parameters == rhs.integer_parameters &&
+        lhs.execution_kind == rhs.execution_kind &&
+        lhs.compile_parameters == rhs.compile_parameters;
+}
+
+static VerificationResult compare_bound_schedules(const Schedule & oracle, const Schedule & candidate) {
+    VerificationResult result;
+    if (oracle.workload != candidate.workload) append_error(result, "legacy oracle workload differs");
+    if (oracle.roots.size() != candidate.roots.size()) append_error(result, "legacy oracle root count differs");
+    for (size_t i = 0; i < std::min(oracle.roots.size(), candidate.roots.size()); ++i) {
+        if (oracle.roots[i].value != candidate.roots[i].value ||
+            oracle.roots[i].disposition != candidate.roots[i].disposition ||
+            oracle.roots[i].replacement != candidate.roots[i].replacement) {
+            append_error(result, "legacy oracle root " + std::to_string(i) + " differs");
+        }
+    }
+    if (oracle.invocations.size() != candidate.invocations.size()) {
+        append_error(result, "legacy oracle invocation count differs");
+        return result;
+    }
+    size_t dispatch_ordinal = 0;
+    for (size_t i = 0; i < oracle.invocations.size(); ++i) {
+        const Invocation & expected = oracle.invocations[i];
+        const Invocation & actual = candidate.invocations[i];
+        // Region ownership is intentionally allowed to improve: the legacy
+        // program assigned each following RMSNorm to the preceding layer.
+        // Compare the executable contract instead of preserving that artifact.
+        if (expected.layer != actual.layer) append_error(
+            result, "legacy oracle invocation layer " + std::to_string(i) + " differs");
+        if (expected.dispatches.size() != actual.dispatches.size()) {
+            append_error(result, "legacy oracle dispatch count differs in invocation " + std::to_string(i));
+            dispatch_ordinal += actual.dispatches.size();
+            continue;
+        }
+        for (size_t j = 0; j < expected.dispatches.size(); ++j, ++dispatch_ordinal) {
+            const Dispatch & expected_dispatch = expected.dispatches[j];
+            const Dispatch & actual_dispatch = actual.dispatches[j];
+            if (!same_kernel(expected_dispatch.kernel, actual_dispatch.kernel) ||
+                expected_dispatch.bindings != actual_dispatch.bindings ||
+                expected_dispatch.dependencies != actual_dispatch.dependencies) {
+                append_error(result, "legacy oracle dispatch " + std::to_string(dispatch_ordinal) + " differs");
+            }
+        }
+    }
+    return result;
 }
 
 static Schedule eager_schedule(const Graph & graph) {
@@ -274,20 +325,49 @@ ProgramPlan build_reactive_plan(const Graph & graph, const std::string & target)
     }
     if (!result.errors.empty()) return result;
 
-    const QwenProgramProof proof = recover_owned_qwen3_moe_program(graph);
-    if (!proof.errors.empty() && !proof.schedule.invocations.empty()) {
-        result.errors = proof.errors;
-        return result;
-    }
-    result.schedule = proof.recognized() ? proof.schedule : eager_schedule(graph);
-    const VerificationResult schedule_verification = proof.recognized()
-        ? verify_owned_qwen3_moe_program(graph, proof) : verify_schedule(graph, result.schedule);
-    result.errors.insert(result.errors.end(), schedule_verification.errors.begin(), schedule_verification.errors.end());
-    if (proof.recognized()) {
-        const VerificationResult bindings = materialize_qwen3_moe_dispatch_bindings(result.graph, result.schedule);
+    RoutedTransformerProgramProof structural = recover_structural_routed_transformer_program(graph);
+    if (structural.structurally_recognized) {
+        if (!structural.valid()) {
+            result.errors = structural.errors;
+            result.errors.insert(result.errors.end(), structural.search.errors.begin(), structural.search.errors.end());
+            return result;
+        }
+        result.schedule = std::move(structural.schedule);
+        result.planner_identity = make_structural_routed_transformer_planner().identity();
+        result.fusion_search_text = format_search_report(structural.search);
+        result.fusion_search_json = serialize_search_report_json(structural.search);
+        result.fusion_regions_dot = fusion_region_dot(GraphIndex(graph), structural.search);
+        const VerificationResult bindings = materialize_routed_transformer_dispatch_bindings(result.graph, result.schedule);
         result.errors.insert(result.errors.end(), bindings.errors.begin(), bindings.errors.end());
         const VerificationResult bound_schedule = verify_schedule(result.graph, result.schedule);
         result.errors.insert(result.errors.end(), bound_schedule.errors.begin(), bound_schedule.errors.end());
+        if (!result.errors.empty()) return result;
+
+        // The positional implementation remains an independent cold-plan
+        // oracle while this cutover settles. It is never consulted during a
+        // cached execution. Compatible graphs outside its narrow model shape
+        // continue using the structural authority without inheriting its
+        // operation-count and ordinal assumptions.
+        const QwenProgramProof oracle = recover_owned_qwen3_moe_program(graph);
+        if (oracle.recognized()) {
+            Graph oracle_graph = graph;
+            Schedule oracle_schedule = oracle.schedule;
+            const VerificationResult oracle_bindings =
+                materialize_qwen3_moe_dispatch_bindings(oracle_graph, oracle_schedule);
+            result.errors.insert(result.errors.end(), oracle_bindings.errors.begin(), oracle_bindings.errors.end());
+            if (!graph_semantically_equal(result.graph, oracle_graph) ||
+                !graph_semantically_equal(oracle_graph, result.graph)) {
+                result.errors.push_back("structural planner scratch graph differs from the legacy oracle");
+            }
+            const VerificationResult equivalence = compare_bound_schedules(oracle_schedule, result.schedule);
+            result.errors.insert(result.errors.end(), equivalence.errors.begin(), equivalence.errors.end());
+            result.legacy_oracle_equivalent = equivalence.valid() && oracle_bindings.valid() && result.errors.empty();
+        }
+    } else {
+        result.schedule = eager_schedule(graph);
+        result.planner_identity = "eager-rules-v1";
+        const VerificationResult schedule_verification = verify_schedule(graph, result.schedule);
+        result.errors.insert(result.errors.end(), schedule_verification.errors.begin(), schedule_verification.errors.end());
     }
     if (!result.errors.empty()) return result;
     result.resources = build_resource_program(result.graph, result.schedule);
