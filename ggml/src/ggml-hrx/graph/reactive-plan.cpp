@@ -290,6 +290,9 @@ ProgramPlan build_reactive_plan(const Graph & graph, const std::string & target)
         result.schedule = atom_schedule(graph);
         result.planner_identity = "atom-recipes-v1";
         result.atom_fallback_count = graph.operations.size();
+        for (const std::string & error : structural.errors) {
+            result.warnings.push_back("routed-transformer recognition rejected: " + error);
+        }
         result.warnings.push_back("routed-transformer structure not recognized; the plan contains " +
                                   std::to_string(result.atom_fallback_count) + " native-eager atom recipes");
         const VerificationResult schedule_verification = verify_schedule(graph, result.schedule);
@@ -312,15 +315,7 @@ ExecutionFrame ReactivePlanCache::prepare(const ggml_cgraph * cgraph, const std:
         return frame;
     }
     const uint64_t uid = cgraph->uid;
-    if (uid == 0) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ++stats_.failures;
-        frame.errors.push_back(
-            "HRX requires a scheduler-assigned nonzero ggml_cgraph UID; direct or temporary graph execution is unsupported");
-        return frame;
-    }
-
-    {
+    if (uid != 0) {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto position = plans_.find(uid);
         if (position != plans_.end()) {
@@ -344,6 +339,29 @@ ExecutionFrame ReactivePlanCache::prepare(const ggml_cgraph * cgraph, const std:
         std::lock_guard<std::mutex> lock(mutex_);
         ++stats_.failures;
         frame.errors = imported.graph.errors;
+        return frame;
+    }
+
+    // UID zero is the ggml convention for a graph without a stable scheduler
+    // identity. Such graphs are valid, but there is no sound cache key for
+    // them: import and plan this execution without either querying or
+    // publishing the UID cache.
+    if (uid == 0) {
+        ProgramPlan plan = build_reactive_plan(imported.graph, target);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++stats_.builds;
+            if (!plan.valid()) ++stats_.failures;
+        }
+        if (!plan.valid()) {
+            frame.errors = plan.errors;
+            return frame;
+        }
+        frame.plan = std::make_shared<const ProgramPlan>(std::move(plan));
+        frame.values = std::move(imported.value_tensors);
+        frame.storage_roots = std::move(imported.storage_roots);
+        frame.values.resize(frame.plan->graph.values.size(), nullptr);
+        frame.storage_roots.resize(frame.plan->graph.storages.size(), nullptr);
         return frame;
     }
 

@@ -36,7 +36,8 @@ ggml_cgraph
 assigned graph UID and caches the resulting immutable plan and runtime tensor
 bindings. Every subsequent execution of that UID is a direct lookup: it does
 not re-import, normalize, fingerprint, or semantically compare the graph. A
-zero UID is a contract error instead of a request for a generic fallback path.
+zero UID denotes a graph without a stable cache identity. It remains executable,
+but bypasses both lookup and publication and is rebuilt on every execution.
 Graph fingerprints remain cold-path provenance and integrity witnesses inside
 the normalized graph, schedule, and command program; they are never cache
 identities.

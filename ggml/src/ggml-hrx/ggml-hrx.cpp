@@ -34,6 +34,7 @@
 namespace {
 
 static constexpr size_t GGML_HRX_ALIGNMENT = 256;
+static constexpr size_t GGML_HRX_DEBUG_MAXIMUM_SNAPSHOT_BINDING_BYTES = 64ull * 1024ull * 1024ull;
 // GGML represents tensor locations as host pointers and derives view/arena
 // offsets with ordinary pointer arithmetic. Device-local HRX buffers have no
 // host address to return, so expose a non-null sentinel base solely as an
@@ -399,6 +400,22 @@ static void write_atomic(const std::filesystem::path & path, const std::string &
     if (!output) throw std::runtime_error("cannot create diagnostic file " + temporary.string());
     output << contents;
     if (contents.empty() || contents.back() != '\n') output << '\n';
+    output.close();
+    std::error_code error;
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+        std::filesystem::remove(temporary);
+        if (!std::filesystem::exists(path)) throw std::runtime_error("cannot publish diagnostic file " + path.string());
+    }
+}
+
+static void write_atomic(const std::filesystem::path & path, const std::vector<uint8_t> & contents) {
+    std::filesystem::create_directories(path.parent_path());
+    const std::filesystem::path temporary = path.string() + ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("cannot create diagnostic file " + temporary.string());
+    output.write(reinterpret_cast<const char *>(contents.data()),
+                 static_cast<std::streamsize>(contents.size()));
     output.close();
     std::error_code error;
     std::filesystem::rename(temporary, path, error);
@@ -853,14 +870,68 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
             return GGML_STATUS_FAILED;
         }
         if (executable->command_prefix()) {
-            executable->abandon_after_synchronize();
+            std::vector<uint8_t> transient_snapshot;
+            const ggml::hrx::ErrorResult snapshot_error = executable->snapshot_transients(transient_snapshot);
+            if (snapshot_error) {
+                GGML_LOG_ERROR("%s: debug-prefix transient snapshot failed: %s\n", __func__, snapshot_error->c_str());
+                return GGML_STATUS_FAILED;
+            }
+            std::vector<ggml::hrx::PreparedBindingSnapshot> output_snapshots;
+            const ggml::hrx::ErrorResult output_snapshot_error =
+                executable->snapshot_last_command_outputs(
+                    output_snapshots, GGML_HRX_DEBUG_MAXIMUM_SNAPSHOT_BINDING_BYTES);
+            if (output_snapshot_error) {
+                GGML_LOG_ERROR("%s: debug-prefix output snapshot failed: %s\n",
+                    __func__, output_snapshot_error->c_str());
+                return GGML_STATUS_FAILED;
+            }
+            const ggml::hrx::ErrorResult completion_error = executable->complete_after_synchronize();
+            if (completion_error) {
+                GGML_LOG_ERROR("%s: debug-prefix readback failed: %s\n", __func__, completion_error->c_str());
+                return GGML_STATUS_FAILED;
+            }
+            if (!context->diagnostics.directory.empty()) {
+                const std::filesystem::path snapshot_directory =
+                    context->diagnostics.directory / "snapshots" / frame.plan->schedule.workload;
+                const std::string stem = "prefix-" + std::to_string(executable->commands().size());
+                try {
+                    write_atomic(snapshot_directory / (stem + "-transients.bin"), transient_snapshot);
+                    std::ostringstream metadata;
+                    metadata << "schema=ggml-hrx-transient-snapshot-v1\n"
+                             << "workload=" << frame.plan->schedule.workload << '\n'
+                             << "commands=" << executable->commands().size() << '\n'
+                             << "bytes=" << transient_snapshot.size() << '\n'
+                             << "allocation_fingerprint=" << executable->allocation_fingerprint().value << '\n';
+                    for (size_t i = 0; i < output_snapshots.size(); ++i) {
+                        std::string name = output_snapshots[i].name;
+                        std::replace_if(name.begin(), name.end(), [](char character) {
+                            return !std::isalnum(static_cast<unsigned char>(character)) && character != '-' && character != '_';
+                        }, '_');
+                        const std::string file_name = stem + "-output-" + std::to_string(i) + "-" + name + ".bin";
+                        metadata << "output=" << i << '\t' << output_snapshots[i].name << '\t'
+                                 << ggml::hrx::resource_access_name(output_snapshots[i].access) << '\t'
+                                 << output_snapshots[i].length << '\t';
+                        if (output_snapshots[i].bytes.empty() && output_snapshots[i].length != 0) {
+                            metadata << "omitted:binding-exceeds-" <<
+                                GGML_HRX_DEBUG_MAXIMUM_SNAPSHOT_BINDING_BYTES << "-bytes\n";
+                        } else {
+                            write_atomic(snapshot_directory / file_name, output_snapshots[i].bytes);
+                            metadata << file_name << '\n';
+                        }
+                    }
+                    write_atomic(snapshot_directory / (stem + ".txt"), metadata.str());
+                } catch (const std::exception & error) {
+                    GGML_LOG_ERROR("%s: debug-prefix snapshot write failed: %s\n", __func__, error.what());
+                    return GGML_STATUS_FAILED;
+                }
+            }
             dump_execution_state(context->diagnostics, *frame.plan, bindings, *executable,
                 context->device->transfers->stats(), context->weights->stats(),
                 "debug_prefix_complete", "intentional stop after synchronized command prefix",
                 context->executable_builds, context->executable_hits, context->launches);
-            GGML_LOG_WARN("%s: synchronized commands [0, %zu); stopping before graph outputs are consumed\n",
+            GGML_LOG_WARN("%s: synchronized commands [0, %zu); exposing diagnostic partial outputs\n",
                 __func__, executable->commands().size());
-            return GGML_STATUS_ABORTED;
+            return GGML_STATUS_SUCCESS;
         }
     }
 

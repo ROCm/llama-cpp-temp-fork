@@ -138,6 +138,12 @@ struct PreparedExecutableProgram::Impl {
         bool download = false;
     };
 
+    struct DebugBinding {
+        std::string name;
+        ResourceAccess access = ResourceAccess::Read;
+        hrx_buffer_ref_t ref = {};
+    };
+
     ~Impl() {
         if (graph_exec != nullptr) hrx_graph_exec_release(graph_exec);
         if (graph != nullptr) hrx_graph_release(graph);
@@ -156,6 +162,7 @@ struct PreparedExecutableProgram::Impl {
     std::vector<WeightResidencyLease> resident_weights;
     std::vector<hrx_buffer_t> retained_buffers;
     std::vector<std::shared_ptr<Artifact>> retained_artifacts;
+    std::vector<DebugBinding> last_command_outputs;
     bool launch_in_flight = false;
 };
 
@@ -217,6 +224,48 @@ ErrorResult PreparedExecutableProgram::complete_after_synchronize() {
         if (!error.empty()) return "download host staging: " + error;
     }
     impl_->launch_in_flight = false;
+    return {};
+}
+
+ErrorResult PreparedExecutableProgram::snapshot_transients(std::vector<uint8_t> & bytes) {
+    bytes.clear();
+    if (!valid()) return "cannot snapshot an invalid prepared executable";
+    if (impl_->transfers == nullptr) return "prepared executable has no transfer manager";
+    if (transient_bytes_ == 0) return {};
+    if (impl_->transient_buffer == nullptr) return "prepared executable has no transient allocation";
+    bytes.resize(transient_bytes_);
+    const std::string error = impl_->transfers->download(
+        nullptr, impl_->transient_buffer, 0, bytes.data(), bytes.size());
+    if (!error.empty()) {
+        bytes.clear();
+        return "snapshot transient arena: " + error;
+    }
+    return {};
+}
+
+ErrorResult PreparedExecutableProgram::snapshot_last_command_outputs(
+    std::vector<PreparedBindingSnapshot> & snapshots, size_t maximum_binding_bytes) {
+    snapshots.clear();
+    if (!valid()) return "cannot snapshot an invalid prepared executable";
+    if (impl_->transfers == nullptr) return "prepared executable has no transfer manager";
+    for (const Impl::DebugBinding & binding : impl_->last_command_outputs) {
+        PreparedBindingSnapshot snapshot;
+        snapshot.name = binding.name;
+        snapshot.access = binding.access;
+        snapshot.length = binding.ref.length;
+        if (binding.ref.length > maximum_binding_bytes) {
+            snapshots.push_back(std::move(snapshot));
+            continue;
+        }
+        snapshot.bytes.resize(binding.ref.length);
+        const std::string error = impl_->transfers->download(
+            nullptr, binding.ref.buffer, binding.ref.offset, snapshot.bytes.data(), snapshot.bytes.size());
+        if (!error.empty()) {
+            snapshots.clear();
+            return "snapshot command output " + binding.name + ": " + error;
+        }
+        snapshots.push_back(std::move(snapshot));
+    }
     return {};
 }
 
@@ -641,6 +690,9 @@ bool ExecutableProgramPreparer::record_graph() {
                 hrx_buffer_ref_t concrete = {};
                 if (!resolve_binding(binding, concrete)) return false;
                 bindings.push_back(concrete);
+                if (command.ordinal + 1 == record_command_count && binding.access != ResourceAccess::Read) {
+                    impl.last_command_outputs.push_back({ binding.name, binding.access, concrete });
+                }
             }
             const auto & constants = command_constants[command.ordinal];
             const hrx_graph_kernel_node_attrs_t attrs = {
@@ -658,12 +710,20 @@ bool ExecutableProgramPreparer::record_graph() {
             hrx_graph_copy_buffer_node_attrs_t attrs = {};
             if (!resolve_binding(command.bindings[0], attrs.src) ||
                 !resolve_binding(command.bindings[1], attrs.dst)) return false;
+            if (command.ordinal + 1 == record_command_count) {
+                impl.last_command_outputs.push_back({ command.bindings[1].name,
+                    command.bindings[1].access, attrs.dst });
+            }
             error = take_status(hrx_graph_add_copy_buffer_node(impl.graph, deps.data(), deps.size(), &attrs,
                 &nodes[command.ordinal]));
         } else if (command.kind == CommandKind::Fill) {
             const uint32_t fill_byte = static_cast<uint32_t>(command.kernel.integer_parameters.at("fill_byte")) & 0xffu;
             hrx_graph_fill_buffer_node_attrs_t attrs = {};
             if (!resolve_binding(command.bindings[0], attrs.dst)) return false;
+            if (command.ordinal + 1 == record_command_count) {
+                impl.last_command_outputs.push_back({ command.bindings[0].name,
+                    command.bindings[0].access, attrs.dst });
+            }
             attrs.pattern = fill_byte;
             attrs.pattern_size = 1;
             error = take_status(hrx_graph_add_fill_buffer_node(impl.graph, deps.data(), deps.size(), &attrs,

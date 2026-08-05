@@ -125,6 +125,23 @@ static std::set<OperationId> block_closure(const GraphIndex & index, OperationId
     return result;
 }
 
+static bool has_ancestor_in(const GraphIndex & index, OperationId root,
+                            const std::set<OperationId> & candidates) {
+    std::set<OperationId> visited;
+    std::queue<OperationId> worklist;
+    visited.insert(root);
+    worklist.push(root);
+    while (!worklist.empty()) {
+        const OperationId current = worklist.front();
+        worklist.pop();
+        for (OperationId predecessor : index.predecessors(current)) {
+            if (candidates.count(predecessor) != 0) return true;
+            if (visited.insert(predecessor).second) worklist.push(predecessor);
+        }
+    }
+    return false;
+}
+
 static std::vector<OperationId> set_vector(const std::set<OperationId> & values) {
     return { values.begin(), values.end() };
 }
@@ -444,7 +461,14 @@ RoutedTransformerModel RoutedTransformerModel::analyze(const GraphIndex & index)
     std::queue<OperationId> endpoint_worklist;
     for (ValueId root : graph.roots) {
         const OperationId producer = graph.values[root].producer;
-        if (producer != kInvalidId && all_block_operations.count(producer) == 0 && endpoint_set.insert(producer).second) {
+        // Debug and auxiliary consumers may materialize values at arbitrary
+        // block boundaries. Only roots downstream of the routed block body
+        // belong to the program endpoint; an upstream root such as the token
+        // embedding is part of the preamble, and a block-owned root remains
+        // owned by that block.
+        if (producer != kInvalidId && all_block_operations.count(producer) == 0 &&
+            RoutedTransformerAnalysisImplementation::has_ancestor_in(index, producer, all_block_operations) &&
+            endpoint_set.insert(producer).second) {
             endpoint_worklist.push(producer);
         }
     }

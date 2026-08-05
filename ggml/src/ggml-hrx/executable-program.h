@@ -55,6 +55,13 @@ struct PreparedCommandDiagnostic {
     size_t binding_count = 0;
 };
 
+struct PreparedBindingSnapshot {
+    std::string name;
+    ResourceAccess access = ResourceAccess::Read;
+    size_t length = 0;
+    std::vector<uint8_t> bytes;
+};
+
 struct ExecutablePreparationOptions {
     std::string target;
     size_t recorder_buffer_limit = 256ull * 1024ull * 1024ull;
@@ -136,6 +143,9 @@ public:
     ErrorResult rebind(const ExecutableBindings & bindings);
     ErrorResult launch(hrx_stream_t stream);
     ErrorResult complete_after_synchronize();
+    ErrorResult snapshot_transients(std::vector<uint8_t> & bytes);
+    ErrorResult snapshot_last_command_outputs(
+        std::vector<PreparedBindingSnapshot> & snapshots, size_t maximum_binding_bytes);
     void abandon_after_synchronize();
     const std::vector<std::string> & errors() const { return errors_; }
     const std::vector<PreparedArtifactDiagnostic> & artifacts() const { return artifacts_; }

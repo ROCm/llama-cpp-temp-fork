@@ -337,6 +337,20 @@ CommandProgram build_command_program(const ProgramPlan & plan, const KernelCorpu
             allocation.last_command = std::max(allocation.last_command, command.ordinal);
         }
     }
+    // Constant payloads are uploaded while preparing the executable, before
+    // command zero can run. Their allocations must therefore remain live from
+    // the beginning of execution, not merely from their first command read.
+    // Otherwise an earlier transient may alias and overwrite the initialized
+    // bytes before the consumer observes them.
+    for (const ConstantInitialization & initialization : result.initializations) {
+        const auto position = std::find_if(result.transients.allocations.begin(), result.transients.allocations.end(),
+            [&](const TransientAllocation & allocation) { return allocation.storage == initialization.storage; });
+        if (position == result.transients.allocations.end()) {
+            result.errors.push_back("constant initialization does not resolve to transient storage");
+            continue;
+        }
+        position->first_command = 0;
+    }
     pack_transient_plan(result.transients);
     // Schedule dependencies describe authored ordering. Add the conservative
     // resource hazards required by concrete command recording so a future
@@ -438,6 +452,13 @@ VerificationResult verify_command_program(const ProgramPlan & plan, const Kernel
         if (initialization.storage >= plan.graph.storages.size() || initialization.data.empty() ||
             initialization.data.size() > plan.graph.storages[initialization.storage].size) {
             result.errors.push_back("invalid constant initialization payload");
+        }
+        const auto allocation = std::find_if(commands.transients.allocations.begin(),
+            commands.transients.allocations.end(), [&](const TransientAllocation & item) {
+                return item.storage == initialization.storage;
+            });
+        if (allocation == commands.transients.allocations.end() || allocation->first_command != 0) {
+            result.errors.push_back("constant initialization is not live from command zero");
         }
     }
     for (const TransientAllocation & a : commands.transients.allocations) {

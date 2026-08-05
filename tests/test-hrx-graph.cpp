@@ -222,7 +222,7 @@ static void test_reactive_cache_and_bindings() {
     const ggml::hrx::ExecutionFrame first_frame = cache.prepare(first.graph, "test-target");
     REQUIRE(first_frame.valid());
     REQUIRE(first_frame.plan->schedule.invocations.size() == 2);
-    REQUIRE(first_frame.plan->warnings.size() == 1);
+    REQUIRE(!first_frame.plan->warnings.empty());
     REQUIRE(ggml::hrx::schedule_execution_kind_count(first_frame.plan->schedule,
         ggml::hrx::KernelSpecialization::ExecutionKind::NativeEager) == 2);
     REQUIRE(cache.stats().builds == 1);
@@ -255,10 +255,16 @@ static void test_reactive_cache_and_bindings() {
     build_arithmetic_graph(missing_uid, "missing-uid");
     REQUIRE(missing_uid.graph->uid == 0);
     const ggml::hrx::ExecutionFrame missing_uid_frame = cache.prepare(missing_uid.graph, "test-target");
-    REQUIRE(!missing_uid_frame.valid());
-    REQUIRE(!missing_uid_frame.errors.empty());
-    REQUIRE(missing_uid_frame.errors.front().find("nonzero ggml_cgraph UID") != std::string::npos);
-    REQUIRE(cache.stats().failures == 3);
+    REQUIRE(missing_uid_frame.valid());
+    REQUIRE(cache.stats().builds == 3);
+    REQUIRE(cache.stats().hits == 1);
+    REQUIRE(cache.stats().failures == 2);
+    const ggml::hrx::ExecutionFrame repeated_missing_uid_frame = cache.prepare(missing_uid.graph, "test-target");
+    REQUIRE(repeated_missing_uid_frame.valid());
+    REQUIRE(repeated_missing_uid_frame.plan != missing_uid_frame.plan);
+    REQUIRE(cache.stats().builds == 4);
+    REQUIRE(cache.stats().hits == 1);
+    REQUIRE(cache.stats().failures == 2);
 
     Fixture changed;
     ggml_tensor * x = ggml_new_tensor_2d(changed.context, GGML_TYPE_F32, 4, 9);
@@ -270,7 +276,7 @@ static void test_reactive_cache_and_bindings() {
     ggml_build_forward_expand(changed.graph, add);
     changed.graph->uid = 103;
     REQUIRE(cache.prepare(changed.graph, "test-target").valid());
-    REQUIRE(cache.stats().builds == 3);
+    REQUIRE(cache.stats().builds == 5);
 
     ggml::hrx::ReactivePlanCache concurrent_cache;
     first.graph->uid = 104;
@@ -582,7 +588,23 @@ int main(int argc, char ** argv) {
         REQUIRE(fill_command_count == (reactive.schedule.workload.rfind("decode", 0) == 0 ? model.blocks.size() : 0));
         REQUIRE(executable_commands.initializations.size() == 1);
         REQUIRE(executable_commands.initializations[0].data.size() == 256);
+        const auto initialized_allocation = std::find_if(
+            executable_commands.transients.allocations.begin(), executable_commands.transients.allocations.end(),
+            [&](const ggml::hrx::TransientAllocation & allocation) {
+                return allocation.storage == executable_commands.initializations[0].storage;
+            });
+        REQUIRE(initialized_allocation != executable_commands.transients.allocations.end());
+        REQUIRE(initialized_allocation->first_command == 0);
         REQUIRE(ggml::hrx::verify_command_program(reactive, executable_corpus, executable_commands).valid());
+        ggml::hrx::CommandProgram late_initialization = executable_commands;
+        const auto late_allocation = std::find_if(
+            late_initialization.transients.allocations.begin(), late_initialization.transients.allocations.end(),
+            [&](const ggml::hrx::TransientAllocation & allocation) {
+                return allocation.storage == late_initialization.initializations[0].storage;
+            });
+        REQUIRE(late_allocation != late_initialization.transients.allocations.end());
+        late_allocation->first_command = 1;
+        REQUIRE(!ggml::hrx::verify_command_program(reactive, executable_corpus, late_initialization).valid());
 
         ggml::hrx::Schedule missing_operation = reactive.schedule;
         missing_operation.invocations[1].covered_operations.pop_back();

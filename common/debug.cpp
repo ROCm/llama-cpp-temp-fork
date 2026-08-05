@@ -4,6 +4,11 @@
 #include "log.h"
 
 #include <cmath>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <regex>
 #include <string>
 #include <vector>
@@ -11,6 +16,8 @@
 struct common_debug_cb_user_data::impl {
     std::vector<uint8_t>    data;
     std::vector<std::regex> tensor_filters;
+    std::filesystem::path   tensor_dump_directory;
+    std::map<std::string, size_t> tensor_dump_counts;
     bool                    abort_on_nan{false};
 };
 
@@ -29,6 +36,9 @@ common_debug_cb_user_data::common_debug_cb_user_data(common_params & params, con
         }
     }
     pimpl->abort_on_nan = abort_on_nan;
+    if (const char * directory = std::getenv("LLAMA_DEBUG_TENSOR_DUMP_DIR")) {
+        pimpl->tensor_dump_directory = directory;
+    }
 
     params.cb_eval           = common_debug_cb_eval;
     params.cb_eval_user_data = this;
@@ -184,6 +194,21 @@ bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     if (!ggml_is_quantized(t->type) && matches_filter) {
         uint8_t * data = is_host ? (uint8_t *) t->data : pimpl->data.data();
         common_debug_print_tensor(data, t->type, t->ne, t->nb, 3, pimpl->abort_on_nan);
+        if (!pimpl->tensor_dump_directory.empty()) {
+            std::filesystem::create_directories(pimpl->tensor_dump_directory);
+            std::string name = t->name;
+            for (char & character : name) {
+                if (!std::isalnum(static_cast<unsigned char>(character)) && character != '-' && character != '_') {
+                    character = '_';
+                }
+            }
+            const size_t ordinal = pimpl->tensor_dump_counts[name]++;
+            const std::filesystem::path path = pimpl->tensor_dump_directory /
+                (name + "-" + std::to_string(ordinal) + ".bin");
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            if (!output) throw std::runtime_error("cannot create tensor dump " + path.string());
+            output.write(reinterpret_cast<const char *>(data), static_cast<std::streamsize>(ggml_nbytes(t)));
+        }
     }
 
     return true;

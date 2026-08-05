@@ -3,6 +3,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "../../src/llama-context.h"
 
 #include <cstdlib>
 #include <string>
@@ -212,6 +213,24 @@ static bool run(llama_context * ctx, const common_params & params) {
         }
     }
 
+    if (std::getenv("LLAMA_DEBUG_SAVE_LAYER_INPUTS") != nullptr) {
+        const int32_t n_layer = llama_model_n_layer(model);
+        const int32_t n_embd = llama_model_n_embd(model);
+        std::filesystem::create_directories(params.logits_output_dir);
+        for (int32_t il = 0; il < n_layer; ++il) {
+            const float * data = ctx->get_embeddings_layer_inp(il);
+            if (data == nullptr) {
+                throw std::runtime_error("failed to get layer input " + std::to_string(il));
+            }
+            const std::filesystem::path path = std::filesystem::path(params.logits_output_dir) /
+                ("layer-input-" + std::to_string(il) + ".bin");
+            std::ofstream file(path, std::ios::binary);
+            if (!file) throw std::runtime_error("failed to open " + path.string());
+            file.write(reinterpret_cast<const char *>(data),
+                       static_cast<std::streamsize>(tokens.size()) * n_embd * sizeof(float));
+        }
+    }
+
     return true;
 }
 
@@ -240,6 +259,12 @@ int main(int argc, char ** argv) {
     if (model == nullptr || ctx == nullptr) {
         LOG_ERR("%s : failed to init\n", __func__);
         return 1;
+    }
+
+    if (std::getenv("LLAMA_DEBUG_SAVE_LAYER_INPUTS") != nullptr) {
+        for (int32_t il = 0; il < llama_model_n_layer(model); ++il) {
+            ctx->set_embeddings_layer_inp(il, true);
+        }
     }
 
     {
