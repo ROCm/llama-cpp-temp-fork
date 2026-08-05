@@ -1,8 +1,10 @@
 #include "routed-transformer.h"
+#include "schedule.h"
 
 #include <algorithm>
 #include <queue>
 #include <set>
+#include <sstream>
 
 namespace ggml::hrx {
 namespace {
@@ -133,11 +135,11 @@ static std::set<OperationId> difference(const std::set<OperationId> & lhs, const
     return result;
 }
 
-static void add_component(RoutedTransformerBlock & block, std::string role, OperationId hero,
+static void add_component(RoutedTransformerBlock & block, RoutedTransformerComponentKind kind, OperationId hero,
                           const std::set<OperationId> & operations) {
     if (operations.empty()) return;
     RoutedTransformerComponent component;
-    component.role = std::move(role);
+    component.kind = kind;
     component.hero = hero;
     component.operations = set_vector(operations);
     block.components.push_back(std::move(component));
@@ -153,7 +155,7 @@ static bool observe(FactDatabase & facts, const std::string & key, int64_t value
 
 struct RoutedCandidatePayload final : CandidatePayload {
     size_t block_ordinal = 0;
-    std::string component_role;
+    RoutedTransformerComponentKind component_kind = RoutedTransformerComponentKind::Atom;
     bool decode = false;
     bool terminal = false;
     std::vector<OperationId> following_prepare_operations;
@@ -382,32 +384,29 @@ RoutedTransformerModel RoutedTransformerModel::analyze(const GraphIndex & index)
             return model;
         }
 
-        block.bindings.operations = {
-            { "attention.norm", attention_norm }, { "attention.prepared", attention_prepared },
-            { "attention.query_projection", query_projection }, { "attention.flash", flash },
-            { "attention.key_projection", key_projection }, { "attention.value_projection", value_projection },
-            { "attention.query_rope", query_rope }, { "attention.key_cache_writer", key_writer },
-            { "attention.value_cache_writer", value_writer }, { "attention.result_reshape", flash_reshape },
-            { "attention.output_projection", attention_projection }, { "attention.residual", attention_residual },
-            { "feed_forward.norm", feed_forward_norm }, { "feed_forward.prepared", feed_forward_prepared },
-            { "router.projection", router_projection }, { "router.softmax", router_softmax },
-            { "router.argsort", router_argsort }, { "router.route_ids", route_ids },
-            { "router.route_weights", route_weights }, { "experts.gate_up", gate_up },
-            { "experts.gate_projection", gate_projection }, { "experts.up_projection", up_projection },
-            { "experts.routed_down", routed_down }, { "hidden.output", final_residual },
-        };
-        block.bindings.values = {
-            { "hidden.input", hidden_input }, { "attention.prepared", attention_prepared_value },
-            { "attention.result", graph.operations[flash_reshape].output },
-            { "attention.residual", residual_op.output },
-            { "feed_forward.prepared", graph.operations[feed_forward_prepared].output },
-            { "router.logits", graph.operations[router_projection].output },
-            { "router.route_ids", graph.operations[route_ids].output },
-            { "router.route_weights", graph.operations[route_weights].output },
-            { "experts.activation", graph.operations[gate_up].output },
-            { "experts.down", graph.operations[routed_down].output },
-            { "hidden.output", graph.operations[final_residual].output },
-        };
+        block.operations_by_role.attention_norm = attention_norm;
+        block.operations_by_role.attention_prepared = attention_prepared;
+        block.operations_by_role.attention_query_projection = query_projection;
+        block.operations_by_role.attention_key_projection = key_projection;
+        block.operations_by_role.attention_value_projection = value_projection;
+        block.operations_by_role.attention_query_rope = query_rope;
+        block.operations_by_role.attention_key_cache_writer = key_writer;
+        block.operations_by_role.attention_value_cache_writer = value_writer;
+        block.operations_by_role.attention_flash = flash;
+        block.operations_by_role.attention_result_reshape = flash_reshape;
+        block.operations_by_role.attention_output_projection = attention_projection;
+        block.operations_by_role.feed_forward_prepared = feed_forward_prepared;
+        block.operations_by_role.router_projection = router_projection;
+        block.operations_by_role.router_route_ids = route_ids;
+        block.operations_by_role.router_route_weights = route_weights;
+        block.operations_by_role.experts_gate_projection = gate_projection;
+        block.operations_by_role.experts_up_projection = up_projection;
+        block.operations_by_role.experts_gate_up = gate_up;
+        block.operations_by_role.experts_routed_down = routed_down;
+        block.operations_by_role.hidden_output = final_residual;
+        block.values_by_role.attention_prepared = attention_prepared_value;
+        block.values_by_role.router_route_ids = graph.operations[route_ids].output;
+        block.values_by_role.experts_activation = graph.operations[gate_up].output;
 
         const std::set<OperationId> prepare = RoutedTransformerAnalysisImplementation::ancestors_within(index, { attention_prepared }, block_set);
         std::vector<OperationId> publication_roots = cache_writers;
@@ -431,70 +430,364 @@ RoutedTransformerModel RoutedTransformerModel::analyze(const GraphIndex & index)
         claimed.insert(gate.begin(), gate.end());
         const std::set<OperationId> down = RoutedTransformerAnalysisImplementation::difference(block_set, claimed);
 
-        RoutedTransformerAnalysisImplementation::add_component(block, "attention.prepare", attention_prepared, prepare);
-        RoutedTransformerAnalysisImplementation::add_component(block, "attention.qkv_publication", query_projection, qkv);
-        RoutedTransformerAnalysisImplementation::add_component(block, "attention.flash", flash, attention);
-        RoutedTransformerAnalysisImplementation::add_component(block, "attention.output_prepare", attention_projection, output_component);
-        RoutedTransformerAnalysisImplementation::add_component(block, "router.selection", router_projection, router);
-        RoutedTransformerAnalysisImplementation::add_component(block, "experts.gate_up", gate_up, gate);
-        RoutedTransformerAnalysisImplementation::add_component(block, "experts.down_publication", routed_down, down);
+        RoutedTransformerAnalysisImplementation::add_component(block, RoutedTransformerComponentKind::AttentionPrepare, attention_prepared, prepare);
+        RoutedTransformerAnalysisImplementation::add_component(block, RoutedTransformerComponentKind::AttentionQkvPublication, query_projection, qkv);
+        RoutedTransformerAnalysisImplementation::add_component(block, RoutedTransformerComponentKind::Attention, flash, attention);
+        RoutedTransformerAnalysisImplementation::add_component(block, RoutedTransformerComponentKind::AttentionOutputPrepare, attention_projection, output_component);
+        RoutedTransformerAnalysisImplementation::add_component(block, RoutedTransformerComponentKind::RouterSelection, router_projection, router);
+        RoutedTransformerAnalysisImplementation::add_component(block, RoutedTransformerComponentKind::ExpertGateUp, gate_up, gate);
+        RoutedTransformerAnalysisImplementation::add_component(block, RoutedTransformerComponentKind::ExpertDownPublication, routed_down, down);
         model.blocks.push_back(std::move(block));
     }
 
     std::set<OperationId> endpoint_set;
     std::queue<OperationId> endpoint_worklist;
-    const OperationId final_block_output = model.blocks.back().bindings.operations.at("hidden.output");
-    for (OperationId successor : index.successors(final_block_output)) {
-        if (all_block_operations.count(successor) == 0 && endpoint_set.insert(successor).second) endpoint_worklist.push(successor);
+    for (ValueId root : graph.roots) {
+        const OperationId producer = graph.values[root].producer;
+        if (producer != kInvalidId && all_block_operations.count(producer) == 0 && endpoint_set.insert(producer).second) {
+            endpoint_worklist.push(producer);
+        }
     }
     while (!endpoint_worklist.empty()) {
         const OperationId current = endpoint_worklist.front();
         endpoint_worklist.pop();
-        for (OperationId successor : index.successors(current)) {
-            if (all_block_operations.count(successor) == 0 && endpoint_set.insert(successor).second) endpoint_worklist.push(successor);
+        for (OperationId predecessor : index.predecessors(current)) {
+            if (all_block_operations.count(predecessor) == 0 && endpoint_set.insert(predecessor).second) {
+                endpoint_worklist.push(predecessor);
+            }
         }
     }
     model.endpoint_operations = RoutedTransformerAnalysisImplementation::set_vector(endpoint_set);
-    for (const Operation & operation : graph.operations) {
-        if (all_block_operations.count(operation.id) == 0 && endpoint_set.count(operation.id) == 0) {
-            model.preamble_operations.push_back(operation.id);
+
+    // Preamble and endpoint are dataflow slices, not positional graph
+    // leftovers. This distinction is what permits an unfamiliar side/tail op
+    // to remain an explicit atom instead of being accidentally swallowed by
+    // a broad model-sized region.
+    std::set<OperationId> preamble_set;
+    std::queue<OperationId> preamble_worklist;
+    for (OperationId block_operation : all_block_operations) {
+        for (OperationId predecessor : index.predecessors(block_operation)) {
+            if (all_block_operations.count(predecessor) == 0 && endpoint_set.count(predecessor) == 0 &&
+                preamble_set.insert(predecessor).second) {
+                preamble_worklist.push(predecessor);
+            }
         }
     }
+    while (!preamble_worklist.empty()) {
+        const OperationId current = preamble_worklist.front();
+        preamble_worklist.pop();
+        for (OperationId predecessor : index.predecessors(current)) {
+            if (all_block_operations.count(predecessor) == 0 && endpoint_set.count(predecessor) == 0 &&
+                preamble_set.insert(predecessor).second) {
+                preamble_worklist.push(predecessor);
+            }
+        }
+    }
+    model.preamble_operations = RoutedTransformerAnalysisImplementation::set_vector(preamble_set);
     if (!model.preamble_operations.empty()) {
         const OperationId embedding = model.preamble_operations.front();
-        model.bindings.operations["program.embedding"] = embedding;
-        model.bindings.values["program.hidden_state"] = graph.operations[embedding].output;
+        model.operations_by_role.program_embedding = embedding;
+        model.values_by_role.program_hidden_state = graph.operations[embedding].output;
     }
     for (OperationId operation : model.endpoint_operations) {
         switch (graph.operations[operation].op) {
-            case GGML_OP_RMS_NORM: model.bindings.operations["endpoint.norm"] = operation; break;
-            case GGML_OP_MUL: model.bindings.operations["endpoint.prepared"] = operation; break;
-            case GGML_OP_MUL_MAT: model.bindings.operations["endpoint.projection"] = operation; break;
+            case GGML_OP_RMS_NORM:
+                model.operations_by_role.endpoint_norm = operation;
+                break;
+            case GGML_OP_MUL:
+                model.operations_by_role.endpoint_prepared = operation;
+                break;
+            case GGML_OP_MUL_MAT:
+                model.operations_by_role.endpoint_projection = operation;
+                break;
             default: break;
         }
     }
 
     const RoutedTransformerBlock & first = model.blocks.front();
-    const Value & prepared = graph.values[first.bindings.values.at("attention.prepared")];
+    const Value & prepared = graph.values[first.values_by_role.attention_prepared];
     model.hidden_size = prepared.access.shape[0];
     model.query_token_count = prepared.access.shape[1];
-    const Operation & first_flash = graph.operations[first.bindings.operations.at("attention.flash")];
+    const Operation & first_flash = graph.operations[first.operations_by_role.attention_flash];
     model.key_value_token_count = graph.values[first_flash.inputs[1]].access.shape[1];
-    const Operation & first_query = graph.operations[first.bindings.operations.at("attention.query_projection")];
+    const Operation & first_query = graph.operations[first.operations_by_role.attention_query_projection];
     model.query_size = graph.values[first_query.output].access.shape[0];
     model.key_value_size = 0;
-    for (OperationId projection : index.consumers(first.bindings.values.at("attention.prepared"))) {
+    for (OperationId projection : index.consumers(first.values_by_role.attention_prepared)) {
         if (graph.operations[projection].op != GGML_OP_MUL_MAT || projection == first_query.id) continue;
         const int64_t width = graph.values[graph.operations[projection].output].access.shape[0];
         if (model.key_value_size == 0 || width < model.key_value_size) model.key_value_size = width;
     }
-    model.expert_count = graph.values[graph.operations[first.bindings.operations.at("router.projection")].output].access.shape[0];
-    model.route_count = graph.values[first.bindings.values.at("router.route_ids")].access.shape[0];
+    model.expert_count = graph.values[graph.operations[first.operations_by_role.router_projection].output].access.shape[0];
+    model.route_count = graph.values[first.values_by_role.router_route_ids].access.shape[0];
     model.output_token_count = 1;
     for (ValueId root : graph.roots) {
         if (root < graph.values.size()) model.output_token_count = std::max<int64_t>(model.output_token_count, graph.values[root].access.shape[1]);
     }
+    LogicalComponentId next_component = 0;
+    model.preamble.id = next_component++;
+    model.preamble.kind = RoutedTransformerComponentKind::ProgramPreamble;
+    model.preamble.hero = model.preamble_operations.empty() ? kInvalidId : model.preamble_operations.back();
+    model.preamble.operations = model.preamble_operations;
+    model.preamble.boundary = index.boundary(model.preamble.operations);
+    for (RoutedTransformerBlock & block : model.blocks) {
+        for (RoutedTransformerComponent & component : block.components) {
+            component.id = next_component++;
+            component.boundary = index.boundary(component.operations);
+        }
+    }
+    model.endpoint.id = next_component++;
+    model.endpoint.kind = RoutedTransformerComponentKind::ProgramEndpoint;
+    model.endpoint.hero = model.endpoint_operations.empty() ? kInvalidId : model.endpoint_operations.front();
+    model.endpoint.operations = model.endpoint_operations;
+    model.endpoint.boundary = index.boundary(model.endpoint.operations);
+
+    std::vector<uint8_t> raised(graph.operations.size(), 0);
+    auto mark_raised = [&](const RoutedTransformerComponent & component) {
+        for (OperationId operation : component.operations) {
+            if (operation < raised.size()) ++raised[operation];
+        }
+    };
+    mark_raised(model.preamble);
+    for (const RoutedTransformerBlock & block : model.blocks) {
+        for (const RoutedTransformerComponent & component : block.components) mark_raised(component);
+    }
+    mark_raised(model.endpoint);
+    for (OperationId operation = 0; operation < raised.size(); ++operation) {
+        if (raised[operation] == 0) {
+            model.unraised_operations.push_back(operation);
+            RoutedTransformerComponent fallback;
+            fallback.id = next_component++;
+            fallback.kind = RoutedTransformerComponentKind::Atom;
+            fallback.hero = operation;
+            fallback.operations = { operation };
+            fallback.boundary = index.boundary(fallback.operations);
+            model.fallback_components.push_back(std::move(fallback));
+        }
+        else if (raised[operation] != 1) model.errors.push_back(
+            "logical operation " + std::to_string(operation) + " is owned by more than one component");
+    }
+    const VerificationResult verification = RoutedTransformerModel::verify(index, model);
+    model.errors.insert(model.errors.end(), verification.errors.begin(), verification.errors.end());
     return model;
+}
+
+const char * RoutedTransformerModel::component_kind_name(RoutedTransformerComponentKind kind) {
+    switch (kind) {
+        case RoutedTransformerComponentKind::ProgramPreamble: return "program.preamble";
+        case RoutedTransformerComponentKind::AttentionPrepare: return "attention.prepare";
+        case RoutedTransformerComponentKind::AttentionQkvPublication: return "attention.qkv_publication";
+        case RoutedTransformerComponentKind::Attention: return "attention.flash";
+        case RoutedTransformerComponentKind::AttentionOutputPrepare: return "attention.output_prepare";
+        case RoutedTransformerComponentKind::RouterSelection: return "router.selection";
+        case RoutedTransformerComponentKind::ExpertGateUp: return "experts.gate_up";
+        case RoutedTransformerComponentKind::ExpertDownPublication: return "experts.down_publication";
+        case RoutedTransformerComponentKind::ProgramEndpoint: return "program.endpoint";
+        case RoutedTransformerComponentKind::Atom: return "atom";
+    }
+    return "unknown";
+}
+
+std::string RoutedTransformerModel::format(const RoutedTransformerModel & model) {
+    std::ostringstream out;
+    out << "schema=ggml-hrx-logical-routed-transformer-v1\n"
+        << "graph=" << model.graph_fingerprint << '\n'
+        << "blocks=" << model.blocks.size() << '\n'
+        << "query_tokens=" << model.query_token_count << '\n'
+        << "output_tokens=" << model.output_token_count << '\n'
+        << "key_value_tokens=" << model.key_value_token_count << '\n'
+        << "hidden_size=" << model.hidden_size << '\n'
+        << "query_size=" << model.query_size << '\n'
+        << "key_value_size=" << model.key_value_size << '\n'
+        << "experts=" << model.expert_count << '\n'
+        << "routes=" << model.route_count << '\n';
+    auto component = [&](const RoutedTransformerComponent & value, int64_t block) {
+        out << "component " << value.id << " kind=" << component_kind_name(value.kind)
+            << " block=" << block << " hero=" << value.hero << " ops=";
+        for (OperationId operation : value.operations) out << operation << ',';
+        out << " inputs=";
+        for (ValueId input : value.boundary.inputs) out << input << ',';
+        out << " outputs=";
+        for (ValueId output : value.boundary.outputs) out << output << ',';
+        out << '\n';
+    };
+    component(model.preamble, -1);
+    for (const RoutedTransformerBlock & block : model.blocks) {
+        for (const RoutedTransformerComponent & value : block.components) component(value, block.ordinal);
+    }
+    component(model.endpoint, -1);
+    for (const RoutedTransformerComponent & fallback : model.fallback_components) component(fallback, -1);
+    if (!model.unraised_operations.empty()) {
+        out << "unraised=";
+        for (OperationId operation : model.unraised_operations) out << operation << ',';
+        out << '\n';
+    }
+    for (const std::string & error : model.errors) out << "error=" << error << '\n';
+    return out.str();
+}
+
+std::string RoutedTransformerModel::serialize_json(const RoutedTransformerModel & model) {
+    auto escape = [](const std::string & value) {
+        std::string result;
+        for (char character : value) {
+            if (character == '"' || character == '\\') result.push_back('\\');
+            result.push_back(character);
+        }
+        return result;
+    };
+    std::ostringstream out;
+    out << "{\"version\":1,\"graph_fingerprint\":\"" << escape(model.graph_fingerprint)
+        << "\",\"facts\":{\"block_count\":" << model.blocks.size()
+        << ",\"query_token_count\":" << model.query_token_count
+        << ",\"output_token_count\":" << model.output_token_count
+        << ",\"key_value_token_count\":" << model.key_value_token_count
+        << ",\"hidden_size\":" << model.hidden_size
+        << ",\"query_size\":" << model.query_size
+        << ",\"key_value_size\":" << model.key_value_size
+        << ",\"expert_count\":" << model.expert_count
+        << ",\"route_count\":" << model.route_count << "},\"components\":[";
+    bool first = true;
+    auto component = [&](const RoutedTransformerComponent & value, int64_t block) {
+        if (!first) out << ',';
+        first = false;
+        out << "{\"id\":" << value.id << ",\"kind\":\"" << component_kind_name(value.kind)
+            << "\",\"block\":" << block << ",\"hero\":" << value.hero << ",\"operations\":[";
+        for (size_t i = 0; i < value.operations.size(); ++i) {
+            if (i) out << ',';
+            out << value.operations[i];
+        }
+        out << "],\"inputs\":[";
+        for (size_t i = 0; i < value.boundary.inputs.size(); ++i) {
+            if (i) out << ',';
+            out << value.boundary.inputs[i];
+        }
+        out << "],\"outputs\":[";
+        for (size_t i = 0; i < value.boundary.outputs.size(); ++i) {
+            if (i) out << ',';
+            out << value.boundary.outputs[i];
+        }
+        out << "]}";
+    };
+    component(model.preamble, -1);
+    for (const RoutedTransformerBlock & block : model.blocks) {
+        for (const RoutedTransformerComponent & value : block.components) component(value, block.ordinal);
+    }
+    component(model.endpoint, -1);
+    for (const RoutedTransformerComponent & fallback : model.fallback_components) component(fallback, -1);
+    out << "],\"unraised_operations\":[";
+    for (size_t i = 0; i < model.unraised_operations.size(); ++i) {
+        if (i) out << ',';
+        out << model.unraised_operations[i];
+    }
+    out << "]}";
+    return out.str();
+}
+
+std::string RoutedTransformerModel::dot(const RoutedTransformerModel & model) {
+    std::ostringstream out;
+    out << "digraph logical_program {\n  rankdir=LR;\n";
+    std::vector<const RoutedTransformerComponent *> ordered { &model.preamble };
+    for (const RoutedTransformerBlock & block : model.blocks) {
+        out << "  subgraph cluster_block_" << block.ordinal << " { label=\"block " << block.ordinal << "\";\n";
+        for (const RoutedTransformerComponent & component : block.components) {
+            ordered.push_back(&component);
+            out << "    c" << component.id << " [label=\"" << component_kind_name(component.kind)
+                << "\\nops=" << component.operations.size() << "\"];\n";
+        }
+        out << "  }\n";
+    }
+    ordered.push_back(&model.endpoint);
+    for (const RoutedTransformerComponent & fallback : model.fallback_components) ordered.push_back(&fallback);
+    out << "  c" << model.preamble.id << " [label=\"" << component_kind_name(model.preamble.kind) << "\"];\n"
+        << "  c" << model.endpoint.id << " [label=\"" << component_kind_name(model.endpoint.kind) << "\"];\n";
+    for (size_t i = 1; i < ordered.size(); ++i) out << "  c" << ordered[i - 1]->id << " -> c" << ordered[i]->id << ";\n";
+    out << "}\n";
+    return out.str();
+}
+
+VerificationResult RoutedTransformerModel::verify(const GraphIndex & index, const RoutedTransformerModel & model) {
+    VerificationResult result;
+    const Graph & graph = index.graph();
+    std::vector<uint8_t> owners(graph.operations.size(), 0);
+    std::vector<uint8_t> fallback_owners(graph.operations.size(), 0);
+    LogicalComponentId expected_id = 0;
+    auto verify_component = [&](const RoutedTransformerComponent & component) {
+        const std::string name = RoutedTransformerModel::component_kind_name(component.kind);
+        if (component.id != expected_id++) {
+            result.errors.push_back("logical component " + std::string(name) + " has a non-canonical id");
+        }
+        if (component.operations.empty()) {
+            result.errors.push_back("logical component " + std::string(name) + " owns no operations");
+            return;
+        }
+        for (OperationId operation : component.operations) {
+            if (operation >= owners.size()) {
+                result.errors.push_back("logical component " + std::string(name) + " owns an invalid operation");
+            } else if (++owners[operation] != 1) {
+                result.errors.push_back("logical operation " + std::to_string(operation) + " has duplicate ownership");
+            }
+        }
+        const RegionBoundary expected = index.boundary(component.operations);
+        if (component.boundary.inputs != expected.inputs || component.boundary.outputs != expected.outputs) {
+            result.errors.push_back("logical component " + std::string(name) + " has a stale graph boundary");
+        }
+        const Decision legality = index.validate_region(component.operations, component.boundary.outputs, true);
+        if (!legality.allowed) result.errors.push_back(
+            "logical component " + std::string(name) + " is illegal: " + legality.detail);
+    };
+    verify_component(model.preamble);
+    for (const RoutedTransformerBlock & block : model.blocks) {
+        if (block.components.size() != 7) {
+            result.errors.push_back("routed transformer block " + std::to_string(block.ordinal) +
+                                    " does not contain seven logical components");
+        }
+        const std::string prefix = "routed transformer block " + std::to_string(block.ordinal) + ' ';
+        const Value & prepared = graph.values[block.values_by_role.attention_prepared];
+        if (prepared.access.shape[0] != model.hidden_size || prepared.access.shape[1] != model.query_token_count) {
+            result.errors.push_back(prefix + "attention input disagrees with recovered model geometry");
+        }
+        const Operation & flash = graph.operations[block.operations_by_role.attention_flash];
+        if (flash.inputs.size() != 4) {
+            result.errors.push_back(prefix + "flash attention does not have query, key, value, and mask operands");
+        } else {
+            const Value & query = graph.values[flash.inputs[0]];
+            const Value & key = graph.values[flash.inputs[1]];
+            const Value & value = graph.values[flash.inputs[2]];
+            const Value & mask = graph.values[flash.inputs[3]];
+            if (query.access.shape[1] != model.query_token_count ||
+                key.access.shape[1] != model.key_value_token_count ||
+                value.access.shape[1] != model.key_value_token_count ||
+                mask.access.shape[0] != model.key_value_token_count ||
+                mask.access.shape[1] != model.query_token_count) {
+                result.errors.push_back(prefix + "attention operands disagree on query/key-value token geometry");
+            }
+        }
+        const Value & routes = graph.values[block.values_by_role.router_route_ids];
+        const Value & router = graph.values[graph.operations[block.operations_by_role.router_projection].output];
+        if (routes.access.shape[0] != model.route_count || router.access.shape[0] != model.expert_count) {
+            result.errors.push_back(prefix + "router operands disagree with recovered model geometry");
+        }
+        for (const RoutedTransformerComponent & component : block.components) verify_component(component);
+    }
+    verify_component(model.endpoint);
+    for (const RoutedTransformerComponent & fallback : model.fallback_components) {
+        verify_component(fallback);
+        for (OperationId operation : fallback.operations) {
+            if (operation < fallback_owners.size()) ++fallback_owners[operation];
+        }
+    }
+    for (OperationId operation = 0; operation < owners.size(); ++operation) {
+        const bool declared_unraised = std::find(model.unraised_operations.begin(), model.unraised_operations.end(), operation) !=
+            model.unraised_operations.end();
+        if (owners[operation] == 0) {
+            result.errors.push_back("logical operation " + std::to_string(operation) + " has no owner");
+        }
+        if (declared_unraised != (fallback_owners[operation] == 1)) {
+            result.errors.push_back("logical operation " + std::to_string(operation) +
+                                    " has inconsistent atom-fallback ownership");
+        }
+    }
+    return result;
 }
 
 Decision RoutedTransformerProvider::discover(const GraphIndex & index, FactDatabase & facts) const {
@@ -510,7 +803,7 @@ Decision RoutedTransformerProvider::discover(const GraphIndex & index, FactDatab
                                 model.errors.empty() ? "routed transformer analysis failed" : model.errors.front());
     }
     Decision failure;
-    const uint32_t hero = model.blocks.front().bindings.operations.at("attention.flash");
+    const uint32_t hero = model.blocks.front().operations_by_role.attention_flash;
     if (!RoutedTransformerAnalysisImplementation::observe(facts, "llm.layer_count", model.blocks.size(), "routed blocks", hero, failure) ||
         !RoutedTransformerAnalysisImplementation::observe(facts, "llm.query_token_count", model.query_token_count, "attention input", hero, failure) ||
         !RoutedTransformerAnalysisImplementation::observe(facts, "llm.output_token_count", model.output_token_count, "graph roots", hero, failure) ||
@@ -524,8 +817,8 @@ Decision RoutedTransformerProvider::discover(const GraphIndex & index, FactDatab
     // Every repeated block independently witnesses the global geometry.
     const Graph & graph = index.graph();
     for (const RoutedTransformerBlock & block : model.blocks) {
-        const OperationId block_hero = block.bindings.operations.at("attention.flash");
-        const Value & block_prepared = graph.values[block.bindings.values.at("attention.prepared")];
+        const OperationId block_hero = block.operations_by_role.attention_flash;
+        const Value & block_prepared = graph.values[block.values_by_role.attention_prepared];
         if (!RoutedTransformerAnalysisImplementation::observe(facts, "llm.hidden_size", block_prepared.access.shape[0], "block attention input", block_hero, failure) ||
             !RoutedTransformerAnalysisImplementation::observe(facts, "llm.query_token_count", block_prepared.access.shape[1], "block attention input", block_hero, failure)) {
             return failure;
@@ -542,54 +835,55 @@ void RoutedTransformerProvider::seed(const GraphIndex & index, const FactDatabas
         : (recovered_model = RoutedTransformerModel::analyze(index));
     if (!model.valid()) return;
     const bool decode = model.query_token_count == 1;
-    auto dispatches_for = [&](const std::string & role) -> int {
+    auto dispatches_for = [&](RoutedTransformerComponentKind kind) -> int {
         if (decode) {
-            if (role == "attention.prepare") return 0;
-            if (role == "attention.qkv_publication") return 2;
-            if (role == "attention.flash") return 1;
-            if (role == "attention.output_prepare") return 3;
-            if (role == "router.selection") return 2;
-            if (role == "experts.gate_up") return 2;
-            if (role == "experts.down_publication") return 2;
+            if (kind == RoutedTransformerComponentKind::AttentionPrepare) return 0;
+            if (kind == RoutedTransformerComponentKind::AttentionQkvPublication) return 2;
+            if (kind == RoutedTransformerComponentKind::Attention) return 1;
+            if (kind == RoutedTransformerComponentKind::AttentionOutputPrepare) return 3;
+            if (kind == RoutedTransformerComponentKind::RouterSelection) return 2;
+            if (kind == RoutedTransformerComponentKind::ExpertGateUp) return 2;
+            if (kind == RoutedTransformerComponentKind::ExpertDownPublication) return 2;
         } else {
-            if (role == "attention.prepare") return 1;
-            if (role == "attention.qkv_publication") return 4;
-            if (role == "attention.flash") return 1;
-            if (role == "attention.output_prepare") return 2;
-            if (role == "router.selection") return 4;
-            if (role == "experts.gate_up") return 1;
-            if (role == "experts.down_publication") return 2;
+            if (kind == RoutedTransformerComponentKind::AttentionPrepare) return 1;
+            if (kind == RoutedTransformerComponentKind::AttentionQkvPublication) return 4;
+            if (kind == RoutedTransformerComponentKind::Attention) return 1;
+            if (kind == RoutedTransformerComponentKind::AttentionOutputPrepare) return 2;
+            if (kind == RoutedTransformerComponentKind::RouterSelection) return 4;
+            if (kind == RoutedTransformerComponentKind::ExpertGateUp) return 1;
+            if (kind == RoutedTransformerComponentKind::ExpertDownPublication) return 2;
         }
         return 0;
     };
-    auto append = [&](const std::string & family, const std::string & key, OperationId hero,
-                      const std::vector<OperationId> & operations, const SemanticBindings & bindings,
+    auto append = [&](const std::string & family, const std::string & key, LogicalComponentId component_id, OperationId hero,
+                      const std::vector<OperationId> & operations,
                       int planned_dispatches, bool correctness_baseline = false) {
         FusionCandidate candidate;
         candidate.provider = id();
         candidate.family = family;
         candidate.key = std::string(id()) + ':' + key;
         candidate.hero = hero;
+        candidate.logical_components.push_back(component_id);
         candidate.operations = operations;
         candidate.materialized_outputs = index.boundary(operations).outputs;
         candidate.allow_disconnected = true;
         candidate.correctness_baseline = correctness_baseline;
-        candidate.bindings = bindings;
         candidate.economics.reference_dispatches = planned_dispatches;
         candidate.economics.planned_dispatches = planned_dispatches;
         candidates.push_back(std::move(candidate));
     };
     if (!model.preamble_operations.empty()) {
-        append("program.preamble", "preamble", model.preamble_operations.back(), model.preamble_operations, {},
+        append("program.preamble", "preamble", model.preamble.id, model.preamble_operations.back(), model.preamble_operations,
                decode ? 3 : 2, true);
     }
     for (const RoutedTransformerBlock & block : model.blocks) {
         for (const RoutedTransformerComponent & component : block.components) {
-            append(component.role, "block." + std::to_string(block.ordinal) + '.' + component.role,
-                   component.hero, component.operations, block.bindings, 1);
+            const std::string role = RoutedTransformerModel::component_kind_name(component.kind);
+            append(role, "block." + std::to_string(block.ordinal) + '.' + role, component.id,
+                   component.hero, component.operations, 1);
             auto payload = std::make_shared<RoutedCandidatePayload>();
             payload->block_ordinal = block.ordinal;
-            payload->component_role = component.role;
+            payload->component_kind = component.kind;
             payload->decode = decode;
             payload->terminal = block.ordinal + 1 == model.blocks.size();
             if (!payload->terminal) {
@@ -598,14 +892,20 @@ void RoutedTransformerProvider::seed(const GraphIndex & index, const FactDatabas
                 payload->endpoint_operations = model.endpoint_operations;
             }
             candidates.back().payload = std::move(payload);
-            candidates.back().economics.reference_dispatches = dispatches_for(component.role);
-            candidates.back().economics.planned_dispatches = dispatches_for(component.role);
+            candidates.back().economics.reference_dispatches = dispatches_for(component.kind);
+            candidates.back().economics.planned_dispatches = dispatches_for(component.kind);
             candidates.back().correctness_baseline = true;
         }
     }
     if (!model.endpoint_operations.empty()) {
-        append("program.endpoint", "endpoint", model.endpoint_operations.front(), model.endpoint_operations, {},
+        append("program.endpoint", "endpoint", model.endpoint.id, model.endpoint_operations.front(), model.endpoint_operations,
                decode ? 1 : 2, true);
+    }
+    for (const RoutedTransformerComponent & fallback : model.fallback_components) {
+        const std::string operation = ggml_op_name(index.graph().operations[fallback.hero].op);
+        append("atom." + operation, "atom." + std::to_string(fallback.hero), fallback.id, fallback.hero,
+               fallback.operations, 1, true);
+        candidates.back().allow_disconnected = false;
     }
 }
 
@@ -639,13 +939,13 @@ void RoutedTransformerProvider::expand(const GraphIndex & index, const FactDatab
         result.erase(std::unique(result.begin(), result.end()), result.end());
         return result;
     };
-    const std::string & role = payload->component_role;
+    const RoutedTransformerComponentKind kind = payload->component_kind;
     if (payload->decode) {
-        if (role == "attention.qkv_publication") alternative(routed_transformer_recipes::kDecodeQkvPostprocess, 1);
-        if (role == "attention.output_prepare") alternative(routed_transformer_recipes::kDecodeOutputNextQ8, 2);
-        if (role == "router.selection") alternative(routed_transformer_recipes::kDecodeRouterTopK, 1);
-        if (role == "experts.gate_up") alternative(routed_transformer_recipes::kDecodeGateUpNextQ8, 1);
-        if (role == "experts.down_publication" && catalog_.contains(routed_transformer_recipes::kDecodeDownNextQ8)) {
+        if (kind == RoutedTransformerComponentKind::AttentionQkvPublication) alternative(routed_transformer_recipes::kDecodeQkvPostprocess, 1);
+        if (kind == RoutedTransformerComponentKind::AttentionOutputPrepare) alternative(routed_transformer_recipes::kDecodeOutputNextQ8, 2);
+        if (kind == RoutedTransformerComponentKind::RouterSelection) alternative(routed_transformer_recipes::kDecodeRouterTopK, 1);
+        if (kind == RoutedTransformerComponentKind::ExpertGateUp) alternative(routed_transformer_recipes::kDecodeGateUpNextQ8, 1);
+        if (kind == RoutedTransformerComponentKind::ExpertDownPublication && catalog_.contains(routed_transformer_recipes::kDecodeDownNextQ8)) {
             std::vector<OperationId> grown = candidate.operations;
             if (!payload->terminal) {
                 grown = union_operations(grown, payload->following_prepare_operations);
@@ -653,6 +953,7 @@ void RoutedTransformerProvider::expand(const GraphIndex & index, const FactDatab
                 grown = union_operations(grown, payload->endpoint_operations);
             }
             alternative(routed_transformer_recipes::kDecodeDownNextQ8, 1, std::move(grown));
+            expansions.back().logical_components.push_back(candidate.logical_components.front() + 1);
             // The grown candidate replaces the neighboring zero/one-dispatch
             // baseline as well. Include that cost in its comparison.
             FusionCandidate & result = expansions.back();
@@ -662,14 +963,15 @@ void RoutedTransformerProvider::expand(const GraphIndex & index, const FactDatab
             }
         }
     } else {
-        if (role == "router.selection" && !payload->terminal) {
+        if (kind == RoutedTransformerComponentKind::RouterSelection && !payload->terminal) {
             alternative(routed_transformer_recipes::kPrefillExpertPartition, 3);
         }
-        if (role == "experts.down_publication" && !payload->terminal &&
+        if (kind == RoutedTransformerComponentKind::ExpertDownPublication && !payload->terminal &&
             catalog_.contains(routed_transformer_recipes::kPrefillDownNextNorm)) {
             std::vector<OperationId> grown = union_operations(
                 candidate.operations, payload->following_prepare_operations);
             alternative(routed_transformer_recipes::kPrefillDownNextNorm, 2, std::move(grown));
+            expansions.back().logical_components.push_back(candidate.logical_components.front() + 1);
             expansions.back().economics.reference_dispatches = 3;
         }
     }

@@ -98,7 +98,6 @@ struct Graph {
     static Graph import(const ggml_cgraph * graph);
     static Graph deserialize_json(const std::string & json);
     static std::string serialize_json(const Graph & graph);
-    static bool semantically_equal(const Graph & lhs, const Graph & rhs);
 };
 
 // Runtime tensor identity is deliberately kept out of Graph so that cached

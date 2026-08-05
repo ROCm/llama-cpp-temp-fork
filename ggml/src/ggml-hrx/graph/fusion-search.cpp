@@ -176,6 +176,10 @@ SearchResult SearchResult::search(const GraphIndex & index, const PlannerConfigu
             return;
         }
         std::sort(candidate.operations.begin(), candidate.operations.end());
+        std::sort(candidate.logical_components.begin(), candidate.logical_components.end());
+        candidate.logical_components.erase(
+            std::unique(candidate.logical_components.begin(), candidate.logical_components.end()),
+            candidate.logical_components.end());
         std::sort(candidate.materialized_outputs.begin(), candidate.materialized_outputs.end());
         if (candidate.key.empty()) candidate.key = candidate.provider + ":" + candidate.family + ":" +
             (candidate.hero == kInvalidId ? std::string("none") : index.structural_key(candidate.hero));
@@ -326,6 +330,7 @@ std::string SearchResult::format_report(const SearchResult & result) {
     for (const FusionCandidate & candidate : result.selected) {
         const CandidateScore score = FusionCandidate::score(candidate);
         out << "select " << candidate.key << " family=" << candidate.family
+            << " components=" << candidate.logical_components.size()
             << " operations=" << candidate.operations.size()
             << " dispatches=" << candidate.economics.planned_dispatches
             << '/' << candidate.economics.reference_dispatches
@@ -364,6 +369,7 @@ std::string SearchResult::serialize_report_json(const SearchResult & result) {
         root["selected"].push_back({
             { "key", candidate.key }, { "provider", candidate.provider }, { "family", candidate.family },
             { "hero", candidate.hero }, { "operations", candidate.operations },
+            { "logical_components", candidate.logical_components },
             { "materialized_outputs", candidate.materialized_outputs },
             { "economics", {
                 { "reference_dispatches", candidate.economics.reference_dispatches },

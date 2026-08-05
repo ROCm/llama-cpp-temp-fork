@@ -27,6 +27,7 @@ static KernelSpecialization kernel(const std::string & variant, int layer, size_
     KernelSpecialization result;
     result.family = "qwen3_moe";
     result.variant = variant;
+    result.kernel_id = kernel_catalog_id(result.family.c_str(), result.variant.c_str());
     result.execution_kind = kind;
     result.integer_parameters["token_count"] = token_count;
     if (layer >= 0) result.integer_parameters["layer"] = layer;
@@ -69,89 +70,158 @@ static void add_dispatch(Invocation & invocation, KernelSpecialization specializ
     ++ordinal;
 }
 
-static void append_prefill(const Graph & graph, const RoutedTransformerModel & model,
-                           const RoutedTransformerBlock & block, Invocation & invocation,
-                           size_t & ordinal, std::vector<std::string> & gaps) {
-    const int layer = static_cast<int>(block.ordinal);
-    const bool terminal = block.ordinal + 1 == model.blocks.size();
-    const size_t token_count = model.query_token_count;
-    const size_t active_token_count = terminal ? 1 : token_count;
-    if (block.ordinal == 0) add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32", layer, token_count), ordinal);
-    for (const char * role : { "attention.query_projection", "attention.value_projection", "attention.key_projection" }) {
-        const OperationId projection = block.bindings.operations.at(role);
-        add_dispatch(invocation, storage_kernel("qwen3_moe_dense_linear_q4k_f16_wmma",
-            "qwen3_moe_dense_linear_q6k_f16_wmma", "dense_attention_projection",
-            weight_type(graph, projection), layer, token_count, gaps), ordinal);
+static const RoutedTransformerComponent * find_component(
+        const RoutedTransformerModel & model, LogicalComponentId id,
+        const RoutedTransformerBlock ** owner) {
+    if (model.preamble.id == id) {
+        *owner = nullptr;
+        return &model.preamble;
     }
-    add_dispatch(invocation, kernel("qwen3_moe_attention_postprocess_f32_f16", layer, token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_flash_attention_f32_f16_wmma", layer, token_count), ordinal);
-    const OperationId attention_output = block.bindings.operations.at("attention.output_projection");
-    add_dispatch(invocation, storage_kernel("qwen3_moe_dense_linear_q4k_f16_wmma",
-        "qwen3_moe_dense_linear_q6k_f16_wmma", "dense_attention_output",
-        weight_type(graph, attention_output), layer, token_count, gaps), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32", layer, active_token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_router_projection_f32_four_row_wave32", layer, active_token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_router_top8_f32", layer, active_token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_build_expert_table", layer, active_token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_build_expert_partition_table", layer, active_token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma", layer, active_token_count), ordinal);
-    const OperationId down = block.bindings.operations.at("experts.routed_down");
-    add_dispatch(invocation, storage_kernel("qwen3_moe_routed_down_q4k_f16_wmma_grouped",
-        "qwen3_moe_routed_down_q6k_f16_wmma_grouped", "routed_down",
-        weight_type(graph, down), layer, active_token_count, gaps), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_routed_down_weighted_reduce_f16_f32",
-                                    layer, active_token_count), ordinal);
-    if (!terminal) add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32", layer, token_count), ordinal);
+    for (const RoutedTransformerBlock & block : model.blocks) {
+        for (const RoutedTransformerComponent & component : block.components) {
+            if (component.id == id) {
+                *owner = &block;
+                return &component;
+            }
+        }
+    }
+    if (model.endpoint.id == id) {
+        *owner = nullptr;
+        return &model.endpoint;
+    }
+    for (const RoutedTransformerComponent & component : model.fallback_components) {
+        if (component.id == id) {
+            *owner = nullptr;
+            return &component;
+        }
+    }
+    *owner = nullptr;
+    return nullptr;
 }
 
-static void append_decode(const Graph & graph, const RoutedTransformerModel & model,
-                          const RoutedTransformerBlock & block, Invocation & invocation,
-                          size_t & ordinal, std::vector<std::string> & gaps) {
+static void emit_prefill_component(const Graph & graph, const RoutedTransformerModel & model,
+                                   const RoutedTransformerBlock & block,
+                                   RoutedTransformerComponentKind kind, Invocation & invocation,
+                                   size_t & ordinal, std::vector<std::string> & gaps) {
     const int layer = static_cast<int>(block.ordinal);
     const size_t token_count = model.query_token_count;
-    const OperationId query = block.bindings.operations.at("attention.query_projection");
-    const OperationId key = block.bindings.operations.at("attention.key_projection");
-    const OperationId value = block.bindings.operations.at("attention.value_projection");
-    const enum ggml_type query_type = weight_type(graph, query);
-    const enum ggml_type key_type = weight_type(graph, key);
-    const enum ggml_type value_type = weight_type(graph, value);
-    if (query_type == GGML_TYPE_Q4_K && key_type == GGML_TYPE_Q4_K &&
-        (value_type == GGML_TYPE_Q4_K || value_type == GGML_TYPE_Q6_K)) {
-        KernelSpecialization qkv = kernel("qwen3_moe_attention_qkv_quantized", layer, token_count);
-        qkv.integer_parameters["query_weight_type"] = query_type;
-        qkv.integer_parameters["key_weight_type"] = key_type;
-        qkv.integer_parameters["value_weight_type"] = value_type;
-        add_dispatch(invocation, std::move(qkv), ordinal);
-    } else {
-        const std::string variant = "qwen3_moe_attention_qkv_postprocess_fused_decode_missing_" +
-            type_suffix(query_type) + '_' + type_suffix(key_type) + '_' + type_suffix(value_type);
-        gaps.push_back("block " + std::to_string(layer) + ": " + variant);
-        add_dispatch(invocation, kernel(variant, layer, token_count,
-                                       KernelSpecialization::ExecutionKind::NativeGap), ordinal);
+    const size_t active_token_count = block.ordinal + 1 == model.blocks.size() ? 1 : token_count;
+    switch (kind) {
+        case RoutedTransformerComponentKind::AttentionPrepare:
+            // Preserve the established specialization contract: historically
+            // the next attention preparation was published by the preceding
+            // block's down recipe and therefore carried that block ordinal.
+            add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32",
+                block.ordinal == 0 ? layer : layer - 1, token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::AttentionQkvPublication:
+            for (OperationId projection : {
+                     block.operations_by_role.attention_query_projection,
+                     block.operations_by_role.attention_value_projection,
+                     block.operations_by_role.attention_key_projection }) {
+                add_dispatch(invocation, storage_kernel("qwen3_moe_dense_linear_q4k_f16_wmma",
+                    "qwen3_moe_dense_linear_q6k_f16_wmma", "dense_attention_projection",
+                    weight_type(graph, projection), layer, token_count, gaps), ordinal);
+            }
+            add_dispatch(invocation, kernel("qwen3_moe_attention_postprocess_f32_f16", layer, token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::Attention:
+            add_dispatch(invocation, kernel("qwen3_moe_flash_attention_f32_f16_wmma", layer, token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::AttentionOutputPrepare:
+            add_dispatch(invocation, storage_kernel("qwen3_moe_dense_linear_q4k_f16_wmma",
+                "qwen3_moe_dense_linear_q6k_f16_wmma", "dense_attention_output",
+                weight_type(graph, block.operations_by_role.attention_output_projection),
+                layer, token_count, gaps), ordinal);
+            add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32", layer, active_token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::RouterSelection:
+            add_dispatch(invocation, kernel("qwen3_moe_router_projection_f32_four_row_wave32", layer, active_token_count), ordinal);
+            add_dispatch(invocation, kernel("qwen3_moe_router_top8_f32", layer, active_token_count), ordinal);
+            add_dispatch(invocation, kernel("qwen3_moe_build_expert_table", layer, active_token_count), ordinal);
+            add_dispatch(invocation, kernel("qwen3_moe_build_expert_partition_table", layer, active_token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::ExpertGateUp:
+            add_dispatch(invocation, kernel("qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma", layer, active_token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::ExpertDownPublication:
+            add_dispatch(invocation, storage_kernel("qwen3_moe_routed_down_q4k_f16_wmma_grouped",
+                "qwen3_moe_routed_down_q6k_f16_wmma_grouped", "routed_down",
+                weight_type(graph, block.operations_by_role.experts_routed_down),
+                layer, active_token_count, gaps), ordinal);
+            add_dispatch(invocation, kernel("qwen3_moe_routed_down_weighted_reduce_f16_f32",
+                                            layer, active_token_count), ordinal);
+            break;
+        default: break;
     }
-    add_dispatch(invocation, kernel("qwen3_moe_attention_postprocess_f32_f16", layer, token_count), ordinal);
-    KernelSpecialization flash = kernel("qwen3_moe_flash_attention_decode_split_f32_f16_wmma", layer, token_count);
-    flash.integer_parameters["key_value_token_count"] = model.key_value_token_count;
-    flash.integer_parameters["key_value_tile_size"] = kAttentionKvTileSize;
-    flash.integer_parameters["key_value_block_count"] =
-        (model.key_value_token_count + kAttentionKvTileSize - 1) / kAttentionKvTileSize;
-    add_dispatch(invocation, std::move(flash), ordinal);
-    add_dispatch(invocation, kernel("ggml_quantize_q8_1_x4_f32", layer, token_count), ordinal);
-    const OperationId attention_output = block.bindings.operations.at("attention.output_projection");
-    add_dispatch(invocation, storage_kernel("qwen3_moe_dense_linear_q4k_q8_1_x4", "",
-        "dense_attention_output_q8", weight_type(graph, attention_output), layer, token_count, gaps), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", layer, token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_router_projection_f32_one_row_wave64", layer, token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_router_top8_f32", layer, token_count), ordinal);
-    add_dispatch(invocation, kernel("qwen3_moe_routed_gate_up_swiglu_q4k_q8", layer, token_count), ordinal);
-    add_dispatch(invocation, kernel("ggml_quantize_q8_1_x4_f32", layer, token_count * model.route_count), ordinal);
-    const OperationId down = block.bindings.operations.at("experts.routed_down");
-    add_dispatch(invocation, storage_kernel("qwen3_moe_routed_down_q4k_q8_1_x4",
-        "qwen3_moe_routed_down_q6k_q8_1_x4", "routed_down_q8",
-        weight_type(graph, down), layer, token_count, gaps), ordinal);
-    add_dispatch(invocation, kernel(block.ordinal + 1 == model.blocks.size()
-        ? "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4"
-        : "qwen3_moe_attention_rmsnorm_quantize_q8_1_x4", layer, token_count), ordinal);
+}
+
+static void emit_decode_component(const Graph & graph, const RoutedTransformerModel & model,
+                                  const RoutedTransformerBlock & block,
+                                  RoutedTransformerComponentKind kind, Invocation & invocation,
+                                  size_t & ordinal, std::vector<std::string> & gaps) {
+    const int layer = static_cast<int>(block.ordinal);
+    const size_t token_count = model.query_token_count;
+    switch (kind) {
+        case RoutedTransformerComponentKind::AttentionPrepare:
+            // The preamble publishes block zero's Q8 input; every prior block's
+            // down/publication recipe publishes the following block's input.
+            break;
+        case RoutedTransformerComponentKind::AttentionQkvPublication: {
+            const enum ggml_type query_type = weight_type(graph, block.operations_by_role.attention_query_projection);
+            const enum ggml_type key_type = weight_type(graph, block.operations_by_role.attention_key_projection);
+            const enum ggml_type value_type = weight_type(graph, block.operations_by_role.attention_value_projection);
+            if (query_type == GGML_TYPE_Q4_K && key_type == GGML_TYPE_Q4_K &&
+                (value_type == GGML_TYPE_Q4_K || value_type == GGML_TYPE_Q6_K)) {
+                KernelSpecialization qkv = kernel("qwen3_moe_attention_qkv_quantized", layer, token_count);
+                qkv.integer_parameters["query_weight_type"] = query_type;
+                qkv.integer_parameters["key_weight_type"] = key_type;
+                qkv.integer_parameters["value_weight_type"] = value_type;
+                add_dispatch(invocation, std::move(qkv), ordinal);
+            } else {
+                const std::string variant = "qwen3_moe_attention_qkv_postprocess_fused_decode_missing_" +
+                    type_suffix(query_type) + '_' + type_suffix(key_type) + '_' + type_suffix(value_type);
+                gaps.push_back("block " + std::to_string(layer) + ": " + variant);
+                add_dispatch(invocation, kernel(variant, layer, token_count,
+                                               KernelSpecialization::ExecutionKind::NativeGap), ordinal);
+            }
+            add_dispatch(invocation, kernel("qwen3_moe_attention_postprocess_f32_f16", layer, token_count), ordinal);
+            break;
+        }
+        case RoutedTransformerComponentKind::Attention: {
+            KernelSpecialization flash = kernel("qwen3_moe_flash_attention_decode_split_f32_f16_wmma", layer, token_count);
+            flash.integer_parameters["key_value_token_count"] = model.key_value_token_count;
+            flash.integer_parameters["key_value_tile_size"] = kAttentionKvTileSize;
+            flash.integer_parameters["key_value_block_count"] =
+                (model.key_value_token_count + kAttentionKvTileSize - 1) / kAttentionKvTileSize;
+            add_dispatch(invocation, std::move(flash), ordinal);
+            break;
+        }
+        case RoutedTransformerComponentKind::AttentionOutputPrepare:
+            add_dispatch(invocation, kernel("ggml_quantize_q8_1_x4_f32", layer, token_count), ordinal);
+            add_dispatch(invocation, storage_kernel("qwen3_moe_dense_linear_q4k_q8_1_x4", "",
+                "dense_attention_output_q8", weight_type(graph, block.operations_by_role.attention_output_projection),
+                layer, token_count, gaps), ordinal);
+            add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", layer, token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::RouterSelection:
+            add_dispatch(invocation, kernel("qwen3_moe_router_projection_f32_one_row_wave64", layer, token_count), ordinal);
+            add_dispatch(invocation, kernel("qwen3_moe_router_top8_f32", layer, token_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::ExpertGateUp:
+            add_dispatch(invocation, kernel("qwen3_moe_routed_gate_up_swiglu_q4k_q8", layer, token_count), ordinal);
+            add_dispatch(invocation, kernel("ggml_quantize_q8_1_x4_f32", layer, token_count * model.route_count), ordinal);
+            break;
+        case RoutedTransformerComponentKind::ExpertDownPublication:
+            add_dispatch(invocation, storage_kernel("qwen3_moe_routed_down_q4k_q8_1_x4",
+                "qwen3_moe_routed_down_q6k_q8_1_x4", "routed_down_q8",
+                weight_type(graph, block.operations_by_role.experts_routed_down), layer, token_count, gaps), ordinal);
+            add_dispatch(invocation, kernel(block.ordinal + 1 == model.blocks.size()
+                ? "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4"
+                : "qwen3_moe_attention_rmsnorm_quantize_q8_1_x4", layer, token_count), ordinal);
+            break;
+        default: break;
+    }
 }
 
 };
@@ -170,6 +240,7 @@ RoutedTransformerProgramProof RoutedTransformerProgramProof::recover(const Graph
         proof.errors = model->errors;
         return proof;
     }
+    proof.logical_program = model;
     proof.structurally_recognized = true;
     if (model->output_token_count != 1) {
         proof.errors.push_back("current routed-transformer recipes require one demanded output token; graph demands " +
@@ -199,46 +270,98 @@ RoutedTransformerProgramProof RoutedTransformerProgramProof::recover(const Graph
     }
 
     size_t dispatch_ordinal = 0;
-    Invocation preamble;
-    preamble.stage = "program.preamble";
-    preamble.kernel = RoutedTransformerProgramImplementation::kernel("owned_program_preamble", -1, model->query_token_count);
-    preamble.covered_operations = model->preamble_operations;
-    RoutedTransformerProgramImplementation::calculate_boundaries(index, preamble);
-    KernelSpecialization embedding = RoutedTransformerProgramImplementation::kernel("qwen_token_embedding_q4k_bringup_workaround", -1, model->query_token_count);
-    embedding.integer_parameters["vocabulary_count"] = graph.values[graph.operations[model->preamble_operations.front()].inputs[0]].access.shape[1];
-    embedding.integer_parameters["hidden_size"] = model->hidden_size;
-    RoutedTransformerProgramImplementation::add_dispatch(preamble, std::move(embedding), dispatch_ordinal);
-    KernelSpecialization metadata = RoutedTransformerProgramImplementation::kernel("qwen_attention_metadata_bringup_workaround", -1, model->query_token_count);
-    metadata.integer_parameters["context_capacity"] = model->key_value_token_count;
-    RoutedTransformerProgramImplementation::add_dispatch(preamble, std::move(metadata), dispatch_ordinal);
-    if (!prefill) RoutedTransformerProgramImplementation::add_dispatch(preamble, RoutedTransformerProgramImplementation::kernel("qwen3_moe_attention_rmsnorm_quantize_q8_1_x4",
-                                               -1, model->query_token_count), dispatch_ordinal);
-    schedule.invocations.push_back(std::move(preamble));
+    std::vector<OperationId> deferred_operations;
+    std::vector<uint32_t> deferred_components;
+    for (const FusionCandidate & selected : proof.search.selected) {
+        if (selected.logical_components.empty()) {
+            proof.errors.push_back("selected recipe " + selected.family + " has no logical component provenance");
+            return proof;
+        }
+        const RoutedTransformerBlock * block = nullptr;
+        const RoutedTransformerComponent * component = RoutedTransformerProgramImplementation::find_component(
+            *model, selected.logical_components.front(), &block);
+        if (component == nullptr) {
+            proof.errors.push_back("selected recipe " + selected.family + " references an unknown logical component");
+            return proof;
+        }
 
-    for (const RoutedTransformerBlock & block : model->blocks) {
         Invocation invocation;
-        invocation.stage = block.ordinal + 1 == model->blocks.size() ? "program.terminal_block" : "program.block";
-        invocation.layer = static_cast<int32_t>(block.ordinal);
-        invocation.kernel = RoutedTransformerProgramImplementation::kernel(prefill ? "owned_prefill_block" : "owned_decode_block",
-                                   invocation.layer, model->query_token_count);
-        invocation.covered_operations = block.operations;
+        invocation.recipe = selected.family;
+        invocation.logical_components = selected.logical_components;
+        invocation.covered_operations = selected.operations;
+        invocation.stage = RoutedTransformerModel::component_kind_name(component->kind);
+        invocation.layer = block == nullptr ? -1 : static_cast<int32_t>(block->ordinal);
+        invocation.kernel = RoutedTransformerProgramImplementation::kernel(selected.family, invocation.layer,
+            component->kind == RoutedTransformerComponentKind::ProgramEndpoint ? 1 : model->query_token_count);
+
+        if (component->kind == RoutedTransformerComponentKind::ProgramPreamble) {
+            KernelSpecialization embedding = RoutedTransformerProgramImplementation::kernel(
+                "qwen_token_embedding_q4k_bringup_workaround", -1, model->query_token_count);
+            embedding.integer_parameters["vocabulary_count"] =
+                graph.values[graph.operations[model->preamble_operations.front()].inputs[0]].access.shape[1];
+            embedding.integer_parameters["hidden_size"] = model->hidden_size;
+            RoutedTransformerProgramImplementation::add_dispatch(invocation, std::move(embedding), dispatch_ordinal);
+            KernelSpecialization metadata = RoutedTransformerProgramImplementation::kernel(
+                "qwen_attention_metadata_bringup_workaround", -1, model->query_token_count);
+            metadata.integer_parameters["context_capacity"] = model->key_value_token_count;
+            RoutedTransformerProgramImplementation::add_dispatch(invocation, std::move(metadata), dispatch_ordinal);
+            if (!prefill) RoutedTransformerProgramImplementation::add_dispatch(invocation,
+                RoutedTransformerProgramImplementation::kernel(
+                    "qwen3_moe_attention_rmsnorm_quantize_q8_1_x4", -1, model->query_token_count),
+                dispatch_ordinal);
+        } else if (component->kind == RoutedTransformerComponentKind::ProgramEndpoint) {
+            if (prefill) RoutedTransformerProgramImplementation::add_dispatch(invocation,
+                RoutedTransformerProgramImplementation::kernel(
+                    "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", -1, 1), dispatch_ordinal);
+            RoutedTransformerProgramImplementation::add_dispatch(invocation,
+                RoutedTransformerProgramImplementation::kernel("ggml_linear_q6k_q8_1_x4", -1, 1),
+                dispatch_ordinal);
+        } else if (component->kind == RoutedTransformerComponentKind::Atom) {
+            KernelSpecialization atom;
+            atom.family = "hrx_atom";
+            atom.variant = ggml_op_name(graph.operations[component->hero].op);
+            atom.kernel_id = kernel_catalog_id(atom.family.c_str(), atom.variant.c_str());
+            atom.execution_kind = KernelSpecialization::ExecutionKind::NativeEager;
+            invocation.kernel = atom;
+            RoutedTransformerProgramImplementation::add_dispatch(
+                invocation, std::move(atom), dispatch_ordinal);
+        } else if (block != nullptr && selected.correctness_baseline) {
+            if (prefill) RoutedTransformerProgramImplementation::emit_prefill_component(
+                graph, *model, *block, component->kind, invocation, dispatch_ordinal, proof.native_gaps);
+            else RoutedTransformerProgramImplementation::emit_decode_component(
+                graph, *model, *block, component->kind, invocation, dispatch_ordinal, proof.native_gaps);
+        } else {
+            proof.errors.push_back("selected recipe " + selected.family + " has no registered emitter");
+            return proof;
+        }
+
+        if (invocation.dispatches.empty()) {
+            deferred_operations.insert(deferred_operations.end(), invocation.covered_operations.begin(), invocation.covered_operations.end());
+            deferred_components.insert(deferred_components.end(), invocation.logical_components.begin(), invocation.logical_components.end());
+            continue;
+        }
+        invocation.covered_operations.insert(invocation.covered_operations.end(), deferred_operations.begin(), deferred_operations.end());
+        invocation.logical_components.insert(invocation.logical_components.end(), deferred_components.begin(), deferred_components.end());
+        deferred_operations.clear();
+        deferred_components.clear();
+        std::sort(invocation.covered_operations.begin(), invocation.covered_operations.end());
+        invocation.covered_operations.erase(
+            std::unique(invocation.covered_operations.begin(), invocation.covered_operations.end()),
+            invocation.covered_operations.end());
+        std::sort(invocation.logical_components.begin(), invocation.logical_components.end());
+        invocation.logical_components.erase(
+            std::unique(invocation.logical_components.begin(), invocation.logical_components.end()),
+            invocation.logical_components.end());
         RoutedTransformerProgramImplementation::calculate_boundaries(index, invocation);
-        if (prefill) RoutedTransformerProgramImplementation::append_prefill(graph, *model, block, invocation, dispatch_ordinal, proof.native_gaps);
-        else RoutedTransformerProgramImplementation::append_decode(graph, *model, block, invocation, dispatch_ordinal, proof.native_gaps);
         schedule.invocations.push_back(std::move(invocation));
     }
-
-    Invocation endpoint;
-    endpoint.stage = "program.endpoint";
-    endpoint.kernel = RoutedTransformerProgramImplementation::kernel("owned_program_endpoint", -1, 1);
-    endpoint.covered_operations = model->endpoint_operations;
-    RoutedTransformerProgramImplementation::calculate_boundaries(index, endpoint);
-    if (prefill) RoutedTransformerProgramImplementation::add_dispatch(endpoint, RoutedTransformerProgramImplementation::kernel("qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", -1, 1), dispatch_ordinal);
-    RoutedTransformerProgramImplementation::add_dispatch(endpoint, RoutedTransformerProgramImplementation::kernel("ggml_linear_q6k_q8_1_x4", -1, 1), dispatch_ordinal);
-    schedule.invocations.push_back(std::move(endpoint));
+    if (!deferred_operations.empty()) {
+        proof.errors.push_back("logical program ends in a component with no executable recipe");
+        return proof;
+    }
     // The count is a derived schedule contract, not a model identity. Recipe
     // additions are expected to change it while preserving full graph coverage.
-    schedule.expected_dispatch_count = Schedule::dispatch_count(schedule);
+    schedule.expected_dispatch_count = schedule_dispatch_count(schedule);
     return proof;
 }
 

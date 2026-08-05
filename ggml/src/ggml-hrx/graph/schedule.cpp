@@ -241,7 +241,7 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
     try {
         const nlohmann::json root = nlohmann::json::parse(text);
         const int version = root.at("version").get<int>();
-        if (version < 1 || version > 3) {
+        if (version < 1 || version > 4) {
             errors.emplace_back("unsupported schedule manifest version");
             return schedule;
         }
@@ -270,6 +270,10 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
             if (version >= 3) {
                 invocation.stage = item.value("stage", "");
                 invocation.layer = item.value("layer", -1);
+            }
+            if (version >= 4) {
+                invocation.recipe = item.value("recipe", "");
+                invocation.logical_components = item.value("logical_components", std::vector<uint32_t>());
             }
             auto read_bindings = [](const nlohmann::json & bindings) {
                 std::vector<TensorBinding> result;
@@ -313,7 +317,7 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
 
 std::string serialize_schedule_json(const Schedule & schedule) {
     std::ostringstream out;
-    out << "{\"version\":3,\"graph_fingerprint\":\"" << escape_json(schedule.graph_fingerprint)
+    out << "{\"version\":4,\"graph_fingerprint\":\"" << escape_json(schedule.graph_fingerprint)
         << "\",\"workload\":\"" << escape_json(schedule.workload) << "\",\"oracle_revision\":\""
         << escape_json(schedule.oracle_revision) << "\",\"expected_dispatch_count\":" << schedule.expected_dispatch_count
         << ",\"roots\":[";
@@ -328,7 +332,12 @@ std::string serialize_schedule_json(const Schedule & schedule) {
         const Invocation & invocation = schedule.invocations[i];
         if (i != 0) out << ',';
         out << "{\"stage\":\"" << escape_json(invocation.stage) << "\",\"layer\":" << invocation.layer
-            << ",\"kernel\":{\"execution\":\"" << execution_kind_name(invocation.kernel.execution_kind)
+            << ",\"recipe\":\"" << escape_json(invocation.recipe) << "\",\"logical_components\":[";
+        for (size_t j = 0; j < invocation.logical_components.size(); ++j) {
+            if (j != 0) out << ',';
+            out << invocation.logical_components[j];
+        }
+        out << "],\"kernel\":{\"execution\":\"" << execution_kind_name(invocation.kernel.execution_kind)
             << "\",\"family\":\"" << escape_json(invocation.kernel.family)
             << "\",\"variant\":\"" << escape_json(invocation.kernel.variant) << "\",\"id\":"
             << invocation.kernel.kernel_id << ",\"parameters\":{";

@@ -50,16 +50,6 @@ struct Scratch {
 class RoutedTransformerBindingImplementation {
 public:
 
-static OperationId operation(const SemanticBindings & bindings, const char * role) {
-    const auto position = bindings.operations.find(role);
-    return position == bindings.operations.end() ? kInvalidId : position->second;
-}
-
-static ValueId value(const SemanticBindings & bindings, const char * role) {
-    const auto position = bindings.values.find(role);
-    return position == bindings.values.end() ? kInvalidId : position->second;
-}
-
 static ValueId op_input(const Graph & graph, OperationId operation_id, size_t index) {
     return graph.operations.at(operation_id).inputs.at(index);
 }
@@ -134,14 +124,14 @@ static Facts recover_facts(const Graph & graph, const RoutedTransformerModel & m
     facts.key_value_size = model.key_value_size;
     facts.expert_count = model.expert_count;
     facts.route_count = model.route_count;
-    const OperationId embedding = operation(model.bindings, "program.embedding");
+    const OperationId embedding = model.operations_by_role.program_embedding;
     if (embedding == kInvalidId || graph.operations[embedding].inputs.empty()) {
         errors.push_back("routed-transformer binding facts have no embedding role");
         return facts;
     }
     facts.vocabulary_count = graph.values[op_input(graph, embedding, 0)].access.shape[1];
     const RoutedTransformerBlock & first = model.blocks.front();
-    const Operation & flash = graph.operations[operation(first.bindings, "attention.flash")];
+    const Operation & flash = graph.operations[first.operations_by_role.attention_flash];
     if (flash.inputs.size() < 3) {
         errors.push_back("routed-transformer binding facts have an invalid flash-attention role");
         return facts;
@@ -151,15 +141,15 @@ static Facts recover_facts(const Graph & graph, const RoutedTransformerModel & m
     facts.head_size = query.access.shape[0];
     facts.query_head_count = query.access.shape[2];
     facts.key_value_head_count = key.access.shape[2];
-    const Value & route_ids = graph.values[value(first.bindings, "router.route_ids")];
+    const Value & route_ids = graph.values[first.values_by_role.router_route_ids];
     const size_t route_type_size = ggml_type_size(route_ids.type);
     if (route_type_size == 0 || route_ids.access.strides[1] % route_type_size != 0) {
         errors.push_back("route ID stride is not an integral element stride");
         return facts;
     }
     facts.route_stride = route_ids.access.strides[1] / route_type_size;
-    facts.expert_intermediate_size = graph.values[value(first.bindings, "experts.activation")].access.shape[0];
-    const Operation & norm = graph.operations[operation(first.bindings, "attention.norm")];
+    facts.expert_intermediate_size = graph.values[first.values_by_role.experts_activation].access.shape[0];
+    const Operation & norm = graph.operations[first.operations_by_role.attention_norm];
     float epsilon = 0.0f;
     std::memcpy(&epsilon, norm.raw_params.data(), sizeof(epsilon));
     if (!std::isfinite(epsilon) || epsilon <= 0.0f) {
@@ -178,22 +168,22 @@ static Facts recover_facts(const Graph & graph, const RoutedTransformerModel & m
     require(facts.route_count != 0 && facts.route_stride >= facts.route_count, "route layout mismatch");
     for (const RoutedTransformerBlock & block : model.blocks) {
         const std::string prefix = "block " + std::to_string(block.ordinal) + ' ';
-        const OperationId query_projection = operation(block.bindings, "attention.query_projection");
-        const OperationId key_projection = operation(block.bindings, "attention.key_projection");
-        const OperationId value_projection = operation(block.bindings, "attention.value_projection");
+        const OperationId query_projection = block.operations_by_role.attention_query_projection;
+        const OperationId key_projection = block.operations_by_role.attention_key_projection;
+        const OperationId value_projection = block.operations_by_role.attention_value_projection;
         require(graph.values[op_output(graph, query_projection)].access.shape[0] == static_cast<int64_t>(facts.query_size),
                 prefix + "query projection mismatch");
         require(graph.values[op_output(graph, key_projection)].access.shape[0] == static_cast<int64_t>(facts.key_value_size) &&
                 graph.values[op_output(graph, value_projection)].access.shape[0] == static_cast<int64_t>(facts.key_value_size),
                 prefix + "key/value projection mismatch");
-        require(graph.values[value(block.bindings, "router.route_ids")].access.shape[0] == static_cast<int64_t>(facts.route_count),
+        require(graph.values[block.values_by_role.router_route_ids].access.shape[0] == static_cast<int64_t>(facts.route_count),
                 prefix + "route count mismatch");
-        const Value & block_route_ids = graph.values[value(block.bindings, "router.route_ids")];
+        const Value & block_route_ids = graph.values[block.values_by_role.router_route_ids];
         const size_t block_route_type_size = ggml_type_size(block_route_ids.type);
         require(block_route_type_size != 0 && block_route_ids.access.strides[1] % block_route_type_size == 0 &&
                     block_route_ids.access.strides[1] / block_route_type_size == facts.route_stride,
                 prefix + "route layout mismatch");
-        require(graph.values[value(block.bindings, "experts.activation")].access.shape[0] ==
+        require(graph.values[block.values_by_role.experts_activation].access.shape[0] ==
                     static_cast<int64_t>(facts.expert_intermediate_size), prefix + "expert width mismatch");
     }
     return facts;
@@ -231,13 +221,13 @@ static Scratch allocate_scratch(Graph & graph, const Facts & facts, bool decode)
 static void bind_preamble(const Graph & graph, const RoutedTransformerModel & model,
                           Invocation & invocation, const Scratch & scratch, const Facts & facts,
                           std::vector<std::string> & errors) {
-    const OperationId embedding = operation(model.bindings, "program.embedding");
+    const OperationId embedding = model.operations_by_role.program_embedding;
     const RoutedTransformerBlock & first = model.blocks.front();
-    const OperationId query_rope = operation(first.bindings, "attention.query_rope");
-    const OperationId key_writer = operation(first.bindings, "attention.key_cache_writer");
-    const OperationId value_writer = operation(first.bindings, "attention.value_cache_writer");
-    const OperationId flash = operation(first.bindings, "attention.flash");
-    const OperationId prepared = operation(first.bindings, "attention.prepared");
+    const OperationId query_rope = first.operations_by_role.attention_query_rope;
+    const OperationId key_writer = first.operations_by_role.attention_key_cache_writer;
+    const OperationId value_writer = first.operations_by_role.attention_value_cache_writer;
+    const OperationId flash = first.operations_by_role.attention_flash;
+    const OperationId prepared = first.operations_by_role.attention_prepared;
     for (Dispatch & dispatch : invocation.dispatches) {
         const std::string & variant = dispatch.kernel.variant;
         if (variant == "qwen_token_embedding_q4k_bringup_workaround") {
@@ -265,13 +255,13 @@ static void bind_preamble(const Graph & graph, const RoutedTransformerModel & mo
 
 static void bind_attention_common(const Graph & graph, const RoutedTransformerBlock & block,
                                   Dispatch & dispatch, const Scratch & scratch, const Facts & facts) {
-    const OperationId query_projection = operation(block.bindings, "attention.query_projection");
-    const OperationId key_projection = operation(block.bindings, "attention.key_projection");
-    const OperationId value_projection = operation(block.bindings, "attention.value_projection");
-    const OperationId query_rope = operation(block.bindings, "attention.query_rope");
-    const OperationId key_writer = operation(block.bindings, "attention.key_cache_writer");
-    const OperationId value_writer = operation(block.bindings, "attention.value_cache_writer");
-    const OperationId flash_id = operation(block.bindings, "attention.flash");
+    const OperationId query_projection = block.operations_by_role.attention_query_projection;
+    const OperationId key_projection = block.operations_by_role.attention_key_projection;
+    const OperationId value_projection = block.operations_by_role.attention_value_projection;
+    const OperationId query_rope = block.operations_by_role.attention_query_rope;
+    const OperationId key_writer = block.operations_by_role.attention_key_cache_writer;
+    const OperationId value_writer = block.operations_by_role.attention_value_cache_writer;
+    const OperationId flash_id = block.operations_by_role.attention_flash;
     const Operation & flash = graph.operations[flash_id];
     if (dispatch.kernel.variant == "qwen3_moe_attention_postprocess_f32_f16") {
         const OperationId query_scale = producer(graph, op_input(graph, query_rope, 0));
@@ -324,35 +314,29 @@ static void bind_prefill_block(const Graph & graph, const RoutedTransformerModel
     const bool terminal = block.ordinal + 1 == model.blocks.size();
     const size_t row_offset = terminal ? (facts.token_count - 1) * facts.hidden_size * sizeof(float) : 0;
     const size_t row_length = terminal ? facts.hidden_size * sizeof(float) : 0;
-    const OperationId prepared = operation(block.bindings, "attention.prepared");
-    const OperationId attention_result = operation(block.bindings, "attention.result_reshape");
-    const OperationId attention_output = operation(block.bindings, "attention.output_projection");
-    const OperationId ff_prepared = operation(block.bindings, "feed_forward.prepared");
-    const OperationId router = operation(block.bindings, "router.projection");
-    const OperationId route_ids = operation(block.bindings, "router.route_ids");
-    const OperationId route_weights = operation(block.bindings, "router.route_weights");
-    const OperationId gate = operation(block.bindings, "experts.gate_projection");
-    const OperationId up = operation(block.bindings, "experts.up_projection");
-    const OperationId swiglu = operation(block.bindings, "experts.gate_up");
-    const OperationId down = operation(block.bindings, "experts.routed_down");
+    const OperationId prepared = block.operations_by_role.attention_prepared;
+    const OperationId attention_result = block.operations_by_role.attention_result_reshape;
+    const OperationId attention_output = block.operations_by_role.attention_output_projection;
+    const OperationId ff_prepared = block.operations_by_role.feed_forward_prepared;
+    const OperationId router = block.operations_by_role.router_projection;
+    const OperationId route_ids = block.operations_by_role.router_route_ids;
+    const OperationId route_weights = block.operations_by_role.router_route_weights;
+    const OperationId gate = block.operations_by_role.experts_gate_projection;
+    const OperationId up = block.operations_by_role.experts_up_projection;
+    const OperationId swiglu = block.operations_by_role.experts_gate_up;
+    const OperationId down = block.operations_by_role.experts_routed_down;
     std::vector<OperationId> projections = {
-        operation(block.bindings, "attention.query_projection"),
-        operation(block.bindings, "attention.value_projection"),
-        operation(block.bindings, "attention.key_projection"),
+        block.operations_by_role.attention_query_projection,
+        block.operations_by_role.attention_value_projection,
+        block.operations_by_role.attention_key_projection,
     };
     size_t projection_index = 0;
-    size_t rms_index = 0;
     for (Dispatch & dispatch : invocation.dispatches) {
         const std::string & variant = dispatch.kernel.variant;
         if (variant == "qwen3_moe_rmsnorm_f32") {
-            const size_t occurrence = rms_index++;
-            if (block.ordinal == 0 && occurrence == 0) {
+            if (invocation.recipe == "attention.prepare") {
                 dispatch.bindings = { binding("input", hidden_state), binding("weight", op_input(graph, prepared, 1)),
                                       binding("output", op_output(graph, prepared)) };
-            } else if (!terminal && occurrence == (block.ordinal == 0 ? 2u : 1u)) {
-                const OperationId next_prepared = operation(model.blocks[block.ordinal + 1].bindings, "attention.prepared");
-                dispatch.bindings = { binding("input", hidden_state), binding("weight", op_input(graph, next_prepared, 1)),
-                                      binding("output", op_output(graph, next_prepared)) };
             } else {
                 dispatch.bindings = { binding("input", hidden_state, row_offset, row_length),
                                       binding("weight", op_input(graph, ff_prepared, 1)),
@@ -361,7 +345,7 @@ static void bind_prefill_block(const Graph & graph, const RoutedTransformerModel
             rmsnorm_config(dispatch, facts);
         } else if (variant == "qwen3_moe_dense_linear_q4k_f16_wmma" ||
                    variant == "qwen3_moe_dense_linear_q6k_f16_wmma") {
-            if (projection_index < projections.size()) {
+            if (invocation.recipe == "attention.qkv_publication") {
                 const OperationId projection = projections[projection_index++];
                 dispatch.bindings = { binding("input", op_input(graph, projection, 1)),
                                       binding("weight", op_input(graph, projection, 0)),
@@ -447,20 +431,19 @@ static void bind_decode_block(const Graph & graph, const RoutedTransformerModel 
                               const Scratch & scratch, const Facts & facts, ValueId hidden_state,
                               std::vector<std::string> & errors) {
     const bool terminal = block.ordinal + 1 == model.blocks.size();
-    const OperationId query = operation(block.bindings, "attention.query_projection");
-    const OperationId key = operation(block.bindings, "attention.key_projection");
-    const OperationId value_projection = operation(block.bindings, "attention.value_projection");
-    const OperationId attention_result = operation(block.bindings, "attention.result_reshape");
-    const OperationId attention_output = operation(block.bindings, "attention.output_projection");
-    const OperationId ff_prepared = operation(block.bindings, "feed_forward.prepared");
-    const OperationId router = operation(block.bindings, "router.projection");
-    const OperationId route_ids = operation(block.bindings, "router.route_ids");
-    const OperationId route_weights = operation(block.bindings, "router.route_weights");
-    const OperationId gate = operation(block.bindings, "experts.gate_projection");
-    const OperationId up = operation(block.bindings, "experts.up_projection");
-    const OperationId swiglu = operation(block.bindings, "experts.gate_up");
-    const OperationId down = operation(block.bindings, "experts.routed_down");
-    size_t dual_norm_index = 0;
+    const OperationId query = block.operations_by_role.attention_query_projection;
+    const OperationId key = block.operations_by_role.attention_key_projection;
+    const OperationId value_projection = block.operations_by_role.attention_value_projection;
+    const OperationId attention_result = block.operations_by_role.attention_result_reshape;
+    const OperationId attention_output = block.operations_by_role.attention_output_projection;
+    const OperationId ff_prepared = block.operations_by_role.feed_forward_prepared;
+    const OperationId router = block.operations_by_role.router_projection;
+    const OperationId route_ids = block.operations_by_role.router_route_ids;
+    const OperationId route_weights = block.operations_by_role.router_route_weights;
+    const OperationId gate = block.operations_by_role.experts_gate_projection;
+    const OperationId up = block.operations_by_role.experts_up_projection;
+    const OperationId swiglu = block.operations_by_role.experts_gate_up;
+    const OperationId down = block.operations_by_role.experts_routed_down;
     for (Dispatch & dispatch : invocation.dispatches) {
         const std::string & variant = dispatch.kernel.variant;
         if (variant == "qwen3_moe_attention_qkv_quantized") {
@@ -500,18 +483,14 @@ static void bind_decode_block(const Graph & graph, const RoutedTransformerModel 
             compile_config(dispatch, "qwen3_moe.dense_quantized.output_accumulation", "1");
             compile_config(dispatch, "qwen3_moe.dense_quantized.output_size", std::to_string(facts.hidden_size));
         } else if (variant == "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4") {
-            // The terminal decode block contains both the feed-forward norm and
-            // the endpoint norm. Their kernel specializations are identical;
-            // semantic occurrence within the block disambiguates the operands.
-            const OperationId selected = terminal && dual_norm_index++ == 1
-                ? operation(model.bindings, "endpoint.prepared")
-                : ff_prepared;
+            const OperationId selected = invocation.recipe == "experts.down_publication" && terminal
+                ? model.operations_by_role.endpoint_prepared : ff_prepared;
             dispatch.bindings = { binding("input", hidden_state), binding("weight", op_input(graph, selected, 1)),
                                   binding("normalized_output", op_output(graph, selected)),
                                   binding("q8_output", scratch.q8_hidden) };
             rmsnorm_config(dispatch, facts);
         } else if (variant == "qwen3_moe_attention_rmsnorm_quantize_q8_1_x4") {
-            const OperationId next = operation(model.blocks[block.ordinal + 1].bindings, "attention.prepared");
+            const OperationId next = model.blocks[block.ordinal + 1].operations_by_role.attention_prepared;
             dispatch.bindings = { binding("input", hidden_state), binding("weight", op_input(graph, next, 1)),
                                   binding("output", scratch.q8_hidden) };
             rmsnorm_config(dispatch, facts);
@@ -560,8 +539,8 @@ static void bind_decode_block(const Graph & graph, const RoutedTransformerModel 
 static void bind_endpoint(const Graph & graph, const RoutedTransformerModel & model,
                           Invocation & invocation, const Scratch & scratch, const Facts & facts,
                           ValueId hidden_state, std::vector<std::string> & errors) {
-    const OperationId prepared = operation(model.bindings, "endpoint.prepared");
-    const OperationId projection = operation(model.bindings, "endpoint.projection");
+    const OperationId prepared = model.operations_by_role.endpoint_prepared;
+    const OperationId projection = model.operations_by_role.endpoint_projection;
     for (Dispatch & dispatch : invocation.dispatches) {
         if (dispatch.kernel.variant == "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4") {
             const size_t offset = facts.token_count == 1 ? 0 : (facts.token_count - 1) * facts.hidden_size * sizeof(float);
@@ -588,16 +567,12 @@ static void bind_endpoint(const Graph & graph, const RoutedTransformerModel & mo
 
 } // namespace
 
-VerificationResult RoutedTransformerProgramProof::materialize_dispatch_bindings(Graph & graph, Schedule & schedule) {
+VerificationResult RoutedTransformerProgramProof::materialize_dispatch_bindings(
+        Graph & graph, Schedule & schedule, const RoutedTransformerModel & model) {
     VerificationResult result;
     const GraphIndex index(graph);
-    const RoutedTransformerModel model = RoutedTransformerModel::analyze(index);
     if (!model.valid()) {
         result.errors = model.errors;
-        return result;
-    }
-    if (schedule.invocations.size() != model.blocks.size() + 2) {
-        result.errors.push_back("routed-transformer schedule invocation count does not match structural blocks");
         return result;
     }
     const bool prefill = schedule.workload.rfind("prefill-", 0) == 0;
@@ -615,14 +590,32 @@ VerificationResult RoutedTransformerProgramProof::materialize_dispatch_bindings(
         return result;
     }
     const Scratch scratch = RoutedTransformerBindingImplementation::allocate_scratch(graph, facts, decode);
-    const ValueId hidden_state = RoutedTransformerBindingImplementation::value(model.bindings, "program.hidden_state");
-    RoutedTransformerBindingImplementation::bind_preamble(graph, model, schedule.invocations.front(), scratch, facts, result.errors);
-    for (const RoutedTransformerBlock & block : model.blocks) {
-        Invocation & invocation = schedule.invocations[block.ordinal + 1];
-        if (prefill) RoutedTransformerBindingImplementation::bind_prefill_block(graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
-        else RoutedTransformerBindingImplementation::bind_decode_block(graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
+    const ValueId hidden_state = model.values_by_role.program_hidden_state;
+    for (Invocation & invocation : schedule.invocations) {
+        if (invocation.recipe == "program.preamble") {
+            RoutedTransformerBindingImplementation::bind_preamble(
+                graph, model, invocation, scratch, facts, result.errors);
+        } else if (invocation.recipe == "program.endpoint") {
+            RoutedTransformerBindingImplementation::bind_endpoint(
+                graph, model, invocation, scratch, facts, hidden_state, result.errors);
+        } else if (invocation.recipe.rfind("atom.", 0) == 0) {
+            if (invocation.dispatches.size() != 1) {
+                result.errors.push_back("atom recipe " + invocation.recipe + " does not contain one dispatch");
+                continue;
+            }
+            Dispatch & dispatch = invocation.dispatches.front();
+            dispatch.bindings = invocation.inputs;
+            dispatch.bindings.insert(dispatch.bindings.end(), invocation.outputs.begin(), invocation.outputs.end());
+        } else if (invocation.layer < 0 || static_cast<size_t>(invocation.layer) >= model.blocks.size()) {
+            result.errors.push_back("routed-transformer recipe " + invocation.recipe + " has no owning block");
+        } else {
+            const RoutedTransformerBlock & block = model.blocks[invocation.layer];
+            if (prefill) RoutedTransformerBindingImplementation::bind_prefill_block(
+                graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
+            else RoutedTransformerBindingImplementation::bind_decode_block(
+                graph, model, block, invocation, scratch, facts, hidden_state, result.errors);
+        }
     }
-    RoutedTransformerBindingImplementation::bind_endpoint(graph, model, schedule.invocations.back(), scratch, facts, hidden_state, result.errors);
     return result;
 }
 

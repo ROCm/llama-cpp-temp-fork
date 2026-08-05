@@ -2,7 +2,6 @@
 #include "graph-ir.h"
 #include "kernel-corpus-json.h"
 #include "kernel-corpus.h"
-#include "qwen-program.h"
 #include "reactive-plan.h"
 #include "schedule.h"
 #include "tool-utils.h"
@@ -28,7 +27,7 @@ int main(int argc, char ** argv) {
 
         const std::string graph_text = ggml::hrx::tool::read_file(graph_path);
         if (graph_text.empty()) throw std::runtime_error("cannot read " + graph_path.string());
-        const ggml::hrx::Graph graph = ggml::hrx::deserialize_graph_json(graph_text);
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
         if (!graph.valid()) throw std::runtime_error(
             "invalid normalized graph: " + (graph.errors.empty() ? std::string("unknown error") : graph.errors.front()));
 
@@ -42,9 +41,7 @@ int main(int argc, char ** argv) {
             ggml::hrx::verify_command_program(plan, corpus, commands);
 
         std::filesystem::create_directories(output_directory);
-        const ggml::hrx::QwenProgramProof proof = ggml::hrx::recover_owned_qwen3_moe_program(graph);
-        const std::string readable_program = proof.recognized()
-            ? ggml::hrx::qwen_program_signature(proof) : plan.semantic_witness;
+        const std::string & readable_program = plan.semantic_witness;
         write_file(output_directory / "program.txt", readable_program);
         write_file(output_directory / "program-summary.txt", readable_program);
         write_file(output_directory / "semantic-witness.txt", plan.semantic_witness);
@@ -53,6 +50,11 @@ int main(int argc, char ** argv) {
             write_file(output_directory / "fusion-search.txt", plan.fusion_search_text);
             write_file(output_directory / "fusion-search.json", plan.fusion_search_json);
             write_file(output_directory / "fusion-regions.dot", plan.fusion_regions_dot);
+        }
+        if (!plan.logical_program_text.empty()) {
+            write_file(output_directory / "logical-program.txt", plan.logical_program_text);
+            write_file(output_directory / "logical-program.json", plan.logical_program_json);
+            write_file(output_directory / "logical-program.dot", plan.logical_program_dot);
         }
         write_file(output_directory / "resources.txt", ggml::hrx::format_resource_program(plan.resources));
         write_file(output_directory / "kernels.txt", ggml::hrx::format_kernel_corpus(corpus));
@@ -67,12 +69,13 @@ int main(int argc, char ** argv) {
                << "target=" << target << '\n'
                << "graph=" << graph.fingerprint << '\n'
                << "planner=" << plan.planner_identity << '\n'
-               << "legacy_oracle_equivalent=" << (plan.legacy_oracle_equivalent ? "true" : "false") << '\n'
+               << "atom_fallbacks=" << plan.atom_fallback_count << '\n'
                << "operations=" << graph.operations.size() << '\n'
                << "dispatches=" << ggml::hrx::schedule_dispatch_count(plan.schedule) << '\n'
                << "commands=" << commands.commands.size() << '\n'
                << "valid=" << (verification.valid() ? "true" : "false") << '\n'
                << ggml::hrx::format_verification_summary(verification.errors);
+        for (const std::string & warning : plan.warnings) status << "warning=" << warning << '\n';
         write_file(output_directory / "status.txt", status.str());
         write_file(output_directory / "verification-errors.txt", ggml::hrx::format_verification_errors(verification.errors));
 

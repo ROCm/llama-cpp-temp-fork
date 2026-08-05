@@ -1,9 +1,8 @@
 #include "fusion-search.h"
+#include "reactive-plan.h"
 #include "routed-transformer.h"
 #include "routed-transformer-bindings.h"
 #include "routed-transformer-program.h"
-#include "qwen-bindings.h"
-#include "qwen-program.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -11,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -231,6 +231,18 @@ int main(int argc, char ** argv) {
         const ggml::hrx::RoutedTransformerModel model = ggml::hrx::RoutedTransformerModel::analyze(index);
         for (const std::string & error : model.errors) std::fprintf(stderr, "analysis: %s\n", error.c_str());
         REQUIRE(model.valid());
+        REQUIRE(ggml::hrx::RoutedTransformerModel::verify(index, model).valid());
+        REQUIRE(ggml::hrx::RoutedTransformerModel::format(model).find("schema=ggml-hrx-logical-routed-transformer-v1") == 0);
+        REQUIRE(ggml::hrx::RoutedTransformerModel::serialize_json(model).find("\"components\":[") != std::string::npos);
+        REQUIRE(ggml::hrx::RoutedTransformerModel::dot(model).find("digraph logical_program") != std::string::npos);
+        REQUIRE(model.unraised_operations.empty());
+        for (size_t block = 0; block < model.blocks.size(); ++block) {
+            REQUIRE(model.blocks[block].components.size() == 7);
+            for (size_t component = 0; component < model.blocks[block].components.size(); ++component) {
+                const auto expected = static_cast<ggml::hrx::LogicalComponentId>(1 + block * 7 + component);
+                REQUIRE(model.blocks[block].components[component].id == expected);
+            }
+        }
         REQUIRE(model.preamble_operations.size() + model.endpoint_operations.size() +
             [&] { size_t count = 0; for (const auto & block : model.blocks) count += block.operations.size(); return count; }() ==
             graph.operations.size());
@@ -269,11 +281,9 @@ int main(int argc, char ** argv) {
             ? model.blocks.size() * 5
             : (model.blocks.size() - 1) * 2;
         REQUIRE(current_dispatches == future_dispatches + expected_reduction);
-        const ggml::hrx::QwenProgramProof legacy = ggml::hrx::QwenProgramProof::recover(graph);
         ggml::hrx::RoutedTransformerProgramProof structural =
             ggml::hrx::RoutedTransformerProgramProof::recover(graph);
         if (model.output_token_count != 1) {
-            REQUIRE(!legacy.recognized());
             REQUIRE(!structural.valid());
             REQUIRE(std::any_of(structural.errors.begin(), structural.errors.end(), [](const std::string & error) {
                 return error.find("demanded output token") != std::string::npos;
@@ -285,55 +295,65 @@ int main(int argc, char ** argv) {
                         static_cast<long long>(model.key_value_token_count));
             return 0;
         }
-        REQUIRE(legacy.recognized());
         for (const std::string & error : structural.errors) std::fprintf(stderr, "program: %s\n", error.c_str());
         REQUIRE(structural.valid());
-        REQUIRE(structural.schedule.workload == legacy.schedule.workload);
-        REQUIRE(ggml::hrx::Schedule::dispatch_count(structural.schedule) ==
-                ggml::hrx::Schedule::dispatch_count(legacy.schedule));
-        auto flatten = [](const ggml::hrx::Schedule & schedule) {
-            std::vector<const ggml::hrx::Dispatch *> dispatches;
-            for (const auto & invocation : schedule.invocations) {
-                for (const auto & dispatch : invocation.dispatches) dispatches.push_back(&dispatch);
-            }
-            return dispatches;
-        };
-        const auto legacy_dispatches = flatten(legacy.schedule);
-        const auto structural_dispatches = flatten(structural.schedule);
-        REQUIRE(legacy_dispatches.size() == structural_dispatches.size());
-        for (size_t i = 0; i < legacy_dispatches.size(); ++i) {
-            REQUIRE(legacy_dispatches[i]->kernel.family == structural_dispatches[i]->kernel.family);
-            REQUIRE(legacy_dispatches[i]->kernel.variant == structural_dispatches[i]->kernel.variant);
-            REQUIRE(legacy_dispatches[i]->kernel.integer_parameters == structural_dispatches[i]->kernel.integer_parameters);
-            REQUIRE(legacy_dispatches[i]->dependencies == structural_dispatches[i]->dependencies);
-        }
-        ggml::hrx::Graph legacy_bound_graph = graph;
-        ggml::hrx::Schedule legacy_bound_schedule = legacy.schedule;
-        REQUIRE(ggml::hrx::QwenProgramProof::materialize_dispatch_bindings(
-            legacy_bound_graph, legacy_bound_schedule).valid());
         ggml::hrx::Graph structural_bound_graph = graph;
         REQUIRE(ggml::hrx::RoutedTransformerProgramProof::materialize_dispatch_bindings(
-            structural_bound_graph, structural.schedule).valid());
-        REQUIRE(legacy_bound_graph.values.size() == structural_bound_graph.values.size());
-        REQUIRE(legacy_bound_graph.storages.size() == structural_bound_graph.storages.size());
-        const auto legacy_bound_dispatches = flatten(legacy_bound_schedule);
-        const auto structural_bound_dispatches = flatten(structural.schedule);
-        REQUIRE(legacy_bound_dispatches.size() == structural_bound_dispatches.size());
-        for (size_t i = 0; i < legacy_bound_dispatches.size(); ++i) {
-            const auto & expected = *legacy_bound_dispatches[i];
-            const auto & actual = *structural_bound_dispatches[i];
-            REQUIRE(expected.kernel.family == actual.kernel.family);
-            REQUIRE(expected.kernel.variant == actual.kernel.variant);
-            REQUIRE(expected.kernel.integer_parameters == actual.kernel.integer_parameters);
-            REQUIRE(expected.kernel.compile_parameters == actual.kernel.compile_parameters);
-            REQUIRE(expected.kernel.execution_kind == actual.kernel.execution_kind);
-            REQUIRE(expected.bindings == actual.bindings);
-            REQUIRE(expected.dependencies == actual.dependencies);
+            structural_bound_graph, structural.schedule, *structural.logical_program).valid());
+        std::set<ggml::hrx::LogicalComponentId> selected_components;
+        for (const auto & selected : structural.search.selected) {
+            REQUIRE(!selected.logical_components.empty());
+            selected_components.insert(selected.logical_components.begin(), selected.logical_components.end());
         }
+        std::set<ggml::hrx::LogicalComponentId> emitted_components;
+        for (const auto & invocation : structural.schedule.invocations) {
+            REQUIRE(!invocation.recipe.empty());
+            REQUIRE(!invocation.logical_components.empty());
+            emitted_components.insert(invocation.logical_components.begin(), invocation.logical_components.end());
+        }
+        REQUIRE(emitted_components == selected_components);
         const ggml::hrx::VerificationResult verification =
-            ggml::hrx::Schedule::verify(structural_bound_graph, structural.schedule);
+            ggml::hrx::verify_schedule(structural_bound_graph, structural.schedule);
         for (const std::string & error : verification.errors) std::fprintf(stderr, "verification: %s\n", error.c_str());
         REQUIRE(verification.valid());
+
+        // An unfamiliar tail is represented explicitly in the logical IR and
+        // lowered through the atom emitter. Existing component recipes remain
+        // intact; partial workload knowledge does not silently drop the op or
+        // force a second whole-model matcher.
+        ggml::hrx::Graph extended = graph;
+        const ggml::hrx::ValueId tail_input = extended.roots.front();
+        ggml::hrx::Value atom_output = extended.values[tail_input];
+        atom_output.id = static_cast<ggml::hrx::ValueId>(extended.values.size());
+        atom_output.name = "test.unfamiliar_tail";
+        atom_output.op = GGML_OP_CLAMP;
+        atom_output.producer = static_cast<ggml::hrx::OperationId>(extended.operations.size());
+        atom_output.boundary = ggml::hrx::BoundaryKind::Internal;
+        atom_output.access.storage = static_cast<ggml::hrx::StorageId>(extended.storages.size());
+        extended.storages.push_back({ atom_output.access.storage, atom_output.id,
+                                      extended.storages[extended.values[tail_input].access.storage].size,
+                                      false, false, false, 0 });
+        extended.values.push_back(atom_output);
+        ggml::hrx::Operation atom;
+        atom.id = static_cast<ggml::hrx::OperationId>(extended.operations.size());
+        atom.original_ordinal = atom.id;
+        atom.op = GGML_OP_CLAMP;
+        atom.inputs = { tail_input };
+        atom.output = atom_output.id;
+        extended.operations.push_back(std::move(atom));
+        const ggml::hrx::RoutedTransformerProgramProof extended_program =
+            ggml::hrx::RoutedTransformerProgramProof::recover(extended);
+        REQUIRE(extended_program.valid());
+        REQUIRE(extended_program.logical_program->fallback_components.size() == 1);
+        REQUIRE(std::count_if(extended_program.schedule.invocations.begin(), extended_program.schedule.invocations.end(),
+            [](const ggml::hrx::Invocation & invocation) {
+                return invocation.recipe == "atom.CLAMP" &&
+                       invocation.kernel.execution_kind == ggml::hrx::KernelSpecialization::ExecutionKind::NativeEager;
+            }) == 1);
+        const ggml::hrx::ProgramPlan extended_plan = ggml::hrx::build_reactive_plan(extended, "fixture-target");
+        REQUIRE(extended_plan.valid());
+        REQUIRE(extended_plan.atom_fallback_count == 1);
+        REQUIRE(extended_plan.warnings.size() == 1);
         std::printf("routed-transformer blocks=%zu components=%zu Tq=%lld Tout=%lld Tkv=%lld\n",
                     model.blocks.size(), result.selected.size(),
                     static_cast<long long>(model.query_token_count),

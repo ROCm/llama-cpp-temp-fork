@@ -102,16 +102,6 @@ add_library(ggml-hrx-graph STATIC
     graph/command-program.h
     graph/graph-ir.cpp
     graph/graph-ir.h
-    graph/matcher.cpp
-    graph/matcher.h
-    graph/optimizer.cpp
-    graph/optimizer.h
-    graph/qwen-rules.cpp
-    graph/qwen-rules.h
-    graph/qwen-program.cpp
-    graph/qwen-program.h
-    graph/qwen-bindings.cpp
-    graph/qwen-bindings.h
     graph/reactive-plan.cpp
     graph/reactive-plan.h
     graph/resource-access.h

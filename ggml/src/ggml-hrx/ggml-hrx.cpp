@@ -2,7 +2,6 @@
 
 #include "graph/command-program.h"
 #include "graph/graph-ir.h"
-#include "graph/qwen-program.h"
 #include "graph/reactive-plan.h"
 #include "executable-program.h"
 #include "kernel-corpus.h"
@@ -367,7 +366,7 @@ static void dump_graph(const ggml_backend_hrx_context::DiagnosticOptions & optio
     static std::mutex mutex;
     const uint64_t id = sequence.fetch_add(1);
     try {
-        const ggml::hrx::Graph normalized = ggml::hrx::import_graph_with_bindings(graph).graph;
+        const ggml::hrx::Graph normalized = ggml::hrx::ImportedGraph::import(graph).graph;
         const std::filesystem::path & directory = options.directory;
         std::filesystem::create_directories(directory);
         const std::string stem = std::to_string(id) + "-uid-" + std::to_string(graph->uid) + "-" + mode + "-" + stage;
@@ -380,7 +379,7 @@ static void dump_graph(const ggml_backend_hrx_context::DiagnosticOptions & optio
         if (!std::filesystem::exists(json_path)) {
             const std::filesystem::path temporary_path = json_path.string() + ".tmp";
             std::ofstream output(temporary_path, std::ios::binary | std::ios::trunc);
-            output << ggml::hrx::serialize_graph_json(normalized) << '\n';
+            output << ggml::hrx::Graph::serialize_json(normalized) << '\n';
             output.close();
             std::filesystem::rename(temporary_path, json_path);
         }
@@ -423,15 +422,18 @@ static void dump_plan(const ggml_backend_hrx_context::DiagnosticOptions & option
         const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(plan, corpus);
         const ggml::hrx::VerificationResult command_verification =
             ggml::hrx::verify_command_program(plan, corpus, commands);
-        const ggml::hrx::QwenProgramProof proof = ggml::hrx::recover_owned_qwen3_moe_program(plan.graph);
-        write_atomic(directory / "program.txt", proof.recognized()
-            ? ggml::hrx::qwen_program_signature(proof) : plan.semantic_witness);
+        write_atomic(directory / "program.txt", plan.semantic_witness);
         write_atomic(directory / "semantic-witness.txt", plan.semantic_witness);
         write_atomic(directory / "program.json", ggml::hrx::serialize_schedule_json(plan.schedule));
         if (!plan.fusion_search_text.empty()) {
             write_atomic(directory / "fusion-search.txt", plan.fusion_search_text);
             write_atomic(directory / "fusion-search.json", plan.fusion_search_json);
             write_atomic(directory / "fusion-regions.dot", plan.fusion_regions_dot);
+        }
+        if (!plan.logical_program_text.empty()) {
+            write_atomic(directory / "logical-program.txt", plan.logical_program_text);
+            write_atomic(directory / "logical-program.json", plan.logical_program_json);
+            write_atomic(directory / "logical-program.dot", plan.logical_program_dot);
         }
         write_atomic(directory / "resources.txt", ggml::hrx::format_resource_program(plan.resources));
         write_atomic(directory / "kernels.txt", ggml::hrx::format_kernel_corpus(corpus));
@@ -443,8 +445,9 @@ static void dump_plan(const ggml_backend_hrx_context::DiagnosticOptions & option
         status << "schema=ggml-hrx-plan-diagnostics-v1\nlevel=" << options.level << "\nvalid="
                << (command_verification.valid() ? "true" : "false") << '\n';
         status << "planner=" << plan.planner_identity << '\n'
-               << "legacy_oracle_equivalent=" << (plan.legacy_oracle_equivalent ? "true" : "false") << '\n'
-               << ggml::hrx::format_verification_summary(command_verification.errors);
+               << "atom_fallbacks=" << plan.atom_fallback_count << '\n';
+        for (const std::string & warning : plan.warnings) status << "warning=" << warning << '\n';
+        status << ggml::hrx::format_verification_summary(command_verification.errors);
         write_atomic(directory / "status.txt", status.str());
         write_atomic(directory / "verification-errors.txt", ggml::hrx::format_verification_errors(command_verification.errors));
     } catch (const std::exception & error) {
@@ -503,7 +506,7 @@ static enum ggml_backend_graph_claim_result graph_claim(ggml_backend_t backend, 
         // The raw pre-placement graph carries an additional, unused leaf list;
         // importing that list perturbs ValueIds and therefore the otherwise
         // identical ABI ordering of invocation boundary bindings.
-        const ggml::hrx::Graph normalized = ggml::hrx::import_graph_with_bindings(graph).graph;
+        const ggml::hrx::Graph normalized = ggml::hrx::ImportedGraph::import(graph).graph;
         const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(normalized, context->device->architecture);
         if (!plan.valid()) {
             GGML_LOG_WARN("%s: diagnostic oracle could not build a plan: %s\n", __func__, plan.errors.front().c_str());

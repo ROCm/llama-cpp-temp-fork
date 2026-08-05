@@ -35,7 +35,7 @@ int main(int argc, char ** argv) {
         const std::filesystem::path output_directory = argv[3];
         const std::string graph_text = ggml::hrx::tool::read_file(graph_path);
         if (graph_text.empty()) throw std::runtime_error("cannot read " + graph_path.string());
-        const ggml::hrx::Graph graph = ggml::hrx::deserialize_graph_json(graph_text);
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
         if (!graph.valid()) throw std::runtime_error("normalized graph is invalid");
         const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(graph, target);
         if (!plan.valid()) throw std::runtime_error("reactive plan is invalid");

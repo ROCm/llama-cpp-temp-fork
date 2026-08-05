@@ -8,26 +8,85 @@
 
 namespace ggml::hrx {
 
+struct VerificationResult;
+
+using LogicalComponentId = uint32_t;
+
+enum class RoutedTransformerComponentKind : uint8_t {
+    ProgramPreamble,
+    AttentionPrepare,
+    AttentionQkvPublication,
+    Attention,
+    AttentionOutputPrepare,
+    RouterSelection,
+    ExpertGateUp,
+    ExpertDownPublication,
+    ProgramEndpoint,
+    Atom,
+};
+
+struct RoutedTransformerOperations {
+    OperationId program_embedding = kInvalidId;
+    OperationId endpoint_norm = kInvalidId;
+    OperationId endpoint_prepared = kInvalidId;
+    OperationId endpoint_projection = kInvalidId;
+
+    OperationId attention_norm = kInvalidId;
+    OperationId attention_prepared = kInvalidId;
+    OperationId attention_query_projection = kInvalidId;
+    OperationId attention_key_projection = kInvalidId;
+    OperationId attention_value_projection = kInvalidId;
+    OperationId attention_query_rope = kInvalidId;
+    OperationId attention_key_cache_writer = kInvalidId;
+    OperationId attention_value_cache_writer = kInvalidId;
+    OperationId attention_flash = kInvalidId;
+    OperationId attention_result_reshape = kInvalidId;
+    OperationId attention_output_projection = kInvalidId;
+    OperationId feed_forward_prepared = kInvalidId;
+    OperationId router_projection = kInvalidId;
+    OperationId router_route_ids = kInvalidId;
+    OperationId router_route_weights = kInvalidId;
+    OperationId experts_gate_projection = kInvalidId;
+    OperationId experts_up_projection = kInvalidId;
+    OperationId experts_gate_up = kInvalidId;
+    OperationId experts_routed_down = kInvalidId;
+    OperationId hidden_output = kInvalidId;
+};
+
+struct RoutedTransformerValues {
+    ValueId program_hidden_state = kInvalidId;
+    ValueId attention_prepared = kInvalidId;
+    ValueId router_route_ids = kInvalidId;
+    ValueId experts_activation = kInvalidId;
+};
+
 struct RoutedTransformerComponent {
-    std::string role;
+    LogicalComponentId id = kInvalidId;
+    RoutedTransformerComponentKind kind = RoutedTransformerComponentKind::Atom;
     OperationId hero = kInvalidId;
     std::vector<OperationId> operations;
-    SemanticBindings bindings;
+    RegionBoundary boundary;
 };
 
 struct RoutedTransformerBlock {
     size_t ordinal = 0;
-    SemanticBindings bindings;
+    RoutedTransformerOperations operations_by_role;
+    RoutedTransformerValues values_by_role;
     std::vector<OperationId> operations;
     std::vector<RoutedTransformerComponent> components;
 };
 
 struct RoutedTransformerModel {
     std::string graph_fingerprint;
-    SemanticBindings bindings;
+    RoutedTransformerOperations operations_by_role;
+    RoutedTransformerValues values_by_role;
+    RoutedTransformerComponent preamble;
     std::vector<OperationId> preamble_operations;
     std::vector<RoutedTransformerBlock> blocks;
+    RoutedTransformerComponent endpoint;
     std::vector<OperationId> endpoint_operations;
+    std::vector<RoutedTransformerComponent> fallback_components;
+    std::vector<OperationId> unraised_operations;
     int64_t query_token_count = 0;
     int64_t output_token_count = 0;
     int64_t key_value_token_count = 0;
@@ -40,6 +99,11 @@ struct RoutedTransformerModel {
 
     bool valid() const { return errors.empty() && !blocks.empty(); }
     static RoutedTransformerModel analyze(const GraphIndex & index);
+    static VerificationResult verify(const GraphIndex & index, const RoutedTransformerModel & model);
+    static const char * component_kind_name(RoutedTransformerComponentKind kind);
+    static std::string format(const RoutedTransformerModel & model);
+    static std::string serialize_json(const RoutedTransformerModel & model);
+    static std::string dot(const RoutedTransformerModel & model);
 };
 
 // A schedule family is offered to the search only when its physical recipe is

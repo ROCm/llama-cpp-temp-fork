@@ -1,20 +1,18 @@
 #include "command-program.h"
+#include "graph-index.h"
 #include "graph-ir.h"
 #include "kernel-corpus.h"
-#include "matcher.h"
-#include "optimizer.h"
-#include "qwen-rules.h"
-#include "qwen-program.h"
 #include "reactive-plan.h"
+#include "routed-transformer.h"
 #include "schedule.h"
 
 #include "ggml.h"
+#include "ggml-impl.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -60,7 +58,7 @@ static ggml::hrx::Graph make_arithmetic_graph(const char * prefix) {
     ggml_set_name(mul, (std::string(prefix) + "-mul").c_str());
     ggml_set_output(mul);
     ggml_build_forward_expand(fixture.graph, mul);
-    return ggml::hrx::import_graph(fixture.graph);
+    return ggml::hrx::Graph::import(fixture.graph);
 }
 
 static ggml_tensor * build_arithmetic_graph(Fixture & fixture, const char * prefix) {
@@ -80,78 +78,19 @@ static ggml_tensor * build_arithmetic_graph(Fixture & fixture, const char * pref
     return mul;
 }
 
-static void test_deterministic_import_and_matcher() {
+static void test_deterministic_import_and_schedule() {
     const ggml::hrx::Graph first = make_arithmetic_graph("first");
     const ggml::hrx::Graph second = make_arithmetic_graph("second");
     REQUIRE(first.valid());
     REQUIRE(first.operations.size() == 2);
     REQUIRE(first.fingerprint == second.fingerprint);
-    const std::string graph_json = ggml::hrx::serialize_graph_json(first);
-    REQUIRE(graph_json == ggml::hrx::serialize_graph_json(first));
+    const std::string graph_json = ggml::hrx::Graph::serialize_json(first);
+    REQUIRE(graph_json == ggml::hrx::Graph::serialize_json(first));
     REQUIRE(graph_json.find("\"params\":") != std::string::npos);
     REQUIRE(graph_json.find("\"roots\":[") != std::string::npos);
-    const ggml::hrx::Graph round_trip_graph = ggml::hrx::deserialize_graph_json(graph_json);
+    const ggml::hrx::Graph round_trip_graph = ggml::hrx::Graph::deserialize_json(graph_json);
     REQUIRE(round_trip_graph.valid());
-    REQUIRE(ggml::hrx::serialize_graph_json(round_trip_graph) == graph_json);
-
-    ggml::hrx::MatchAutomaton automaton;
-    automaton.name = "add-mul";
-    automaton.root_state = 0;
-    automaton.states = {
-        { "mul", { { GGML_OP_MUL }, GGML_TYPE_F32, 2 }, { { ggml::hrx::Transition::Kind::InputProducer, 0, 1 } } },
-        { "add", { { GGML_OP_ADD }, GGML_TYPE_F32, 2 }, {} },
-    };
-    const ggml::hrx::Match match = ggml::hrx::match_automaton(first, automaton, 1);
-    REQUIRE(match.found());
-    REQUIRE(match.state_operations[0] == 1);
-    REQUIRE(match.state_operations[1] == 0);
-    automaton.states[1].constraint.alternatives = { GGML_OP_SUB };
-    REQUIRE(!ggml::hrx::match_automaton(first, automaton, 1).found());
-
-    automaton.states[1].constraint.alternatives = { GGML_OP_ADD };
-    ggml::hrx::MatchAutomaton add_only;
-    add_only.name = "add";
-    add_only.states = { { "add", { { GGML_OP_ADD }, GGML_TYPE_F32, 2 }, {} } };
-    ggml::hrx::MatchAutomaton mul_only;
-    mul_only.name = "mul";
-    mul_only.states = { { "mul", { { GGML_OP_MUL }, GGML_TYPE_F32, 2 }, {} } };
-    const std::vector<ggml::hrx::FusionRule> rules = {
-        { automaton, { "test", "fused_add_mul", {},
-            ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} }, 100 },
-        { add_only, { "test", "add", {},
-            ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} }, 1 },
-        { mul_only, { "test", "mul", {},
-            ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} }, 1 },
-    };
-    const ggml::hrx::Selection selection = ggml::hrx::select_regions(first, rules);
-    REQUIRE(selection.regions.size() == 1);
-    REQUIRE(selection.regions[0].operations.size() == 2);
-    REQUIRE(selection.uncovered_operations.empty());
-    REQUIRE(ggml::hrx::verify_schedule(first, ggml::hrx::materialize_schedule(first, rules, selection)).valid());
-    const ggml::hrx::Schedule materialized = ggml::hrx::materialize_schedule(first, rules, selection);
-    const std::string schedule_json = ggml::hrx::serialize_schedule_json(materialized);
-    REQUIRE(schedule_json.find("fused_add_mul") != std::string::npos);
-    std::vector<std::string> schedule_errors;
-    const ggml::hrx::Schedule round_trip_schedule = ggml::hrx::deserialize_schedule_json(schedule_json, schedule_errors);
-    REQUIRE(schedule_errors.empty());
-    REQUIRE(ggml::hrx::verify_schedule(first, round_trip_schedule).valid());
-    REQUIRE(ggml::hrx::serialize_schedule_json(round_trip_schedule) == schedule_json);
-    ggml::hrx::Schedule wrong_dispatch_oracle = round_trip_schedule;
-    wrong_dispatch_oracle.expected_dispatch_count = ggml::hrx::schedule_dispatch_count(wrong_dispatch_oracle) + 1;
-    REQUIRE(!ggml::hrx::verify_schedule(first, wrong_dispatch_oracle).valid());
-
-    ggml::hrx::MatchAutomaton consumer_pattern;
-    consumer_pattern.name = "consumer-edge";
-    consumer_pattern.require_internal_single_use = false;
-    consumer_pattern.states = {
-        { "producer_context", { { GGML_OP_ADD }, GGML_TYPE_F32, 2 }, {
-            { ggml::hrx::Transition::Kind::OutputConsumer, 0, 1 },
-        }, false },
-        { "consumer", { { GGML_OP_MUL }, GGML_TYPE_F32, 2 }, {} },
-    };
-    const ggml::hrx::Match consumer_match = ggml::hrx::match_automaton(first, consumer_pattern, 0);
-    REQUIRE(consumer_match.found());
-    REQUIRE(consumer_match.covered_operations == std::vector<ggml::hrx::OperationId> { 1 });
+    REQUIRE(ggml::hrx::Graph::serialize_json(round_trip_graph) == graph_json);
 
     ggml::hrx::Schedule schedule;
     schedule.graph_fingerprint = first.fingerprint;
@@ -170,6 +109,15 @@ static void test_deterministic_import_and_matcher() {
     }, {} });
     schedule.invocations.push_back(invocation);
     REQUIRE(ggml::hrx::verify_schedule(first, schedule).valid());
+    const std::string schedule_json = ggml::hrx::serialize_schedule_json(schedule);
+    std::vector<std::string> schedule_errors;
+    const ggml::hrx::Schedule round_trip_schedule = ggml::hrx::deserialize_schedule_json(schedule_json, schedule_errors);
+    REQUIRE(schedule_errors.empty());
+    REQUIRE(ggml::hrx::verify_schedule(first, round_trip_schedule).valid());
+    REQUIRE(ggml::hrx::serialize_schedule_json(round_trip_schedule) == schedule_json);
+    ggml::hrx::Schedule wrong_dispatch_oracle = round_trip_schedule;
+    wrong_dispatch_oracle.expected_dispatch_count = ggml::hrx::schedule_dispatch_count(wrong_dispatch_oracle) + 1;
+    REQUIRE(!ggml::hrx::verify_schedule(first, wrong_dispatch_oracle).valid());
     schedule.invocations[0].covered_operations.pop_back();
     REQUIRE(!ggml::hrx::verify_schedule(first, schedule).valid());
 }
@@ -186,7 +134,7 @@ static void test_set_rows_effects_and_views() {
     ggml_set_output(result);
     ggml_build_forward_expand(fixture.graph, result);
 
-    const ggml::hrx::Graph graph = ggml::hrx::import_graph(fixture.graph);
+    const ggml::hrx::Graph graph = ggml::hrx::Graph::import(fixture.graph);
     REQUIRE(graph.valid());
     REQUIRE(graph.operations.size() == 1);
     const ggml::hrx::Operation & operation = graph.operations[0];
@@ -230,121 +178,87 @@ static void test_set_rows_effects_and_views() {
     ggml_tensor * read_after_write = ggml_add(fixture.context, read_view, increment);
     ggml_set_output(read_after_write);
     ggml_build_forward_expand(fixture.graph, read_after_write);
-    const ggml::hrx::Graph effect_graph = ggml::hrx::import_graph(fixture.graph);
+    const ggml::hrx::Graph effect_graph = ggml::hrx::Graph::import(fixture.graph);
     REQUIRE(effect_graph.valid());
 
-    ggml::hrx::MatchAutomaton effect_automaton;
-    effect_automaton.name = "read-after-set-rows";
-    effect_automaton.require_internal_single_use = false;
-    effect_automaton.states = {
-        { "consumer", { { GGML_OP_ADD }, GGML_TYPE_F32, 2 }, {
-            { ggml::hrx::Transition::Kind::StorageWriter, 0, 1 },
-        } },
-        { "writer", { { GGML_OP_SET_ROWS }, GGML_TYPE_F32, 2 }, {} },
-    };
-    const ggml::hrx::Match effect_match = ggml::hrx::match_automaton(
-        effect_graph, effect_automaton, static_cast<ggml::hrx::OperationId>(effect_graph.operations.size() - 1));
-    REQUIRE(effect_match.found());
-    REQUIRE(effect_graph.operations[effect_match.state_operations[1]].op == GGML_OP_SET_ROWS);
-
-    const ggml::hrx::OperationId set_rows_id = effect_match.state_operations[1];
-    const ggml::hrx::OperationId add_id = effect_match.state_operations[0];
+    const ggml::hrx::OperationId add_id = static_cast<ggml::hrx::OperationId>(effect_graph.operations.size() - 1);
+    const auto writer = std::find_if(effect_graph.operations.begin(), effect_graph.operations.end(),
+        [](const ggml::hrx::Operation & candidate) { return candidate.op == GGML_OP_SET_ROWS; });
+    REQUIRE(writer != effect_graph.operations.end());
+    const ggml::hrx::OperationId set_rows_id = writer->id;
+    const ggml::hrx::GraphIndex effect_index(effect_graph);
+    const auto & predecessors = effect_index.predecessors(add_id);
+    REQUIRE(std::find(predecessors.begin(), predecessors.end(), set_rows_id) != predecessors.end());
     const ggml::hrx::OperationId view_id = graph.operations.size();
     ggml::hrx::Schedule reversed;
     reversed.graph_fingerprint = effect_graph.fingerprint;
-    reversed.invocations = {
-        { { "test", "consumer", {}, ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} }, { view_id, add_id },
-          { { "destination", effect_graph.operations[view_id].inputs[0] }, { "increment", effect_graph.operations[add_id].inputs[1] } },
-          { { "sum", effect_graph.operations[add_id].output } }, {}, "", -1 },
-        { { "test", "writer", {}, ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} }, { set_rows_id },
-          { { "rows", operation.inputs[0] }, { "indices", operation.inputs[1] }, { "destination", operation.inputs[2] } },
-          { { "updated", operation.output } }, {}, "", -1 },
-    };
+    ggml::hrx::Invocation consumer;
+    consumer.kernel = { "test", "consumer", {}, ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} };
+    consumer.covered_operations = { view_id, add_id };
+    consumer.inputs = { { "destination", effect_graph.operations[view_id].inputs[0] },
+                        { "increment", effect_graph.operations[add_id].inputs[1] } };
+    consumer.outputs = { { "sum", effect_graph.operations[add_id].output } };
+    ggml::hrx::Invocation writer_invocation;
+    writer_invocation.kernel = { "test", "writer", {}, ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} };
+    writer_invocation.covered_operations = { set_rows_id };
+    writer_invocation.inputs = { { "rows", operation.inputs[0] }, { "indices", operation.inputs[1] },
+                                 { "destination", operation.inputs[2] } };
+    writer_invocation.outputs = { { "updated", operation.output } };
+    reversed.invocations = { std::move(consumer), std::move(writer_invocation) };
     REQUIRE(!ggml::hrx::verify_schedule(effect_graph, reversed).valid());
-}
-
-static void test_qwen_multi_output_rules() {
-    ggml::hrx::Graph graph;
-    auto leaf = [&](enum ggml_type type, std::vector<int64_t> shape) {
-        ggml::hrx::Value value;
-        value.id = graph.values.size();
-        value.type = type;
-        value.op = GGML_OP_NONE;
-        value.access.storage = graph.storages.size();
-        value.access.shape.fill(1);
-        for (size_t i = 0; i < shape.size(); ++i) value.access.shape[i] = shape[i];
-        graph.storages.push_back({ static_cast<ggml::hrx::StorageId>(graph.storages.size()), value.id });
-        graph.values.push_back(value);
-        return value.id;
-    };
-    auto operation = [&](enum ggml_op op, std::vector<ggml::hrx::ValueId> inputs, std::vector<int64_t> shape) {
-        const ggml::hrx::ValueId output = leaf(GGML_TYPE_F32, std::move(shape));
-        ggml::hrx::Operation node;
-        node.id = graph.operations.size();
-        node.op = op;
-        node.inputs = std::move(inputs);
-        node.output = output;
-        graph.values[output].op = op;
-        graph.values[output].producer = node.id;
-        graph.operations.push_back(std::move(node));
-        return output;
-    };
-    const ggml::hrx::ValueId activation = leaf(GGML_TYPE_F32, { 2048, 1 });
-    const ggml::hrx::ValueId scale = leaf(GGML_TYPE_F32, { 2048 });
-    const ggml::hrx::ValueId prepared = operation(GGML_OP_MUL, { activation, scale }, { 2048, 1 });
-    auto projection = [&](int64_t width, int64_t heads, bool normalized) {
-        ggml::hrx::ValueId weight = leaf(GGML_TYPE_Q4_K, { 2048, width });
-        ggml::hrx::ValueId value = operation(GGML_OP_MUL_MAT, { weight, prepared }, { width, 1 });
-        value = operation(GGML_OP_RESHAPE, { value }, { 128, heads });
-        if (normalized) {
-            value = operation(GGML_OP_RMS_NORM, { value }, { 128, heads });
-            value = operation(GGML_OP_MUL, { value, leaf(GGML_TYPE_F32, { 128 }) }, { 128, heads });
-            value = operation(GGML_OP_ROPE, { value, leaf(GGML_TYPE_I32, { 1 }) }, { 128, heads });
-        }
-        return value;
-    };
-    projection(4096, 32, true);
-    ggml::hrx::ValueId key = projection(512, 4, true);
-    key = operation(GGML_OP_VIEW, { key }, { 512, 1 });
-    operation(GGML_OP_SET_ROWS, { key, leaf(GGML_TYPE_I64, { 1 }), leaf(GGML_TYPE_F16, { 512, 256 }) }, { 512, 256 });
-    ggml::hrx::ValueId value = projection(512, 4, false);
-    value = operation(GGML_OP_VIEW, { value }, { 512, 1 });
-    operation(GGML_OP_SET_ROWS, { value, leaf(GGML_TYPE_I64, { 1 }), leaf(GGML_TYPE_F16, { 512, 256 }) }, { 512, 256 });
-
-    const std::vector<ggml::hrx::FusionRule> rules = ggml::hrx::canonical_qwen3_moe_rules();
-    const ggml::hrx::Selection selection = ggml::hrx::select_regions(graph, rules);
-    REQUIRE(selection.regions.size() == 2);
-    REQUIRE(selection.regions[0].operations.size() == 3);
-    REQUIRE(selection.regions[1].operations.size() == 13);
-    REQUIRE(selection.uncovered_operations == std::vector<ggml::hrx::OperationId> { 0 });
-    const ggml::hrx::Schedule fallback_schedule = ggml::hrx::materialize_schedule_with_cpu_fallback(graph, rules, selection);
-    graph.fingerprint.clear();
-    REQUIRE(ggml::hrx::verify_schedule(graph, fallback_schedule).valid());
-    REQUIRE(fallback_schedule.invocations.front().kernel.execution_kind ==
-        ggml::hrx::KernelSpecialization::ExecutionKind::CpuFallback);
 }
 
 static void test_reactive_cache_and_bindings() {
     ggml::hrx::ReactivePlanCache cache;
+    const ggml::hrx::ExecutionFrame null_frame = cache.prepare(nullptr, "test-target");
+    REQUIRE(!null_frame.valid());
+    REQUIRE(!null_frame.errors.empty());
+    REQUIRE(null_frame.errors.front().find("null ggml_cgraph") != std::string::npos);
+    REQUIRE(cache.stats().failures == 1);
+
     Fixture first;
     build_arithmetic_graph(first, "first-runtime");
+    first.graph->uid = 101;
     const ggml::hrx::ExecutionFrame first_frame = cache.prepare(first.graph, "test-target");
     REQUIRE(first_frame.valid());
     REQUIRE(first_frame.plan->schedule.invocations.size() == 2);
+    REQUIRE(first_frame.plan->warnings.size() == 1);
     REQUIRE(ggml::hrx::schedule_execution_kind_count(first_frame.plan->schedule,
         ggml::hrx::KernelSpecialization::ExecutionKind::NativeEager) == 2);
     REQUIRE(cache.stats().builds == 1);
     REQUIRE(cache.stats().hits == 0);
 
-    Fixture second;
-    build_arithmetic_graph(second, "renamed-runtime");
-    const ggml::hrx::ExecutionFrame second_frame = cache.prepare(second.graph, "test-target");
+    const ggml::hrx::ExecutionFrame second_frame = cache.prepare(first.graph, "test-target");
     REQUIRE(second_frame.valid());
     REQUIRE(second_frame.plan == first_frame.plan);
     REQUIRE(cache.stats().builds == 1);
     REQUIRE(cache.stats().hits == 1);
     REQUIRE(first_frame.values.size() == second_frame.values.size());
-    REQUIRE(first_frame.values.front() != second_frame.values.front());
+    REQUIRE(first_frame.values.front() == second_frame.values.front());
+
+    Fixture same_semantics;
+    build_arithmetic_graph(same_semantics, "renamed-runtime");
+    same_semantics.graph->uid = 102;
+    const ggml::hrx::ExecutionFrame same_semantics_frame = cache.prepare(same_semantics.graph, "test-target");
+    REQUIRE(same_semantics_frame.valid());
+    REQUIRE(same_semantics_frame.plan != first_frame.plan);
+    REQUIRE(cache.stats().builds == 2);
+    REQUIRE(cache.stats().hits == 1);
+
+    const ggml::hrx::ExecutionFrame wrong_target = cache.prepare(first.graph, "different-target");
+    REQUIRE(!wrong_target.valid());
+    REQUIRE(!wrong_target.errors.empty());
+    REQUIRE(wrong_target.errors.front().find("target") != std::string::npos);
+    REQUIRE(cache.stats().failures == 2);
+
+    Fixture missing_uid;
+    build_arithmetic_graph(missing_uid, "missing-uid");
+    REQUIRE(missing_uid.graph->uid == 0);
+    const ggml::hrx::ExecutionFrame missing_uid_frame = cache.prepare(missing_uid.graph, "test-target");
+    REQUIRE(!missing_uid_frame.valid());
+    REQUIRE(!missing_uid_frame.errors.empty());
+    REQUIRE(missing_uid_frame.errors.front().find("nonzero ggml_cgraph UID") != std::string::npos);
+    REQUIRE(cache.stats().failures == 3);
 
     Fixture changed;
     ggml_tensor * x = ggml_new_tensor_2d(changed.context, GGML_TYPE_F32, 4, 9);
@@ -354,10 +268,12 @@ static void test_reactive_cache_and_bindings() {
     ggml_tensor * add = ggml_add(changed.context, x, y);
     ggml_set_output(add);
     ggml_build_forward_expand(changed.graph, add);
+    changed.graph->uid = 103;
     REQUIRE(cache.prepare(changed.graph, "test-target").valid());
-    REQUIRE(cache.stats().builds == 2);
+    REQUIRE(cache.stats().builds == 3);
 
     ggml::hrx::ReactivePlanCache concurrent_cache;
+    first.graph->uid = 104;
     std::atomic<int> valid_frames = 0;
     std::vector<std::thread> workers;
     for (int i = 0; i < 4; ++i) {
@@ -383,7 +299,7 @@ static void test_eager_capabilities_and_resource_verification() {
 
     Fixture fixture;
     build_arithmetic_graph(fixture, "resource");
-    const ggml::hrx::ImportedGraph imported = ggml::hrx::import_graph_with_bindings(fixture.graph);
+    const ggml::hrx::ImportedGraph imported = ggml::hrx::ImportedGraph::import(fixture.graph);
     REQUIRE(imported.graph.valid());
     const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(imported.graph, "test-target");
     REQUIRE(plan.valid());
@@ -455,8 +371,6 @@ static ggml::hrx::KernelCorpus make_test_corpus(const ggml::hrx::ProgramPlan & p
             source_records.back().source.data = sources.back().c_str();
             source_records.back().source.length = sources.back().size();
             source_records.back().source.format = ggml::hrx::KERNEL_SOURCE_FORMAT_TEXT;
-            source_records.back().dependencies = nullptr;
-            source_records.back().dependency_count = 0;
             primary_sources.emplace_back();
             primary_sources.back().path = sources.back().c_str();
             primary_sources.back().contents = &source_records.back();
@@ -486,7 +400,7 @@ static ggml::hrx::KernelCorpus make_test_corpus(const ggml::hrx::ProgramPlan & p
 static void test_command_program_and_diagnostics() {
     Fixture fixture;
     build_arithmetic_graph(fixture, "command-program");
-    const ggml::hrx::ImportedGraph imported = ggml::hrx::import_graph_with_bindings(fixture.graph);
+    const ggml::hrx::ImportedGraph imported = ggml::hrx::ImportedGraph::import(fixture.graph);
     const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(imported.graph, "gfx1151");
     REQUIRE(plan.valid());
     const ggml::hrx::KernelCorpus corpus = make_test_corpus(plan);
@@ -541,12 +455,11 @@ static void test_command_program_and_diagnostics() {
     REQUIRE(!ggml::hrx::verify_binding_snapshot(plan, snapshot).valid());
 }
 
-static void test_embedded_kernel_corpus() {
+static void test_pinned_kernel_corpus_manifest() {
     const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus("gfx1151");
-    REQUIRE(&corpus == &ggml::hrx::get_qwen_kernel_corpus("gfx1151"));
     REQUIRE(ggml::hrx::verify_kernel_corpus(corpus).valid());
-    REQUIRE(std::strcmp(corpus.upstream_revision, "b01fe3eb2cddfedad982be873239bc365dccd67f") == 0);
-    REQUIRE(std::strcmp(corpus.recipe_digest, "542255e2e245e96ced8744315223e8aeeaeb5e075280930a2fcbc5760cf5551d") == 0);
+    REQUIRE(std::string(corpus.upstream_revision) == "b01fe3eb2cddfedad982be873239bc365dccd67f");
+    REQUIRE(std::string(corpus.recipe_digest) == "542255e2e245e96ced8744315223e8aeeaeb5e075280930a2fcbc5760cf5551d");
     REQUIRE(corpus.kernels.size() == 39);
     REQUIRE(corpus.plan_case_count == 24);
 }
@@ -558,32 +471,26 @@ int main(int argc, char ** argv) {
         std::ifstream graph_file(argv[2]);
         REQUIRE(graph_file.good());
         const std::string graph_text((std::istreambuf_iterator<char>(graph_file)), std::istreambuf_iterator<char>());
-        const ggml::hrx::Graph graph = ggml::hrx::deserialize_graph_json(graph_text);
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
         REQUIRE(graph.valid());
-        const ggml::hrx::QwenProgramProof proof = ggml::hrx::recover_owned_qwen3_moe_program(graph);
-        for (const std::string & error : proof.errors) std::fprintf(stderr, "Qwen proof: %s\n", error.c_str());
-        REQUIRE(proof.recognized());
-        const ggml::hrx::VerificationResult verification = ggml::hrx::verify_owned_qwen3_moe_program(graph, proof);
-        for (const std::string & error : verification.errors) std::fprintf(stderr, "verification: %s\n", error.c_str());
-        REQUIRE(verification.valid());
-        REQUIRE(proof.structurally_sufficient());
-        REQUIRE(proof.natively_complete());
-        REQUIRE(proof.root_seams.empty());
-        REQUIRE(proof.schedule.roots.size() == 2);
-        REQUIRE(std::all_of(proof.schedule.roots.begin(), proof.schedule.roots.end(), [](const ggml::hrx::RootContract & root) {
+        const ggml::hrx::RoutedTransformerModel model =
+            ggml::hrx::RoutedTransformerModel::analyze(ggml::hrx::GraphIndex(graph));
+        REQUIRE(model.valid());
+        const ggml::hrx::ProgramPlan reactive = ggml::hrx::build_reactive_plan(graph, "fixture-target");
+        for (const std::string & error : reactive.errors) std::fprintf(stderr, "program plan: %s\n", error.c_str());
+        REQUIRE(reactive.valid());
+        REQUIRE(reactive.planner_identity.find("llm.routed_transformer@") != std::string::npos);
+        REQUIRE(reactive.atom_fallback_count == 0);
+        REQUIRE(reactive.schedule.roots.size() == 2);
+        REQUIRE(std::all_of(reactive.schedule.roots.begin(), reactive.schedule.roots.end(), [](const ggml::hrx::RootContract & root) {
             return root.disposition == ggml::hrx::RootDisposition::Materialized;
         }));
-        // Regression counts are for the SHA-pinned Q4_K_M model lock. Dynamic
-        // quant variants have a different per-layer weight mix and are not
-        // interchangeable graph fixtures.
-        REQUIRE(proof.native_gaps.empty());
-        REQUIRE(ggml::hrx::schedule_execution_kind_count(proof.schedule,
+        REQUIRE(ggml::hrx::schedule_execution_kind_count(reactive.schedule,
             ggml::hrx::KernelSpecialization::ExecutionKind::CpuFallback) == 0);
-        if (proof.schedule.workload.rfind("decode-", 0) == 0) {
+        if (reactive.schedule.workload.rfind("decode-", 0) == 0) {
             size_t split_dispatch_count = 0;
             size_t qkv_dispatch_count = 0;
-            size_t q6_value_dispatch_count = 0;
-            for (const ggml::hrx::Invocation & invocation : proof.schedule.invocations) {
+            for (const ggml::hrx::Invocation & invocation : reactive.schedule.invocations) {
                 for (const ggml::hrx::Dispatch & dispatch : invocation.dispatches) {
                     if (dispatch.kernel.variant == "qwen3_moe_attention_qkv_quantized") {
                         ++qkv_dispatch_count;
@@ -591,48 +498,43 @@ int main(int argc, char ** argv) {
                         REQUIRE(dispatch.kernel.integer_parameters.at("key_weight_type") == GGML_TYPE_Q4_K);
                         const int64_t value_type = dispatch.kernel.integer_parameters.at("value_weight_type");
                         REQUIRE((value_type == GGML_TYPE_Q4_K || value_type == GGML_TYPE_Q6_K));
-                        q6_value_dispatch_count += value_type == GGML_TYPE_Q6_K;
                     }
                     if (dispatch.kernel.variant != "qwen3_moe_flash_attention_decode_split_f32_f16_wmma") continue;
                     ++split_dispatch_count;
-                    REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == 768);
-                    REQUIRE(dispatch.kernel.integer_parameters.at("key_value_tile_size") == 64);
-                    REQUIRE(dispatch.kernel.integer_parameters.at("key_value_block_count") == 12);
+                    const int64_t tile_size = dispatch.kernel.integer_parameters.at("key_value_tile_size");
+                    REQUIRE(tile_size > 0);
+                    REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == model.key_value_token_count);
+                    REQUIRE(dispatch.kernel.integer_parameters.at("key_value_block_count") ==
+                            (model.key_value_token_count + tile_size - 1) / tile_size);
                 }
             }
-            REQUIRE(qkv_dispatch_count == 48);
-            REQUIRE(q6_value_dispatch_count == 24);
-            REQUIRE(split_dispatch_count == 48);
+            REQUIRE(qkv_dispatch_count == model.blocks.size());
+            REQUIRE(split_dispatch_count == model.blocks.size());
         }
-        const std::string serialized = ggml::hrx::serialize_schedule_json(proof.schedule);
+        const std::string serialized = ggml::hrx::serialize_schedule_json(reactive.schedule);
         std::vector<std::string> round_trip_errors;
         const ggml::hrx::Schedule round_trip = ggml::hrx::deserialize_schedule_json(serialized, round_trip_errors);
         REQUIRE(round_trip_errors.empty());
         REQUIRE(ggml::hrx::serialize_schedule_json(round_trip) == serialized);
-        REQUIRE(ggml::hrx::verify_schedule(graph, round_trip).valid());
+        REQUIRE(ggml::hrx::verify_schedule(reactive.graph, round_trip).valid());
 
-        const ggml::hrx::ProgramPlan reactive = ggml::hrx::build_reactive_plan(graph, "fixture-target");
-        for (const std::string & error : reactive.errors) std::fprintf(stderr, "reactive plan: %s\n", error.c_str());
-        REQUIRE(reactive.valid());
-        REQUIRE(reactive.planner_identity.find("llm.routed_transformer@") != std::string::npos);
-        REQUIRE(reactive.legacy_oracle_equivalent);
         REQUIRE(!reactive.fusion_search_text.empty());
         REQUIRE(!reactive.fusion_search_json.empty());
         REQUIRE(reactive.fusion_regions_dot.find("digraph fusion_regions") != std::string::npos);
-        REQUIRE(reactive.semantic_witness.find(proof.schedule.workload) != std::string::npos);
+        REQUIRE(reactive.logical_program_text.find("schema=ggml-hrx-logical-routed-transformer-v1") == 0);
+        REQUIRE(reactive.logical_program_json.find("\"components\":[") != std::string::npos);
+        REQUIRE(reactive.logical_program_dot.find("digraph logical_program") != std::string::npos);
+        REQUIRE(reactive.semantic_witness.find(reactive.schedule.workload) != std::string::npos);
         REQUIRE(reactive.graph.values.size() > graph.values.size());
         REQUIRE(ggml::hrx::verify_resource_program(reactive.graph, reactive.schedule, reactive.resources).valid());
         // Kernel recipe parameters must be witnesses of the graph, not model
         // constants hidden in the selector. Check both logical top-k width and
         // its independently recovered physical row stride.
-        const auto output_value = [&](size_t operation) -> const ggml::hrx::Value & {
-            return graph.values[graph.operations[operation].output];
-        };
-        const size_t hidden_size = output_value(0).access.shape[0];
-        const size_t query_size = output_value(3).access.shape[0];
-        const size_t key_value_size = output_value(8).access.shape[0];
-        const size_t expert_count = output_value(31).access.shape[0];
-        const ggml::hrx::Value & route_ids = output_value(35);
+        const size_t hidden_size = model.hidden_size;
+        const size_t query_size = model.query_size;
+        const size_t key_value_size = model.key_value_size;
+        const size_t expert_count = model.expert_count;
+        const ggml::hrx::Value & route_ids = graph.values[model.blocks.front().values_by_role.router_route_ids];
         const size_t route_count = route_ids.access.shape[0];
         const size_t route_stride = route_ids.access.strides[1] / ggml_type_size(route_ids.type);
         size_t checked_routes = 0;
@@ -677,42 +579,33 @@ int main(int argc, char ** argv) {
             });
         REQUIRE(kernel_command_count == ggml::hrx::schedule_dispatch_count(reactive.schedule));
         REQUIRE(copy_command_count == 1);
-        REQUIRE(fill_command_count == (proof.schedule.workload.rfind("decode", 0) == 0 ? 48 : 0));
+        REQUIRE(fill_command_count == (reactive.schedule.workload.rfind("decode", 0) == 0 ? model.blocks.size() : 0));
         REQUIRE(executable_commands.initializations.size() == 1);
         REQUIRE(executable_commands.initializations[0].data.size() == 256);
         REQUIRE(ggml::hrx::verify_command_program(reactive, executable_corpus, executable_commands).valid());
 
-        ggml::hrx::QwenProgramProof missing_operation = proof;
-        missing_operation.schedule.invocations[1].covered_operations.pop_back();
-        REQUIRE(!ggml::hrx::verify_owned_qwen3_moe_program(graph, missing_operation).valid());
-        ggml::hrx::QwenProgramProof wrong_dispatch_count = proof;
-        wrong_dispatch_count.schedule.invocations[1].dispatches.pop_back();
-        REQUIRE(!ggml::hrx::verify_owned_qwen3_moe_program(graph, wrong_dispatch_count).valid());
-        ggml::hrx::QwenProgramProof wrong_kernel = proof;
-        wrong_kernel.schedule.invocations[1].dispatches[0].kernel.variant = "wrong_kernel";
-        REQUIRE(!ggml::hrx::verify_owned_qwen3_moe_program(graph, wrong_kernel).valid());
-        ggml::hrx::QwenProgramProof wrong_binding = proof;
-        wrong_binding.schedule.invocations[1].dispatches[0].bindings[0].value = graph.values.size();
-        REQUIRE(!ggml::hrx::verify_owned_qwen3_moe_program(graph, wrong_binding).valid());
-        ggml::hrx::QwenProgramProof wrong_dependency = proof;
-        wrong_dependency.schedule.invocations[1].dispatches[0].dependencies.clear();
-        REQUIRE(!ggml::hrx::verify_owned_qwen3_moe_program(graph, wrong_dependency).valid());
-        ggml::hrx::QwenProgramProof cpu_injection = proof;
-        cpu_injection.schedule.invocations[1].dispatches[0].kernel.execution_kind =
-            ggml::hrx::KernelSpecialization::ExecutionKind::CpuFallback;
-        REQUIRE(!ggml::hrx::verify_owned_qwen3_moe_program(graph, cpu_injection).valid());
-        ggml::hrx::QwenProgramProof bad_root = proof;
-        bad_root.schedule.roots[0].value = graph.values.size();
-        REQUIRE(!ggml::hrx::verify_owned_qwen3_moe_program(graph, bad_root).valid());
+        ggml::hrx::Schedule missing_operation = reactive.schedule;
+        missing_operation.invocations[1].covered_operations.pop_back();
+        REQUIRE(!ggml::hrx::verify_schedule(reactive.graph, missing_operation).valid());
+        ggml::hrx::Schedule wrong_dispatch_count = reactive.schedule;
+        wrong_dispatch_count.expected_dispatch_count++;
+        REQUIRE(!ggml::hrx::verify_schedule(reactive.graph, wrong_dispatch_count).valid());
+        ggml::hrx::Schedule wrong_binding = reactive.schedule;
+        wrong_binding.invocations[1].dispatches[0].bindings[0].value = reactive.graph.values.size();
+        REQUIRE(!ggml::hrx::verify_schedule(reactive.graph, wrong_binding).valid());
+        ggml::hrx::Schedule bad_root = reactive.schedule;
+        bad_root.roots[0].value = reactive.graph.values.size();
+        REQUIRE(!ggml::hrx::verify_schedule(reactive.graph, bad_root).valid());
         ggml::hrx::Graph corrupted_graph = graph;
-        corrupted_graph.operations[3].op = GGML_OP_ADD;
-        REQUIRE(!ggml::hrx::recover_owned_qwen3_moe_program(corrupted_graph).recognized());
+        corrupted_graph.operations[model.blocks.front().operations_by_role.attention_query_projection].op = GGML_OP_ADD;
+        REQUIRE(!ggml::hrx::RoutedTransformerModel::analyze(ggml::hrx::GraphIndex(corrupted_graph)).valid());
         ggml::hrx::Graph mismatched_kv_graph = graph;
-        const ggml::hrx::ValueId first_mask = mismatched_kv_graph.operations[25].inputs[3];
+        const ggml::hrx::OperationId first_flash = model.blocks.front().operations_by_role.attention_flash;
+        const ggml::hrx::ValueId first_mask = mismatched_kv_graph.operations[first_flash].inputs[3];
         mismatched_kv_graph.values[first_mask].access.shape[0] -= 64;
-        REQUIRE(!ggml::hrx::recover_owned_qwen3_moe_program(mismatched_kv_graph).recognized());
+        REQUIRE(!ggml::hrx::RoutedTransformerModel::analyze(ggml::hrx::GraphIndex(mismatched_kv_graph)).valid());
         ggml::hrx::Graph mismatched_route_layout = graph;
-        const ggml::hrx::ValueId first_routes = mismatched_route_layout.operations[35].output;
+        const ggml::hrx::ValueId first_routes = model.blocks.front().values_by_role.router_route_ids;
         mismatched_route_layout.values[first_routes].access.strides[1] += ggml_type_size(
             mismatched_route_layout.values[first_routes].type);
         const ggml::hrx::ProgramPlan rejected_routes = ggml::hrx::build_reactive_plan(mismatched_route_layout, "fixture-target");
@@ -725,28 +618,26 @@ int main(int argc, char ** argv) {
         schedule_file << serialized << '\n';
         std::ofstream signature_file(argv[4], std::ios::trunc);
         REQUIRE(signature_file.good());
-        signature_file << ggml::hrx::qwen_program_signature(proof);
-        std::printf("proved %s topology: %zu operations, %zu dispatches, zero CPU fallback, %zu native gaps, %zu root seams\n",
-            proof.schedule.workload.c_str(), graph.operations.size(), ggml::hrx::schedule_dispatch_count(proof.schedule),
-            proof.native_gaps.size(), proof.root_seams.size());
+        signature_file << reactive.semantic_witness;
+        std::printf("proved %s topology: %zu operations, %zu dispatches, zero CPU fallback and zero atom fallback\n",
+            reactive.schedule.workload.c_str(), graph.operations.size(),
+            ggml::hrx::schedule_dispatch_count(reactive.schedule));
         return 0;
     }
     if (argc == 4 && std::string(argv[1]) == "--materialize") {
         std::ifstream graph_file(argv[2]);
         REQUIRE(graph_file.good());
         const std::string graph_text((std::istreambuf_iterator<char>(graph_file)), std::istreambuf_iterator<char>());
-        const ggml::hrx::Graph graph = ggml::hrx::deserialize_graph_json(graph_text);
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
         REQUIRE(graph.valid());
-        const std::vector<ggml::hrx::FusionRule> rules = ggml::hrx::canonical_qwen3_moe_rules();
-        const ggml::hrx::Selection selection = ggml::hrx::select_regions(graph, rules);
-        const ggml::hrx::Schedule schedule = ggml::hrx::materialize_schedule_with_cpu_fallback(graph, rules, selection);
-        REQUIRE(ggml::hrx::verify_schedule(graph, schedule).valid());
+        const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(graph, "fixture-target");
+        REQUIRE(plan.valid());
         std::ofstream output(argv[3], std::ios::trunc);
         REQUIRE(output.good());
-        output << ggml::hrx::serialize_schedule_json(schedule) << '\n';
-        std::printf("materialized %zu regions and %zu provisional dispatches with %zu CPU fallbacks for graph %s\n",
-            schedule.invocations.size(), ggml::hrx::schedule_dispatch_count(schedule),
-            selection.uncovered_operations.size(), graph.fingerprint.c_str());
+        output << ggml::hrx::serialize_schedule_json(plan.schedule) << '\n';
+        std::printf("materialized %zu invocations and %zu dispatches with %zu atom fallbacks for graph %s\n",
+            plan.schedule.invocations.size(), ggml::hrx::schedule_dispatch_count(plan.schedule),
+            plan.atom_fallback_count, graph.fingerprint.c_str());
         return 0;
     }
     if (argc == 3) {
@@ -756,7 +647,7 @@ int main(int argc, char ** argv) {
         REQUIRE(schedule_file.good());
         const std::string graph_text((std::istreambuf_iterator<char>(graph_file)), std::istreambuf_iterator<char>());
         const std::string schedule_text((std::istreambuf_iterator<char>(schedule_file)), std::istreambuf_iterator<char>());
-        const ggml::hrx::Graph graph = ggml::hrx::deserialize_graph_json(graph_text);
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
         REQUIRE(graph.valid());
         std::vector<std::string> errors;
         const ggml::hrx::Schedule schedule = ggml::hrx::deserialize_schedule_json(schedule_text, errors);
@@ -767,12 +658,11 @@ int main(int argc, char ** argv) {
         return 0;
     }
     REQUIRE(argc == 1);
-    test_deterministic_import_and_matcher();
+    test_deterministic_import_and_schedule();
     test_set_rows_effects_and_views();
-    test_qwen_multi_output_rules();
     test_reactive_cache_and_bindings();
     test_eager_capabilities_and_resource_verification();
     test_command_program_and_diagnostics();
-    test_embedded_kernel_corpus();
+    test_pinned_kernel_corpus_manifest();
     return 0;
 }

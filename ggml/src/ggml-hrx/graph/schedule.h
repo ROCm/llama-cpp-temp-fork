@@ -63,6 +63,8 @@ struct Invocation {
     std::vector<Dispatch> dispatches;
     std::string stage;
     int32_t layer = -1;
+    std::string recipe;
+    std::vector<uint32_t> logical_components;
 };
 
 struct Schedule {

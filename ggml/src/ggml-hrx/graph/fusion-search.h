@@ -35,11 +35,6 @@ private:
     std::map<std::string, Fact> facts_;
 };
 
-struct SemanticBindings {
-    std::map<std::string, OperationId> operations;
-    std::map<std::string, ValueId> values;
-};
-
 enum class CostEvidenceKind : uint8_t {
     StructuralDominance,
     Measured,
@@ -65,6 +60,7 @@ struct FusionCandidate {
     std::string family;
     std::string key;
     OperationId hero = kInvalidId;
+    std::vector<uint32_t> logical_components;
     std::vector<OperationId> operations;
     std::vector<ValueId> materialized_outputs;
     // Multi-dispatch recipes may intentionally own several roots connected by
@@ -75,7 +71,6 @@ struct FusionCandidate {
     // optimization benefit. It ranks behind profitable native candidates and
     // makes fallback ownership explicit instead of gaming a cost estimate.
     bool correctness_baseline = false;
-    SemanticBindings bindings;
     CandidateEconomics economics;
     std::shared_ptr<const CandidatePayload> payload;
 
