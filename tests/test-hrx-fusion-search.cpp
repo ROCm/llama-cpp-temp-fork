@@ -283,23 +283,26 @@ int main(int argc, char ** argv) {
         REQUIRE(current_dispatches == future_dispatches + expected_reduction);
         ggml::hrx::RoutedTransformerProgramProof structural =
             ggml::hrx::RoutedTransformerProgramProof::recover(graph);
-        if (model.output_token_count != 1) {
-            REQUIRE(!structural.valid());
-            REQUIRE(std::any_of(structural.errors.begin(), structural.errors.end(), [](const std::string & error) {
-                return error.find("demanded output token") != std::string::npos;
-            }));
-            std::printf("routed-transformer blocks=%zu components=%zu Tq=%lld Tout=%lld Tkv=%lld (no current recipe)\n",
-                        model.blocks.size(), result.selected.size(),
-                        static_cast<long long>(model.query_token_count),
-                        static_cast<long long>(model.output_token_count),
-                        static_cast<long long>(model.key_value_token_count));
-            return 0;
-        }
         for (const std::string & error : structural.errors) std::fprintf(stderr, "program: %s\n", error.c_str());
         REQUIRE(structural.valid());
         ggml::hrx::Graph structural_bound_graph = graph;
         REQUIRE(ggml::hrx::RoutedTransformerProgramProof::materialize_dispatch_bindings(
             structural_bound_graph, structural.schedule, *structural.logical_program).valid());
+        if (model.query_token_count != 1) {
+            const auto gather = std::find_if(structural.schedule.invocations.begin(), structural.schedule.invocations.end(),
+                [](const ggml::hrx::Invocation & invocation) {
+                    return std::any_of(invocation.dispatches.begin(), invocation.dispatches.end(),
+                        [](const ggml::hrx::Dispatch & dispatch) {
+                            return dispatch.kernel.variant == "ggml_gather_add_f32";
+                        });
+                });
+            REQUIRE(gather != structural.schedule.invocations.end());
+            const auto & dispatch = *std::find_if(gather->dispatches.begin(), gather->dispatches.end(),
+                [](const ggml::hrx::Dispatch & item) { return item.kernel.variant == "ggml_gather_add_f32"; });
+            REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == model.output_token_count);
+            REQUIRE(dispatch.kernel.integer_parameters.at("source_token_count") == model.query_token_count);
+            REQUIRE(dispatch.kernel.integer_parameters.at("output_token_count") == model.output_token_count);
+        }
         std::set<ggml::hrx::LogicalComponentId> selected_components;
         for (const auto & selected : structural.search.selected) {
             REQUIRE(!selected.logical_components.empty());

@@ -18,6 +18,7 @@ static constexpr size_t kExpertPartitionRouteTileSize = 32;
 struct Facts {
     size_t layer_count = 0;
     size_t token_count = 0;
+    size_t output_count = 0;
     size_t context_count = 0;
     size_t vocabulary_count = 0;
     size_t hidden_size = 0;
@@ -118,6 +119,7 @@ static Facts recover_facts(const Graph & graph, const RoutedTransformerModel & m
     Facts facts;
     facts.layer_count = model.blocks.size();
     facts.token_count = model.query_token_count;
+    facts.output_count = model.output_token_count;
     facts.context_count = model.key_value_token_count;
     facts.hidden_size = model.hidden_size;
     facts.query_size = model.query_size;
@@ -166,6 +168,8 @@ static Facts recover_facts(const Graph & graph, const RoutedTransformerModel & m
     require(facts.query_size == facts.query_head_count * facts.head_size, "query head geometry mismatch");
     require(facts.key_value_size == facts.key_value_head_count * facts.head_size, "key/value head geometry mismatch");
     require(facts.route_count != 0 && facts.route_stride >= facts.route_count, "route layout mismatch");
+    require(facts.output_count != 0 && facts.output_count <= facts.token_count,
+            "output token count exceeds query token count");
     for (const RoutedTransformerBlock & block : model.blocks) {
         const std::string prefix = "block " + std::to_string(block.ordinal) + ' ';
         const OperationId query_projection = block.operations_by_role.attention_query_projection;
@@ -312,8 +316,11 @@ static void bind_prefill_block(const Graph & graph, const RoutedTransformerModel
                                const Scratch & scratch, const Facts & facts, ValueId hidden_state,
                                std::vector<std::string> & errors) {
     const bool terminal = block.ordinal + 1 == model.blocks.size();
-    const size_t row_offset = terminal ? (facts.token_count - 1) * facts.hidden_size * sizeof(float) : 0;
-    const size_t row_length = terminal ? facts.hidden_size * sizeof(float) : 0;
+    const OperationId attention_selection = block.operations_by_role.attention_output_selection;
+    const OperationId hidden_selection = block.operations_by_role.hidden_state_selection;
+    const bool publishes_selection = terminal && attention_selection != kInvalidId;
+    const ValueId active_hidden_state = publishes_selection
+        ? op_output(graph, block.operations_by_role.attention_residual) : hidden_state;
     const OperationId prepared = block.operations_by_role.attention_prepared;
     const OperationId attention_result = block.operations_by_role.attention_result_reshape;
     const OperationId attention_output = block.operations_by_role.attention_output_projection;
@@ -338,7 +345,7 @@ static void bind_prefill_block(const Graph & graph, const RoutedTransformerModel
                 dispatch.bindings = { binding("input", hidden_state), binding("weight", op_input(graph, prepared, 1)),
                                       binding("output", op_output(graph, prepared)) };
             } else {
-                dispatch.bindings = { binding("input", hidden_state, row_offset, row_length),
+                dispatch.bindings = { binding("input", active_hidden_state),
                                       binding("weight", op_input(graph, ff_prepared, 1)),
                                       binding("output", op_output(graph, ff_prepared)) };
             }
@@ -358,11 +365,26 @@ static void bind_prefill_block(const Graph & graph, const RoutedTransformerModel
                 ++projection_index;
                 dispatch.bindings = { binding("input", op_output(graph, attention_result)),
                                       binding("weight", op_input(graph, attention_output, 0)),
-                                      binding("output", hidden_state) };
+                                      binding("output", publishes_selection
+                                          ? op_output(graph, attention_output) : hidden_state) };
                 compile_config(dispatch, "qwen3_moe.dense_quantized.input_size", std::to_string(facts.query_size));
-                compile_config(dispatch, "qwen3_moe.dense_quantized.output_accumulation", "1");
+                compile_config(dispatch, "qwen3_moe.dense_quantized.output_accumulation",
+                               publishes_selection ? "0" : "1");
                 compile_config(dispatch, "qwen3_moe.dense_quantized.output_size", std::to_string(facts.hidden_size));
             }
+        } else if (variant == "ggml_gather_add_f32") {
+            if (!publishes_selection || hidden_selection == kInvalidId ||
+                op_input(graph, attention_selection, 1) != op_input(graph, hidden_selection, 1)) {
+                errors.push_back("gather/add dispatch has no coherent terminal output selection");
+                continue;
+            }
+            dispatch.bindings = { binding("attention", op_output(graph, attention_output)),
+                                  binding("residual", hidden_state),
+                                  binding("output_ids", op_input(graph, attention_selection, 1)),
+                                  binding("output", active_hidden_state) };
+            runtime_scalar(dispatch, "source_token_count", facts.token_count);
+            runtime_scalar(dispatch, "output_token_count", facts.output_count);
+            runtime_scalar(dispatch, "hidden_size", facts.hidden_size);
         } else if (variant == "qwen3_moe_attention_postprocess_f32_f16" ||
                    variant == "qwen3_moe_flash_attention_f32_f16_wmma") {
             bind_attention_common(graph, block, dispatch, scratch, facts);
@@ -414,7 +436,7 @@ static void bind_prefill_block(const Graph & graph, const RoutedTransformerModel
         } else if (variant == "qwen3_moe_routed_down_weighted_reduce_f16_f32") {
             dispatch.bindings = { binding("route_weights", op_output(graph, route_weights)),
                                   binding("routed_output", op_output(graph, down)),
-                                  binding("output", hidden_state, row_offset, row_length) };
+                                  binding("output", active_hidden_state) };
             compile_config(dispatch, "qwen3_moe.routed_down.expert_count", std::to_string(facts.expert_count));
             compile_config(dispatch, "qwen3_moe.routed_down.input_size", std::to_string(facts.expert_intermediate_size));
             compile_config(dispatch, "qwen3_moe.routed_down.output_size", std::to_string(facts.hidden_size));
@@ -541,20 +563,23 @@ static void bind_endpoint(const Graph & graph, const RoutedTransformerModel & mo
                           ValueId hidden_state, std::vector<std::string> & errors) {
     const OperationId prepared = model.operations_by_role.endpoint_prepared;
     const OperationId projection = model.operations_by_role.endpoint_projection;
+    const RoutedTransformerBlock & terminal = model.blocks.back();
+    const ValueId endpoint_hidden_state = model.query_token_count != 1 &&
+            terminal.operations_by_role.attention_output_selection != kInvalidId
+        ? op_output(graph, terminal.operations_by_role.attention_residual) : hidden_state;
     for (Dispatch & dispatch : invocation.dispatches) {
         if (dispatch.kernel.variant == "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4") {
-            const size_t offset = facts.token_count == 1 ? 0 : (facts.token_count - 1) * facts.hidden_size * sizeof(float);
-            dispatch.bindings = { binding("input", hidden_state, offset, facts.hidden_size * sizeof(float)),
+            dispatch.bindings = { binding("input", endpoint_hidden_state),
                                   binding("weight", op_input(graph, prepared, 1)),
                                   binding("normalized_output", op_output(graph, prepared)),
                                   binding("q8_output", scratch.q8_hidden) };
-            runtime_scalar(dispatch, "token_count", 1);
+            runtime_scalar(dispatch, "token_count", facts.output_count);
             rmsnorm_config(dispatch, facts);
         } else if (dispatch.kernel.variant == "ggml_linear_q6k_q8_1_x4") {
             dispatch.bindings = { binding("q8_input", scratch.q8_hidden),
                                   binding("weight", op_input(graph, projection, 0)),
                                   binding("output", op_output(graph, projection)) };
-            runtime_scalar(dispatch, "token_count", 1);
+            runtime_scalar(dispatch, "token_count", facts.output_count);
             runtime_scalar(dispatch, "input_size", facts.hidden_size);
             runtime_scalar(dispatch, "output_size", facts.vocabulary_count);
         } else {

@@ -225,11 +225,36 @@ RoutedTransformerModel RoutedTransformerModel::analyze(const GraphIndex & index)
             return model;
         }
         const bool first_is_attention = RoutedTransformerAnalysisImplementation::find_ancestor(graph, residual_op.inputs[0], GGML_OP_MUL_MAT) == attention_projection;
+        const ValueId attention_input = first_is_attention ? residual_op.inputs[0] : residual_op.inputs[1];
         ValueId hidden_input = first_is_attention ? residual_op.inputs[1] : residual_op.inputs[0];
+        const OperationId attention_adapter = RoutedTransformerAnalysisImplementation::producer(graph, attention_input);
         const OperationId hidden_adapter = RoutedTransformerAnalysisImplementation::producer(graph, hidden_input);
-        if (hidden_adapter != kInvalidId && graph.operations[hidden_adapter].op == GGML_OP_GET_ROWS &&
+        const bool selects_attention = attention_adapter != kInvalidId &&
+            graph.operations[attention_adapter].op == GGML_OP_GET_ROWS &&
+            !graph.operations[attention_adapter].inputs.empty() &&
+            RoutedTransformerAnalysisImplementation::producer(
+                graph, graph.operations[attention_adapter].inputs[0]) != kInvalidId;
+        const bool selects_hidden = hidden_adapter != kInvalidId &&
+            graph.operations[hidden_adapter].op == GGML_OP_GET_ROWS &&
             !graph.operations[hidden_adapter].inputs.empty() &&
-            RoutedTransformerAnalysisImplementation::producer(graph, graph.operations[hidden_adapter].inputs[0]) != kInvalidId) {
+            RoutedTransformerAnalysisImplementation::producer(
+                graph, graph.operations[hidden_adapter].inputs[0]) != kInvalidId;
+        if (selects_attention != selects_hidden) {
+            model.errors.push_back("attention residual selects only one of its two inputs in block " +
+                                   std::to_string(block.ordinal));
+            return model;
+        }
+        if (selects_attention) {
+            const Operation & attention_selection = graph.operations[attention_adapter];
+            const Operation & hidden_selection = graph.operations[hidden_adapter];
+            if (attention_selection.inputs.size() != 2 || hidden_selection.inputs.size() != 2 ||
+                attention_selection.inputs[1] != hidden_selection.inputs[1]) {
+                model.errors.push_back("attention residual selections do not share one output-ID tensor in block " +
+                                       std::to_string(block.ordinal));
+                return model;
+            }
+        }
+        if (selects_hidden) {
             hidden_input = graph.operations[hidden_adapter].inputs[0];
         }
         const OperationId hidden_input_producer = RoutedTransformerAnalysisImplementation::producer(graph, hidden_input);
@@ -412,6 +437,13 @@ RoutedTransformerModel RoutedTransformerModel::analyze(const GraphIndex & index)
         block.operations_by_role.attention_flash = flash;
         block.operations_by_role.attention_result_reshape = flash_reshape;
         block.operations_by_role.attention_output_projection = attention_projection;
+        block.operations_by_role.attention_output_selection =
+            selects_attention
+                ? attention_adapter : kInvalidId;
+        block.operations_by_role.hidden_state_selection =
+            selects_hidden
+                ? hidden_adapter : kInvalidId;
+        block.operations_by_role.attention_residual = attention_residual;
         block.operations_by_role.feed_forward_prepared = feed_forward_prepared;
         block.operations_by_role.router_projection = router_projection;
         block.operations_by_role.router_route_ids = route_ids;

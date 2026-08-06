@@ -466,8 +466,8 @@ static void test_pinned_kernel_corpus_manifest() {
     REQUIRE(ggml::hrx::verify_kernel_corpus(corpus).valid());
     REQUIRE(std::string(corpus.upstream_revision) == "b01fe3eb2cddfedad982be873239bc365dccd67f");
     REQUIRE(std::string(corpus.recipe_digest) == "542255e2e245e96ced8744315223e8aeeaeb5e075280930a2fcbc5760cf5551d");
-    REQUIRE(corpus.kernels.size() == 39);
-    REQUIRE(corpus.plan_case_count == 24);
+    REQUIRE(corpus.kernels.size() == 40);
+    REQUIRE(corpus.plan_case_count == 25);
 }
 
 } // namespace

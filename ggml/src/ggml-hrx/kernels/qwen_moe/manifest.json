@@ -3,9 +3,9 @@
   "upstream_repository": "https://github.com/ROCm/hrx-system.git",
   "upstream_revision": "b01fe3eb2cddfedad982be873239bc365dccd67f",
   "source_subdirectory": "experimental/qwen_moe/kernels",
-  "corpus_sha256": "542b6cd6502ca8d7f1e98f723c3eb805f07b42518f5798c6557637591c91cbb1",
+  "corpus_sha256": "4190b1da3d53b2149662f3eb385a5751d31253f0a6febcd63b1d73288c21ad2e",
   "upstream_corpus_sha256": "ccc2ab7c506bd8a108f66308e108b25e75e143539a6e5511a03df9df2e234c3d",
-  "owned_corpus_sha256": "52c1f00e19aaeb36d6a9737d8fcdb386dcfc8ccd33511f7c1b3e9f6c3ac59f9a",
+  "owned_corpus_sha256": "f198ce99c259ed35277451ff6185199654eb7ecbf009dcdbd2c00af2c187886b",
   "build_bazel_sha256": "542255e2e245e96ced8744315223e8aeeaeb5e075280930a2fcbc5760cf5551d",
   "files": [
     {
@@ -114,9 +114,67 @@
       "sha256": "37f963a8efaf8f76793a263fd16099151e5f703d54545e89e35f85b9a8a1d942",
       "size": 12426,
       "owner": "ggml-hrx"
+    },
+    {
+      "path": "../hrx_owned/gather_add_f32.loom",
+      "sha256": "04194341d13cb28c394ab9c6dfb6625bb2bad7dd3e2b45f0c5f41b4ffedd9723",
+      "size": 4517,
+      "owner": "ggml-hrx"
     }
   ],
   "exports": [
+    {
+      "symbol": "ggml_gather_add_f32",
+      "source": "../hrx_owned/gather_add_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "source_token_count",
+          "type": "index"
+        },
+        {
+          "name": "output_token_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "source_token_count",
+          "type": "index"
+        },
+        {
+          "name": "output_token_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "attention",
+        "residual",
+        "output_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "../hrx_owned/gather_add_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
     {
       "symbol": "ggml_linear_q6k_f32_wave32",
       "source": "ggml/linear_q6k_f32.loom",
@@ -2515,6 +2573,18 @@
         "--sample-compilation=per_sample"
       ],
       "source": "../qwen_owned/attention_metadata_bringup_workaround.loom",
+      "owner": "ggml-hrx"
+    },
+    {
+      "name": "owned_gather_add_plan_test",
+      "args": [
+        "$(location ../hrx_owned/gather_add_f32.loom)",
+        "--benchmark=@ggml_gather_add_noncontiguous",
+        "--dry-run",
+        "--output-format=jsonl",
+        "--sample-compilation=per_sample"
+      ],
+      "source": "../hrx_owned/gather_add_f32.loom",
       "owner": "ggml-hrx"
     }
   ]

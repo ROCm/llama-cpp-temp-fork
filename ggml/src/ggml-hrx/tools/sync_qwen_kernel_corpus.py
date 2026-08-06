@@ -38,14 +38,14 @@ CORPUS_FILES = (
     "qwen3_moe/router_top8_f32.loom",
 )
 
-# These two request-setup kernels are deliberately owned by the llama.cpp HRX
+# These integration kernels are deliberately owned by the llama.cpp HRX
 # backend. They are not attributed to the pinned qwen_moe corpus or its BUILD
-# recipes, even though their initial implementations were validated on Ben's
-# later integration branch.
-OWNED_SOURCE_DIR = pathlib.Path(__file__).resolve().parent.parent / "kernels/qwen_owned"
+# recipes.
+OWNED_KERNEL_DIR = pathlib.Path(__file__).resolve().parent.parent / "kernels"
 OWNED_FILES = (
-    "token_embedding_bringup_workaround.loom",
-    "attention_metadata_bringup_workaround.loom",
+    "qwen_owned/token_embedding_bringup_workaround.loom",
+    "qwen_owned/attention_metadata_bringup_workaround.loom",
+    "hrx_owned/gather_add_f32.loom",
 )
 
 KERNEL_RE = re.compile(
@@ -232,12 +232,12 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
     upstream_digest = upstream_aggregate.hexdigest()
     owned_aggregate = hashlib.sha256()
     for filename in OWNED_FILES:
-        source = OWNED_SOURCE_DIR / filename
+        source = OWNED_KERNEL_DIR / filename
         if not source.is_file():
             raise RuntimeError(f"missing required backend-owned kernel source: {source}")
         data = source.read_bytes()
         digest = sha256(data)
-        relative_text = f"../qwen_owned/{filename}"
+        relative_text = f"../{filename}"
         owned_aggregate.update(filename.encode())
         owned_aggregate.update(b"\0")
         owned_aggregate.update(bytes.fromhex(digest))
@@ -279,6 +279,14 @@ def construct(source_root: pathlib.Path, destination: pathlib.Path, expected_rev
                      "--benchmark=@qwen_attention_metadata_model_prefill_512", "--dry-run",
                      "--output-format=jsonl", "--sample-compilation=per_sample"],
             "source": "../qwen_owned/attention_metadata_bringup_workaround.loom",
+            "owner": "ggml-hrx",
+        },
+        {
+            "name": "owned_gather_add_plan_test",
+            "args": ["$(location ../hrx_owned/gather_add_f32.loom)",
+                     "--benchmark=@ggml_gather_add_noncontiguous", "--dry-run",
+                     "--output-format=jsonl", "--sample-compilation=per_sample"],
+            "source": "../hrx_owned/gather_add_f32.loom",
             "owner": "ggml-hrx",
         },
     ])

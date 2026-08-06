@@ -42,6 +42,9 @@ struct RoutedTransformerOperations {
     OperationId attention_flash = kInvalidId;
     OperationId attention_result_reshape = kInvalidId;
     OperationId attention_output_projection = kInvalidId;
+    OperationId attention_output_selection = kInvalidId;
+    OperationId hidden_state_selection = kInvalidId;
+    OperationId attention_residual = kInvalidId;
     OperationId feed_forward_prepared = kInvalidId;
     OperationId router_projection = kInvalidId;
     OperationId router_route_ids = kInvalidId;

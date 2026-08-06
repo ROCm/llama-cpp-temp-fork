@@ -105,7 +105,8 @@ static void emit_prefill_component(const Graph & graph, const RoutedTransformerM
                                    size_t & ordinal, std::vector<std::string> & gaps) {
     const int layer = static_cast<int>(block.ordinal);
     const size_t token_count = model.query_token_count;
-    const size_t active_token_count = block.ordinal + 1 == model.blocks.size() ? 1 : token_count;
+    const bool terminal = block.ordinal + 1 == model.blocks.size();
+    const size_t active_token_count = terminal ? model.output_token_count : token_count;
     switch (kind) {
         case RoutedTransformerComponentKind::AttentionPrepare:
             // Preserve the established specialization contract: historically
@@ -133,6 +134,9 @@ static void emit_prefill_component(const Graph & graph, const RoutedTransformerM
                 "qwen3_moe_dense_linear_q6k_f16_wmma", "dense_attention_output",
                 weight_type(graph, block.operations_by_role.attention_output_projection),
                 layer, token_count, gaps), ordinal);
+            if (block.operations_by_role.attention_output_selection != kInvalidId) {
+                add_dispatch(invocation, kernel("ggml_gather_add_f32", layer, active_token_count), ordinal);
+            }
             add_dispatch(invocation, kernel("qwen3_moe_rmsnorm_f32", layer, active_token_count), ordinal);
             break;
         case RoutedTransformerComponentKind::RouterSelection:
@@ -242,11 +246,6 @@ RoutedTransformerProgramProof RoutedTransformerProgramProof::recover(const Graph
     }
     proof.logical_program = model;
     proof.structurally_recognized = true;
-    if (model->output_token_count != 1) {
-        proof.errors.push_back("current routed-transformer recipes require one demanded output token; graph demands " +
-                               std::to_string(model->output_token_count));
-        return proof;
-    }
     SearchOptions search_options;
     search_options.require_complete_coverage = true;
     search_options.record_trace = true;
@@ -292,7 +291,8 @@ RoutedTransformerProgramProof RoutedTransformerProgramProof::recover(const Graph
         invocation.stage = RoutedTransformerModel::component_kind_name(component->kind);
         invocation.layer = block == nullptr ? -1 : static_cast<int32_t>(block->ordinal);
         invocation.kernel = RoutedTransformerProgramImplementation::kernel(selected.family, invocation.layer,
-            component->kind == RoutedTransformerComponentKind::ProgramEndpoint ? 1 : model->query_token_count);
+            component->kind == RoutedTransformerComponentKind::ProgramEndpoint
+                ? model->output_token_count : model->query_token_count);
 
         if (component->kind == RoutedTransformerComponentKind::ProgramPreamble) {
             KernelSpecialization embedding = RoutedTransformerProgramImplementation::kernel(
@@ -312,9 +312,10 @@ RoutedTransformerProgramProof RoutedTransformerProgramProof::recover(const Graph
         } else if (component->kind == RoutedTransformerComponentKind::ProgramEndpoint) {
             if (prefill) RoutedTransformerProgramImplementation::add_dispatch(invocation,
                 RoutedTransformerProgramImplementation::kernel(
-                    "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", -1, 1), dispatch_ordinal);
+                    "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", -1, model->output_token_count), dispatch_ordinal);
             RoutedTransformerProgramImplementation::add_dispatch(invocation,
-                RoutedTransformerProgramImplementation::kernel("ggml_linear_q6k_q8_1_x4", -1, 1),
+                RoutedTransformerProgramImplementation::kernel(
+                    "ggml_linear_q6k_q8_1_x4", -1, model->output_token_count),
                 dispatch_ordinal);
         } else if (component->kind == RoutedTransformerComponentKind::Atom) {
             KernelSpecialization atom;
