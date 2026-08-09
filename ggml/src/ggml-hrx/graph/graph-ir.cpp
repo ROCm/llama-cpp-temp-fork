@@ -31,7 +31,7 @@ static const ggml_tensor * storage_root(const ggml_tensor * tensor) {
 
 static size_t access_span(const AccessPath & access, enum ggml_type type) {
     const size_t blocks = (static_cast<size_t>(access.shape[0]) + ggml_blck_size(type) - 1) / ggml_blck_size(type);
-    size_t result = blocks * access.strides[0];
+    size_t result = blocks == 0 ? 0 : (blocks - 1) * access.strides[0] + ggml_type_size(type);
     for (int i = 1; i < GGML_MAX_DIMS; ++i) {
         if (access.shape[i] > 0) {
             result += static_cast<size_t>(access.shape[i] - 1) * access.strides[i];

@@ -1,0 +1,102 @@
+// DSV4 HCA stage-0 control chain and HC_PRE, materializing the F32 HC output.
+//
+// This is an exactness-isolation boundary: projection remains graph-owned and
+// RMS/MUL/Q8 plus the gather tail remain separate downstream operations.
+
+kernel.def export("hrx2_dsv4_hca_stage0_control_hc_pre_f32") @hrx2_dsv4_hca_stage0_control_hc_pre_f32() {
+  %one = index.constant 1 : index
+  %tokens = index.constant 512 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%tokens, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%out_scale: f32, %out_bias: f32,
+         %projection: buffer, %projection_mul: buffer,
+         %projection_bias: buffer, %hc_src: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %four = index.constant 4 : index
+  %c24 = index.constant 24 : index
+  %c256 = index.constant 256 : index
+  %c4096 = index.constant 4096 : index
+  %c16384 = index.constant 16384 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %token0 = kernel.workgroup.id<x> : index
+  %token = index.assume %token0 [range(%token0, 0, 511)] : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+
+  %projection_g = buffer.assume.memory_space<global> %projection : buffer
+  %projection_mul_g = buffer.assume.memory_space<global> %projection_mul : buffer
+  %projection_bias_g = buffer.assume.memory_space<global> %projection_bias : buffer
+  %hc_src_g = buffer.assume.memory_space<global> %hc_src : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %projection_na, %projection_mul_na, %projection_bias_na, %hc_src_na, %dst_na =
+      buffer.assume.noalias %projection_g, %projection_mul_g,
+      %projection_bias_g, %hc_src_g, %dst_g :
+      buffer, buffer, buffer, buffer, buffer
+  %projection_v = buffer.view %projection_na[%base] : buffer -> view<12288xf32, #dense>
+  %projection_mul_v = buffer.view %projection_mul_na[%base] : buffer -> view<1xf32, #dense>
+  %projection_bias_v = buffer.view %projection_bias_na[%base] : buffer -> view<4xf32, #dense>
+  %hc_src_v = buffer.view %hc_src_na[%base] : buffer -> view<8388608xf32, #dense>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<2097152xf32, #dense>
+
+  %control_bytes = index.constant 16 : offset
+  %control = buffer.alloca %control_bytes {base_alignment = 16, memory_space = workgroup} : buffer
+  %control_v = buffer.view %control[%base] : buffer -> view<4xf32, #dense>
+  %is_control_lane = index.cmp ult, %tid, %four : index
+  scf.if %is_control_lane {
+    %token_projection0 = index.mul %token, %c24 : index
+    %projection_index0 = index.add %token_projection0, %tid : index
+    %projection_index = index.assume %projection_index0 [range(%projection_index0, 0, 12287)] : index
+    %projected = view.load %projection_v[%projection_index] : view<12288xf32, #dense> -> f32
+    %projection_mul_value = view.load %projection_mul_v[%zero] : view<1xf32, #dense> -> f32
+    %projection_bias_value = view.load %projection_bias_v[%tid] : view<4xf32, #dense> -> f32
+    %mul_value = scalar.mulf<nnan|ninf|nsz> %projected, %projection_mul_value : f32
+    %add_value = scalar.addf<nnan|ninf|nsz> %mul_value, %projection_bias_value : f32
+    %sigmoid_value = scalar.logisticf<afn> %add_value : f32
+    %scaled_value = scalar.mulf<nnan|ninf|nsz> %sigmoid_value, %out_scale : f32
+    %control_value = scalar.addf<nnan|ninf|nsz> %scaled_value, %out_bias : f32
+    view.store %control_value, %control_v[%tid] : f32, view<4xf32, #dense>
+  }
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+  %w0 = view.load %control_v[%zero] : view<4xf32, #dense> -> f32
+  %w1 = view.load %control_v[%one] : view<4xf32, #dense> -> f32
+  %w2 = view.load %control_v[%two] : view<4xf32, #dense> -> f32
+  %w3 = view.load %control_v[%three] : view<4xf32, #dense> -> f32
+  %token_hc0 = index.mul %token, %c16384 : index
+  %token_hc = index.assume %token_hc0 [range(%token_hc0, 0, 8372224)] : index
+  %token_dst0 = index.mul %token, %c4096 : index
+  %token_dst = index.assume %token_dst0 [range(%token_dst0, 0, 2093056)] : index
+
+  scf.for %coord = [%tid to %c4096 step %c256] {
+    %i0_0 = index.add %token_hc, %coord : index
+    %i0 = index.assume %i0_0 [range(%i0_0, 0, 8388607)] : index
+    %i1_0 = index.add %i0, %c4096 : index
+    %i1 = index.assume %i1_0 [range(%i1_0, 0, 8388607)] : index
+    %i2_0 = index.add %i1, %c4096 : index
+    %i2 = index.assume %i2_0 [range(%i2_0, 0, 8388607)] : index
+    %i3_0 = index.add %i2, %c4096 : index
+    %i3 = index.assume %i3_0 [range(%i3_0, 0, 8388607)] : index
+    %x0 = view.load %hc_src_v[%i0] : view<8388608xf32, #dense> -> f32
+    %x1 = view.load %hc_src_v[%i1] : view<8388608xf32, #dense> -> f32
+    %x2 = view.load %hc_src_v[%i2] : view<8388608xf32, #dense> -> f32
+    %x3 = view.load %hc_src_v[%i3] : view<8388608xf32, #dense> -> f32
+    %p0 = scalar.mulf %x0, %w0 : f32
+    %s0 = scalar.addf %zero_f32, %p0 : f32
+    %p1 = scalar.mulf %x1, %w1 : f32
+    %s1 = scalar.addf %s0, %p1 : f32
+    %p2 = scalar.mulf %x2, %w2 : f32
+    %s2 = scalar.addf %s1, %p2 : f32
+    %p3 = scalar.mulf %x3, %w3 : f32
+    %value = scalar.addf %s2, %p3 : f32
+    %dst_index0 = index.add %token_dst, %coord : index
+    %dst_index = index.assume %dst_index0 [range(%dst_index0, 0, 2097151)] : index
+    view.store %value, %dst_v[%dst_index] : f32, view<2097152xf32, #dense>
+  }
+  kernel.return
+}

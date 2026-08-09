@@ -1,0 +1,154 @@
+// Direct gather tails for the DSV4 stage-0 HCA and CSA branches.
+
+kernel.def export("hrx2_dsv4_hca_stage0_gather_f32") @hrx2_dsv4_hca_stage0_gather_f32() {
+  %one = index.constant 1 : index
+  %groups = index.constant 1024 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%groups, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%history: buffer, %projection: buffer, %indices: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %c512 = index.constant 512 : index
+  %c640 = index.constant 640 : index
+  %c256 = index.constant 256 : index
+  %total = index.constant 262144 : index
+  %wg0 = kernel.workgroup.id<x> : index
+  %wg = index.assume %wg0 [range(%wg0, 0, 1023)] : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %linear_base = index.mul %wg, %c256 : index
+  %linear0 = index.add %linear_base, %tid : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 262143)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+  %history_g = buffer.assume.memory_space<global> %history : buffer
+  %projection_g = buffer.assume.memory_space<global> %projection : buffer
+  %indices_g = buffer.assume.memory_space<global> %indices : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %history_na, %projection_na, %indices_na, %dst_na = buffer.assume.noalias
+      %history_g, %projection_g, %indices_g, %dst_g : buffer, buffer, buffer, buffer
+  %history_v = buffer.view %history_na[%base] : buffer -> view<65536xf32, #dense>
+  %projection_v = buffer.view %projection_na[%base] : buffer -> view<262144xf32, #dense>
+  %indices_v = buffer.view %indices_na[%base] : buffer -> view<512xi32, #dense>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<262144xf32, #dense>
+  scf.if %in_bounds {
+    %row = index.div %linear, %c512 : index
+    %col = index.rem %linear, %c512 : index
+    %source_row_i32 = view.load %indices_v[%row] : view<512xi32, #dense> -> i32
+    %source_row = index.cast %source_row_i32 : i32 to index
+    %source_valid = index.cmp ult, %source_row, %c640 : index
+    scf.if %source_valid {
+      %source_row_b = index.assume %source_row [range(%source_row, 0, 639)] : index
+      %is_history = index.cmp ult, %source_row_b, %c128 : index
+      %value = scf.if %is_history -> (f32) {
+        %row_base0 = index.mul %source_row_b, %c512 : index
+        %source_index0 = index.add %row_base0, %col : index
+        %source_index = index.assume %source_index0 [range(%source_index0, 0, 65535)] : index
+        %x = view.load %history_v[%source_index] : view<65536xf32, #dense> -> f32
+        scf.yield %x : f32
+      } else {
+        %projection_row = index.sub %source_row_b, %c128 : index
+        %row_base0 = index.mul %projection_row, %c512 : index
+        %source_index0 = index.add %row_base0, %col : index
+        %source_index = index.assume %source_index0 [range(%source_index0, 0, 262143)] : index
+        %x = view.load %projection_v[%source_index] : view<262144xf32, #dense> -> f32
+        scf.yield %x : f32
+      }
+      view.store %value, %dst_v[%linear] : f32, view<262144xf32, #dense>
+    }
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_dsv4_csa_stage0_gather_f32") @hrx2_dsv4_csa_stage0_gather_f32() {
+  %one = index.constant 1 : index
+  %groups = index.constant 2048 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%groups, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%scale: f32, %bias: f32, %history: buffer, %projection: buffer,
+         %indices: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %four = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c512 = index.constant 512 : index
+  %c520 = index.constant 520 : index
+  %c1024 = index.constant 1024 : index
+  %c256 = index.constant 256 : index
+  %total = index.constant 524288 : index
+  %wg0 = kernel.workgroup.id<x> : index
+  %wg = index.assume %wg0 [range(%wg0, 0, 2047)] : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %linear_base = index.mul %wg, %c256 : index
+  %linear0 = index.add %linear_base, %tid : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 524287)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+  %history_g = buffer.assume.memory_space<global> %history : buffer
+  %projection_g = buffer.assume.memory_space<global> %projection : buffer
+  %indices_g = buffer.assume.memory_space<global> %indices : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %history_na, %projection_na, %indices_na, %dst_na = buffer.assume.noalias
+      %history_g, %projection_g, %indices_g, %dst_g : buffer, buffer, buffer, buffer
+  %history_v = buffer.view %history_na[%base] : buffer -> view<8192xf32, #dense>
+  %projection_v = buffer.view %projection_na[%base] : buffer -> view<524288xf32, #dense>
+  %indices_v = buffer.view %indices_na[%base] : buffer -> view<1024xi32, #dense>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<524288xf32, #dense>
+  scf.if %in_bounds {
+    %col = index.rem %linear, %c512 : index
+    %head_linear = index.div %linear, %c512 : index
+    %head = index.rem %head_linear, %c8 : index
+    %plane = index.div %head_linear, %c8 : index
+    %upper = index.cmp ult, %head, %four : index
+    %source_col = scf.if %upper -> (index) {
+      scf.yield %col : index
+    } else {
+      %x = index.add %col, %c512 : index
+      scf.yield %x : index
+    }
+    %head_half = index.rem %head, %four : index
+    %plane_rows = index.mul %plane, %four : index
+    %row_half = index.add %plane_rows, %head_half : index
+    %get_row = scf.if %upper -> (index) {
+      scf.yield %row_half : index
+    } else {
+      %x = index.add %row_half, %c512 : index
+      scf.yield %x : index
+    }
+    %get_row_b = index.assume %get_row [range(%get_row, 0, 1023)] : index
+    %source_row_i32 = view.load %indices_v[%get_row_b] : view<1024xi32, #dense> -> i32
+    %source_row = index.cast %source_row_i32 : i32 to index
+    %source_valid = index.cmp ule, %source_row, %c520 : index
+    scf.if %source_valid {
+      %source_row_b = index.assume %source_row [range(%source_row, 0, 520)] : index
+      %is_history = index.cmp ult, %source_row_b, %c8 : index
+      %is_projection = index.cmp ult, %source_row_b, %c520 : index
+      %value = scf.if %is_history -> (f32) {
+        %row_base0 = index.mul %source_row_b, %c1024 : index
+        %source_index0 = index.add %row_base0, %source_col : index
+        %source_index = index.assume %source_index0 [range(%source_index0, 0, 8191)] : index
+        %x = view.load %history_v[%source_index] : view<8192xf32, #dense> -> f32
+        scf.yield %x : f32
+      } else {
+        %x = scf.if %is_projection -> (f32) {
+          %projection_row = index.sub %source_row_b, %c8 : index
+          %row_base0 = index.mul %projection_row, %c1024 : index
+          %source_index0 = index.add %row_base0, %source_col : index
+          %source_index = index.assume %source_index0 [range(%source_index0, 0, 524287)] : index
+          %p = view.load %projection_v[%source_index] : view<524288xf32, #dense> -> f32
+          scf.yield %p : f32
+        } else {
+          %h = view.load %history_v[%source_col] : view<8192xf32, #dense> -> f32
+          %scaled = scalar.mulf<nnan|ninf|nsz> %h, %scale : f32
+          %tail = scalar.addf<nnan|ninf|nsz> %scaled, %bias : f32
+          scf.yield %tail : f32
+        }
+        scf.yield %x : f32
+      }
+      view.store %value, %dst_v[%linear] : f32, view<524288xf32, #dense>
+    }
+  }
+  kernel.return
+}

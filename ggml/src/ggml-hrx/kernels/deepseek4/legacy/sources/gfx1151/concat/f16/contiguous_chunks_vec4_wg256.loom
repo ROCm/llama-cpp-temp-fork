@@ -1,0 +1,75 @@
+config.decl @hrx2_shape_concat_contiguous_total : %value: index where [range(%value, 4, 536870912), mul(%value, 4)]
+config.decl @hrx2_shape_concat_contiguous_src0_chunk : %value: index where [range(%value, 4, 536870912), mul(%value, 4)]
+config.decl @hrx2_shape_concat_contiguous_src1_chunk : %value: index where [range(%value, 4, 536870912), mul(%value, 4)]
+config.decl @hrx2_tuning_concat_contiguous_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_concat_f16_contiguous_chunks_vec4") @hrx2_concat_f16_contiguous_chunks_vec4() {
+  %unit = index.constant 1 : index
+  %one_less = index.constant -1 : index
+  %four = index.constant 4 : index
+  %total = config.get @hrx2_shape_concat_contiguous_total : index
+  %workgroup_size = config.get @hrx2_tuning_concat_contiguous_workgroup_size : index
+  %vectors = index.div %total, %four : index
+  %rounding = index.add %workgroup_size, %one_less : index
+  %rounded = index.add %vectors, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %four = index.constant 4 : index
+  %total0 = config.get @hrx2_shape_concat_contiguous_total : index
+  %src0_chunk0 = config.get @hrx2_shape_concat_contiguous_src0_chunk : index
+  %src1_chunk0 = config.get @hrx2_shape_concat_contiguous_src1_chunk : index
+  %workgroup_size = config.get @hrx2_tuning_concat_contiguous_workgroup_size : index
+  %total = index.assume %total0 [range(%total0, 4, 536870912)] : index
+  %src0_chunk = index.assume %src0_chunk0 [range(%src0_chunk0, 4, 536870912)] : index
+  %src1_chunk = index.assume %src1_chunk0 [range(%src1_chunk0, 4, 536870912)] : index
+  %dst_chunk0 = index.add %src0_chunk, %src1_chunk : index
+  %dst_chunk = index.assume %dst_chunk0 [range(%dst_chunk0, 8, 536870912)] : index
+  %vectors0 = index.div %total, %four : index
+  %vectors = index.assume %vectors0 [range(%vectors0, 1, 134217728)] : index
+
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 524287)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %vector_base0 = index.mul %workgroup, %workgroup_size : index
+  %vector_base = index.assume %vector_base0 [range(%vector_base0, 0, 536870911)] : index
+  %vector_index0 = index.add %vector_base, %lane : index
+  %vector_index = index.assume %vector_index0 [range(%vector_index0, 0, 536870911)] : index
+  %in_bounds = index.cmp ult, %vector_index, %vectors : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_na, %src1_na, %dst_na = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_na[%base] : buffer -> view<536870912xf16, #dense>
+  %src1_view = buffer.view %src1_na[%base] : buffer -> view<536870912xf16, #dense>
+  %dst_view = buffer.view %dst_na[%base] : buffer -> view<536870912xf16, #dense>
+
+  scf.if %in_bounds {
+    %dst_index0 = index.mul %vector_index, %four : index
+    %dst_index = index.assume %dst_index0 [range(%dst_index0, 0, 536870908)] : index
+    %outer = index.div %dst_index, %dst_chunk : index
+    %within = index.rem %dst_index, %dst_chunk : index
+    %from_src0 = index.cmp ult, %within, %src0_chunk : index
+    scf.if %from_src0 {
+      %src_outer0 = index.mul %outer, %src0_chunk : index
+      %src_outer = index.assume %src_outer0 [range(%src_outer0, 0, 536870908)] : index
+      %src_index0 = index.add %src_outer, %within : index
+      %src_index = index.assume %src_index0 [range(%src_index0, 0, 536870908)] : index
+      %value = vector.load %src0_view[%src_index] : view<536870912xf16, #dense> -> vector<4xf16>
+      vector.store %value, %dst_view[%dst_index] : vector<4xf16>, view<536870912xf16, #dense>
+    } else {
+      %src_outer0 = index.mul %outer, %src1_chunk : index
+      %src_outer = index.assume %src_outer0 [range(%src_outer0, 0, 536870908)] : index
+      %src_within0 = index.sub %within, %src0_chunk : index
+      %src_within = index.assume %src_within0 [range(%src_within0, 0, 536870908)] : index
+      %src_index0 = index.add %src_outer, %src_within : index
+      %src_index = index.assume %src_index0 [range(%src_index0, 0, 536870908)] : index
+      %value = vector.load %src1_view[%src_index] : view<536870912xf16, #dense> -> vector<4xf16>
+      vector.store %value, %dst_view[%dst_index] : vector<4xf16>, view<536870912xf16, #dense>
+    }
+  }
+  kernel.return
+}

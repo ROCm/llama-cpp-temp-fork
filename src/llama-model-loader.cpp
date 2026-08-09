@@ -8,15 +8,223 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cinttypes>
 #include <cstdint>
 #include <cstring>
 #include <future>
 #include <regex>
 
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
+
+llama_streamed_source_file::llama_streamed_source_file(const llama_file & file, uint16_t split_index) :
+        fd(-1),
+        file_size(file.size()),
+        read_alignment(file.read_alignment()) {
+#if defined(_WIN32)
+    fd = _dup(file.file_id());
+#else
+    fd = dup(file.file_id());
+#endif
+    if (fd < 0) {
+        throw std::runtime_error(format("failed to duplicate model split %u file descriptor: %s",
+                unsigned(split_index), strerror(errno)));
+    }
+}
+
+llama_streamed_source_file::~llama_streamed_source_file() {
+    if (fd < 0) {
+        return;
+    }
+#if defined(_WIN32)
+    _close(fd);
+#else
+    close(fd);
+#endif
+}
+
+llama_streamed_tensor_sources::llama_streamed_tensor_sources(size_t max_tensors) {
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * std::max<size_t>(max_tensors, 1),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    context.reset(ggml_init(params));
+    if (!context) {
+        throw std::runtime_error("failed to create streamed tensor metadata context");
+    }
+    sources.reserve(max_tensors);
+    names.reserve(max_tensors);
+}
+
+llama_streamed_tensor_source * llama_streamed_tensor_sources::add(
+        const llama_file & file,
+        uint16_t           split_index,
+        size_t             offset,
+        const ggml_tensor & metadata,
+        const llama_streamed_tensor_group_spec & group_spec) {
+    const char * name = ggml_get_name(&metadata);
+    if (!name || name[0] == '\0') {
+        throw std::runtime_error("cannot stream an unnamed model tensor");
+    }
+    if (names.find(name) != names.end()) {
+        throw std::runtime_error(format("streamed tensor '%s' was registered twice", name));
+    }
+
+    const size_t length = ggml_nbytes(&metadata);
+    if (length == 0 || offset > file.size() || length > file.size() - offset) {
+        throw std::runtime_error(format(
+                "streamed tensor '%s' source range [%zu, %zu) is outside split %u (%zu bytes)",
+                name, offset, offset + length, unsigned(split_index), file.size()));
+    }
+    if (group_spec.group_key == 0 || group_spec.record_count == 0 || group_spec.plane_count == 0 ||
+        group_spec.plane_index >= group_spec.plane_count || length % group_spec.record_count != 0) {
+        throw std::runtime_error(format("streamed tensor '%s' has an invalid record group", name));
+    }
+
+    auto group_it = groups.find(group_spec.group_key);
+    if (group_it == groups.end()) {
+        group_state state;
+        state.record_count = group_spec.record_count;
+        state.plane_count  = group_spec.plane_count;
+        group_it = groups.emplace(group_spec.group_key, std::move(state)).first;
+    } else if (group_it->second.record_count != group_spec.record_count ||
+               group_it->second.plane_count != group_spec.plane_count) {
+        throw std::runtime_error(format("streamed tensor '%s' disagrees with group 0x%016" PRIx64, name,
+                group_spec.group_key));
+    }
+
+    auto layer_it = group_it->second.layers.find(group_spec.layer_index);
+    if (layer_it == group_it->second.layers.end()) {
+        layer_state state;
+        state.planes.resize(group_spec.plane_count, nullptr);
+        layer_it = group_it->second.layers.emplace(group_spec.layer_index, std::move(state)).first;
+    }
+    if (layer_it->second.planes.at(group_spec.plane_index) != nullptr) {
+        throw std::runtime_error(format(
+                "streamed group 0x%016" PRIx64 " layer %u plane %u was registered twice",
+                group_spec.group_key, group_spec.layer_index, unsigned(group_spec.plane_index)));
+    }
+
+    auto file_it = files.find(split_index);
+    if (file_it == files.end()) {
+        auto source_file = std::make_shared<llama_streamed_source_file>(file, split_index);
+        file_it = files.emplace(split_index, std::move(source_file)).first;
+    } else if (file_it->second->file_size != file.size() ||
+               file_it->second->read_alignment != file.read_alignment()) {
+        throw std::runtime_error(format("model split %u source changed while registering streamed tensors",
+                unsigned(split_index)));
+    }
+
+    ggml_tensor * tensor = ggml_dup_tensor(context.get(), &metadata);
+    ggml_set_name(tensor, name);
+    std::copy(std::begin(metadata.nb), std::end(metadata.nb), std::begin(tensor->nb));
+
+    auto source = std::make_unique<llama_streamed_tensor_source>();
+    source->file   = file_it->second;
+    source->name   = name;
+    source->tensor = tensor;
+
+    uint32_t cache_layout_row_count   = 0;
+    uint32_t cache_layout_block_count = 0;
+    uint32_t cache_layout_block_bytes = 0;
+    if (group_spec.cache_layout != GGML_BACKEND_STREAMED_WEIGHT_LAYOUT_NONE) {
+        const int64_t block_size = ggml_blck_size(metadata.type);
+        const size_t  block_bytes = ggml_type_size(metadata.type);
+        const uint64_t record_size = length / group_spec.record_count;
+        const uint64_t trailing_records = uint64_t(metadata.ne[2]) * uint64_t(metadata.ne[3]);
+        if (group_spec.cache_layout != GGML_BACKEND_STREAMED_WEIGHT_LAYOUT_ROW_TILE_BLOCK ||
+            group_spec.cache_layout_tile_rows == 0 || block_size <= 0 || metadata.ne[0] <= 0 ||
+            metadata.ne[1] <= 0 || metadata.ne[0] % block_size != 0 ||
+            trailing_records != group_spec.record_count ||
+            uint64_t(metadata.ne[1]) > UINT32_MAX || uint64_t(metadata.ne[0] / block_size) > UINT32_MAX ||
+            block_bytes > UINT32_MAX || uint64_t(metadata.ne[1]) % group_spec.cache_layout_tile_rows != 0 ||
+            uint64_t(metadata.ne[1]) * uint64_t(metadata.ne[0] / block_size) * uint64_t(block_bytes) != record_size) {
+            throw std::runtime_error(format("streamed tensor '%s' has an invalid cache layout", name));
+        }
+        cache_layout_row_count   = uint32_t(metadata.ne[1]);
+        cache_layout_block_count = uint32_t(metadata.ne[0] / block_size);
+        cache_layout_block_bytes = uint32_t(block_bytes);
+    }
+    source->backend_source = {
+        /* .fd             = */ source->file->fd,
+        /* .file_size      = */ source->file->file_size,
+        /* .read_alignment = */ source->file->read_alignment,
+        /* .offset         = */ offset,
+        /* .length         = */ length,
+        /* .group_identity = */ &group_it->second,
+        /* .layer_index    = */ group_spec.layer_index,
+        /* .record_count   = */ group_spec.record_count,
+        /* .plane_index    = */ group_spec.plane_index,
+        /* .plane_count    = */ group_spec.plane_count,
+        /* .record_stride  = */ 0,
+        /* .destination_offset = */ 0,
+        /* .record_size    = */ length / group_spec.record_count,
+        /* .cache_layout   = */ group_spec.cache_layout,
+        /* .cache_layout_row_count = */ cache_layout_row_count,
+        /* .cache_layout_block_count = */ cache_layout_block_count,
+        /* .cache_layout_block_bytes = */ cache_layout_block_bytes,
+        /* .cache_layout_tile_rows = */ group_spec.cache_layout_tile_rows,
+    };
+
+    auto * source_ptr = source.get();
+    sources.emplace_back(std::move(source));
+    names.emplace(source_ptr->name);
+
+    layer_it->second.planes[group_spec.plane_index] = source_ptr;
+    const bool group_complete = std::all_of(
+            layer_it->second.planes.begin(), layer_it->second.planes.end(),
+            [](const llama_streamed_tensor_source * plane) { return plane != nullptr; });
+    if (group_complete) {
+        size_t record_stride = 0;
+        for (auto * plane : layer_it->second.planes) {
+            plane->backend_source.destination_offset = record_stride;
+            if (plane->backend_source.record_size > std::numeric_limits<size_t>::max() - record_stride) {
+                throw std::runtime_error(format("streamed group 0x%016" PRIx64 " record stride overflows",
+                        group_spec.group_key));
+            }
+            record_stride += plane->backend_source.record_size;
+        }
+        for (auto * plane : layer_it->second.planes) {
+            plane->backend_source.record_stride = record_stride;
+        }
+    }
+    return source_ptr;
+}
+
+bool llama_streamed_tensor_sources::contains(const char * name) const {
+    return name && names.find(name) != names.end();
+}
+
+const std::vector<std::unique_ptr<llama_streamed_tensor_source>> &
+llama_streamed_tensor_sources::all() const {
+    return sources;
+}
+
+void llama_streamed_tensor_sources::validate_groups_complete() const {
+    for (const auto & entry : groups) {
+        for (const auto & layer : entry.second.layers) {
+            const bool complete = std::all_of(
+                    layer.second.planes.begin(), layer.second.planes.end(),
+                    [](const llama_streamed_tensor_source * plane) {
+                        return plane && plane->backend_source.record_stride != 0;
+                    });
+            if (!complete) {
+                throw std::runtime_error(format(
+                        "streamed tensor group 0x%016" PRIx64 " layer %u is incomplete",
+                        entry.first, layer.first));
+            }
+        }
+    }
+}
 
 const char * llama_file_version_name(llama_fver version) {
     switch (version) {
@@ -1026,23 +1234,66 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
     return op_supported;
 }
 
-// find the first buffer type in the list that can use the tensor
-static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list) {
+struct weight_buft_selection {
+    ggml_backend_buffer_type_t buft = nullptr;
+    bool streamed = false;
+};
+
+static bool weight_streamed_supported(ggml_backend_dev_t dev, const ggml_tensor * tensor) {
+    if (!dev || !tensor) {
+        return false;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (!reg) {
+        return false;
+    }
+    auto * supports_streamed_weight = reinterpret_cast<ggml_backend_dev_supports_streamed_weight_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_supports_streamed_weight"));
+    return supports_streamed_weight && supports_streamed_weight(dev, tensor);
+}
+
+static ggml_backend_buffer_t attach_streamed_weight(
+        ggml_backend_dev_t dev,
+        ggml_tensor * tensor,
+        const ggml_backend_streamed_weight_source * source) {
+    if (!dev || !tensor || !source) {
+        return nullptr;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (!reg) {
+        return nullptr;
+    }
+    auto * attach = reinterpret_cast<ggml_backend_dev_attach_streamed_weight_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_attach_streamed_weight"));
+    return attach ? attach(dev, tensor, source) : nullptr;
+}
+
+// Streamable tensors query the file-backed contract before the ordinary whole-tensor probe.
+static weight_buft_selection select_weight_buft(
+        const llama_hparams & hparams,
+        ggml_tensor *         tensor,
+        ggml_op               op,
+        const buft_list_t *   buft_list,
+        bool                  streamable) {
     GGML_ASSERT(!buft_list->empty());
     for (const auto & cur : *buft_list) {
         ggml_backend_dev_t cur_dev = cur.first;
         ggml_backend_buffer_type_t cur_buft = cur.second;
+        if (streamable && weight_streamed_supported(cur_dev, tensor)) {
+            return {cur_buft, true};
+        }
         if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
-            return cur_buft;
+            return {cur_buft, false};
         }
     }
 
-    return nullptr;
+    return {};
 }
 
 struct ggml_tensor * llama_model_loader::create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
-        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags,
+        const llama_streamed_tensor_group_spec * streamed_group) {
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
@@ -1073,10 +1324,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         return it->second.get();
     };
 
-    auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
+    auto buft_for_tensor = [&](ggml_tensor * t_meta) -> weight_buft_selection {
         if (!t_meta) {
             if (flags & TENSOR_NOT_REQUIRED) {
-                return nullptr;
+                return {};
             }
             throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
         }
@@ -1104,7 +1355,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             size_data -= nbytes;
             n_created++;
 
-            return nullptr;
+            return {};
         }
 
         // tensors with "bias" suffix are always used with GGML_OP_ADD or GGML_OP_ADD_ID
@@ -1148,7 +1399,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
         }
 
-        ggml_backend_buffer_type_t buft = nullptr;
+        weight_buft_selection placement;
 
         // check overrides
         if (tensor_buft_overrides) {
@@ -1158,7 +1409,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 if (std::regex_search(tensor_name, pattern)) {
                     if (overrides->buft == ggml_backend_cpu_buffer_type()) {
                         // when overriding to a CPU buffer, consider the extra buffer types
-                        buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
+                        placement = select_weight_buft(hparams, t_meta, op, buft_list_cpu, false);
                         if (use_mmap) {
                             static std::once_flag once;
                             std::call_once(once, [] {
@@ -1166,46 +1417,50 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                             });
                         }
                     } else {
-                        buft = overrides->buft;
+                        placement.buft = overrides->buft;
+                        placement.streamed = (flags & TENSOR_STREAMABLE) && !files.empty() &&
+                                weight_streamed_supported(ggml_backend_buft_get_device(placement.buft), t_meta);
                     }
 
                     LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
                             tensor_name.c_str(),
                             ggml_nbytes(t_meta) / 1024 / 1024, ggml_type_name(t_meta->type),
-                            ggml_backend_buft_name(buft));
+                            ggml_backend_buft_name(placement.buft));
                     break;
                 }
             }
         }
 
-        if (!buft) {
-            buft = select_weight_buft(hparams, t_meta, op, buft_list);
-            if (!buft) {
+        if (!placement.buft) {
+            placement = select_weight_buft(
+                    hparams, t_meta, op, buft_list,
+                    (flags & TENSOR_STREAMABLE) && !files.empty());
+            if (!placement.buft) {
                 throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
             }
         }
 
         // avoid using a host buffer when using mmap
-        auto * buft_dev = ggml_backend_buft_get_device(buft);
-        if (use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+        auto * buft_dev = ggml_backend_buft_get_device(placement.buft);
+        if (!placement.streamed && use_mmap && buft_dev && placement.buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
             auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
             if (!cpu_dev) {
                 throw std::runtime_error("no CPU backend found");
             }
-            buft = ggml_backend_dev_buffer_type(cpu_dev);
+            placement.buft = ggml_backend_dev_buffer_type(cpu_dev);
         }
 
-        if (buft != buft_list->front().second) {
+        if (placement.buft != buft_list->front().second) {
             if (n_tensors_moved == 0) {
                 first_tensor_moved_name = t_meta->name;
                 first_tensor_moved_type_name = ggml_type_name(t_meta->type);
                 first_moved_from_buft = buft_list->front().second;
-                first_moved_to_buft   = buft;
+                first_moved_to_buft   = placement.buft;
             }
             n_tensors_moved++;
         }
 
-        return buft;
+        return placement;
     };
 
     if (files.empty()) {
@@ -1238,20 +1493,59 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
         ggml_set_name(&t_meta, tn.str().c_str());
 
-        ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
-        GGML_ASSERT(buft != nullptr);
-        ggml_context * ctx = ctx_for_buft(buft);
+        const auto placement = buft_for_tensor(&t_meta);
+        GGML_ASSERT(placement.buft != nullptr);
+        GGML_ASSERT(!placement.streamed);
+        ggml_context * ctx = ctx_for_buft(placement.buft);
         ggml_tensor * ret = ggml_dup_tensor(ctx, &t_meta);
         ggml_set_name(ret, tn.str().c_str());
         return ret;
     }
 
     ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
-    ggml_backend_buffer_type_t buft = buft_for_tensor(t_meta);
-    if (buft == nullptr) {
+    const auto placement = buft_for_tensor(t_meta);
+    if (placement.buft == nullptr) {
         return nullptr; // return type is ggml_tensor *
     }
-    ggml_context * ctx = ctx_for_buft(buft);
+
+    if (placement.streamed) {
+        const struct ggml_tensor * cur = check_tensor_dims(tn.str(), ne, !(flags & TENSOR_NOT_REQUIRED));
+        if (!cur) {
+            return nullptr;
+        }
+        if (flags & TENSOR_DUPLICATED) {
+            throw std::runtime_error(format("streamed tensor '%s' cannot be duplicated", tn.str().c_str()));
+        }
+        if (!streamed_group) {
+            throw std::runtime_error(format("streamed tensor '%s' has no record group", tn.str().c_str()));
+        }
+        if (!streamed_tensor_sources) {
+            streamed_tensor_sources = std::make_unique<llama_streamed_tensor_sources>(n_tensors);
+        }
+        const auto & weight = require_weight(tn.str().c_str());
+        GGML_ASSERT(weight.idx < files.size());
+        llama_streamed_tensor_source * source = streamed_tensor_sources->add(
+                *files.at(weight.idx), weight.idx, weight.offs, *cur, *streamed_group);
+        ggml_tensor * tensor = source->tensor;
+        ggml_backend_dev_t dev = ggml_backend_buft_get_device(placement.buft);
+        ggml_backend_buffer_t source_buffer = attach_streamed_weight(dev, tensor, &source->backend_source);
+        if (!source_buffer || tensor->buffer != source_buffer || tensor->data == nullptr ||
+                ggml_backend_buffer_get_type(source_buffer) != placement.buft ||
+                ggml_backend_buffer_get_size(source_buffer) != 0 ||
+                ggml_backend_buffer_get_usage(source_buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            if (tensor->buffer == source_buffer) {
+                tensor->buffer = nullptr;
+                tensor->data   = nullptr;
+            }
+            ggml_backend_buffer_free(source_buffer);
+            throw std::runtime_error(format("backend failed to attach streamed tensor '%s'", tn.str().c_str()));
+        }
+        source->buffer.reset(source_buffer);
+        n_created++;
+        return tensor;
+    }
+
+    ggml_context * ctx = ctx_for_buft(placement.buft);
 
     // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
     if (flags & TENSOR_DUPLICATED) {
@@ -1311,6 +1605,9 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
 }
 
 void llama_model_loader::done_getting_tensors(bool partial) const {
+    if (streamed_tensor_sources) {
+        streamed_tensor_sources->validate_groups_complete();
+    }
     if (n_created > n_tensors) {
         throw std::runtime_error(format("%s: too many tensors created; expected %d, got %d", __func__, n_tensors, n_created));
     }
@@ -1332,6 +1629,8 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     if (use_mmap) {
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
+        // Whole-file MAP_POPULATE would defeat out-of-core expert residency.
+        const bool populate_whole_file = prefetch && !streamed_tensor_sources;
         for (const auto & file : files) {
             bool is_numa = false;
 
@@ -1344,7 +1643,7 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
                 }
             }
 
-            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch ? -1 : 0, is_numa);
+            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), populate_whole_file ? -1 : 0, is_numa);
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
@@ -1357,8 +1656,15 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
 
     // compute the total size of all tensors for progress reporting
     for (const auto & it : weights_map) {
+        if (streamed_tensor_sources && streamed_tensor_sources->contains(it.first.c_str())) {
+            continue;
+        }
         size_data += ggml_nbytes(it.second.tensor);
     }
+}
+
+std::unique_ptr<llama_streamed_tensor_sources> llama_model_loader::take_streamed_tensor_sources() {
+    return std::move(streamed_tensor_sources);
 }
 
 void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const {

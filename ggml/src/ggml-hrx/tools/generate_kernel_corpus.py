@@ -64,15 +64,15 @@ static const kernel_source_record_entry kernel_source_records[] = {{
 """
 
 CORPUS_DATA_TEMPLATE = """{kernel_arrays}
-static const kernel_definition qwen_kernel_definitions[] = {{
+static const kernel_definition kernel_definitions[] = {{
 {kernel_records}
 }};
 
-static const kernel_corpus qwen_kernel_corpus = {{
+static const kernel_corpus embedded_kernel_corpus = {{
     "ggml-hrx-kernel-corpus-v2",
     {upstream_revision},
     {plan_case_count},
-    {{ qwen_kernel_definitions, {kernel_count} }},
+    {{ kernel_definitions, {kernel_count} }},
 }};
 """
 
@@ -115,10 +115,63 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-output", type=pathlib.Path, required=True)
     parser.add_argument("--corpus-output", type=pathlib.Path, required=True)
     parser.add_argument("--catalog-output", type=pathlib.Path, required=True)
-    parser.add_argument("--manifest", type=pathlib.Path, required=True)
+    parser.add_argument("--manifest", type=pathlib.Path, action="append", required=True)
     parser.add_argument("--corpus-dir", type=pathlib.Path, required=True)
     parser.add_argument("--depfile", type=pathlib.Path)
     return parser.parse_args()
+
+
+def qualify_path(prefix: pathlib.Path, value: str) -> str:
+    return (prefix / value).as_posix()
+
+
+def merged_manifest(manifest_paths: List[pathlib.Path], corpus_dir: pathlib.Path) -> dict:
+    manifests = []
+    for manifest_path in manifest_paths:
+        manifest = json.loads(read_text(manifest_path))
+        try:
+            prefix = manifest_path.resolve().parent.relative_to(corpus_dir.resolve())
+        except ValueError as exc:
+            raise RuntimeError(f"manifest {manifest_path} is outside corpus directory {corpus_dir}") from exc
+        manifest["resources"] = [
+            qualify_path(prefix, path) for path in manifest.get("resources", [])
+        ]
+        for export in manifest.get("exports", []):
+            export["source"] = qualify_path(prefix, export["source"])
+            export["compile_dependencies"] = [
+                qualify_path(prefix, path) for path in export.get("compile_dependencies", [])
+            ]
+            recipe = export.get("compile_recipe", {})
+            recipe["primary_sources"] = [
+                qualify_path(prefix, path) for path in recipe.get("primary_sources", [])
+            ]
+            recipe["library_sources"] = [
+                qualify_path(prefix, path) for path in recipe.get("library_sources", [])
+            ]
+        manifests.append(manifest)
+
+    exports = {}
+    plan_cases = []
+    resources = set()
+    for manifest in manifests:
+        for export in manifest.get("exports", []):
+            key = (
+                export.get("family", DEFAULT_KERNEL_FAMILY),
+                export["name"],
+                export.get("target_selector", ""),
+            )
+            if key in exports:
+                raise RuntimeError(f"duplicate kernel export {key[0]}:{key[1]}:{key[2]}")
+            exports[key] = export
+        plan_cases.extend(manifest.get("plan_cases", []))
+        resources.update(manifest.get("resources", []))
+
+    return {
+        "upstream_revision": "+".join(manifest.get("upstream_revision", "unknown") for manifest in manifests),
+        "exports": [exports[key] for key in sorted(exports)],
+        "plan_cases": plan_cases,
+        "resources": sorted(resources),
+    }
 
 
 def read_text(path: pathlib.Path) -> str:
@@ -249,6 +302,8 @@ def collect_sources(manifest: dict) -> Tuple[List[str], Dict[str, List[str]]]:
         source_dependencies[primary] = dependencies
         all_sources.add(primary)
         all_sources.update(dependencies)
+
+    all_sources.update(manifest.get("resources", []))
 
     return sorted(all_sources), source_dependencies
 
@@ -421,7 +476,7 @@ def write_depfile(path: pathlib.Path, outputs: List[pathlib.Path], inputs: List[
 def main() -> int:
     args = parse_args()
     try:
-        manifest = json.loads(read_text(args.manifest))
+        manifest = merged_manifest(args.manifest, args.corpus_dir)
         source_include, corpus_include, catalog_include, input_files, byte_count = generate_includes(args, manifest)
         args.source_output.parent.mkdir(parents=True, exist_ok=True)
         args.corpus_output.parent.mkdir(parents=True, exist_ok=True)
@@ -432,7 +487,7 @@ def main() -> int:
         if args.depfile is not None:
             args.depfile.parent.mkdir(parents=True, exist_ok=True)
             write_depfile(args.depfile, [args.source_output, args.corpus_output, args.catalog_output],
-                          [args.manifest, *input_files])
+                          [*args.manifest, *input_files])
     except Exception as exc:
         print(f"generate_kernel_corpus.py: {exc}", file=sys.stderr)
         return 1

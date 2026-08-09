@@ -41,7 +41,7 @@ int main(int argc, char ** argv) {
                                      (plan.errors.empty() ? std::string("unknown error") : plan.errors.front()));
         }
 
-        const ggml::hrx::kernel_corpus &    corpus       = ggml::hrx::get_qwen_kernel_corpus();
+        const ggml::hrx::kernel_corpus &    corpus       = ggml::hrx::get_kernel_corpus();
         const ggml::hrx::CommandProgram     commands     = ggml::hrx::build_command_program(plan, corpus);
         const ggml::hrx::VerificationResult verification = ggml::hrx::verify_command_program(plan, corpus, commands);
 

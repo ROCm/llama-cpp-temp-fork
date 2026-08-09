@@ -1,0 +1,81 @@
+config.decl @shape_repeat_f32_src_d0 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_src_d1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_src_d2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_src_d3 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_dst_d0 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_dst_d1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_dst_d2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_dst_d3 : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_repeat_f32_src_total_size : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_repeat_f32_dst_total_size : %value: index where [range(%value, 1, 1073741824)]
+config.decl @tuning_repeat_f32_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_repeat_f32") @hrx2_repeat_f32() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %total_size = config.get @shape_repeat_f32_dst_total_size : index
+  %workgroup_size = config.get @tuning_repeat_f32_workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total_size, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %src_d0 = config.get @shape_repeat_f32_src_d0 : index
+  %src_d1 = config.get @shape_repeat_f32_src_d1 : index
+  %src_d2 = config.get @shape_repeat_f32_src_d2 : index
+  %src_d3 = config.get @shape_repeat_f32_src_d3 : index
+  %dst_d0 = config.get @shape_repeat_f32_dst_d0 : index
+  %dst_d1 = config.get @shape_repeat_f32_dst_d1 : index
+  %dst_d2 = config.get @shape_repeat_f32_dst_d2 : index
+  %dst_d3 = config.get @shape_repeat_f32_dst_d3 : index
+  %src_total_size = config.get @shape_repeat_f32_src_total_size : index
+  %dst_total_size = config.get @shape_repeat_f32_dst_total_size : index
+  %workgroup_size = config.get @tuning_repeat_f32_workgroup_size : index
+  %src_d0_bounded = index.assume %src_d0 [range(%src_d0, 1, 1048576)] : index
+  %src_d1_bounded = index.assume %src_d1 [range(%src_d1, 1, 1048576)] : index
+  %src_d2_bounded = index.assume %src_d2 [range(%src_d2, 1, 1048576)] : index
+  %src_d3_bounded = index.assume %src_d3 [range(%src_d3, 1, 1048576)] : index
+  %dst_d0_bounded = index.assume %dst_d0 [range(%dst_d0, 1, 1048576)] : index
+  %dst_d1_bounded = index.assume %dst_d1 [range(%dst_d1, 1, 1048576)] : index
+  %dst_d2_bounded = index.assume %dst_d2 [range(%dst_d2, 1, 1048576)] : index
+  %dst_d3_bounded = index.assume %dst_d3 [range(%dst_d3, 1, 1048576)] : index
+  %src_total_size_bounded = index.assume %src_total_size [range(%src_total_size, 1, 1073741824)] : index
+  %dst_total_size_bounded = index.assume %dst_total_size [range(%dst_total_size, 1, 1073741824)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 33554431)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_base = index.mul %workgroup, %workgroup_size : index
+  %linear0 = index.add %linear_base, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %linear, %dst_total_size_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<[%src_total_size_bounded]xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<[%dst_total_size_bounded]xf32, #dense>
+
+  scf.if %in_bounds {
+    %dst_i0 = index.rem %linear, %dst_d0_bounded : index
+    %dst_q0 = index.div %linear, %dst_d0_bounded : index
+    %dst_i1 = index.rem %dst_q0, %dst_d1_bounded : index
+    %dst_q1 = index.div %dst_q0, %dst_d1_bounded : index
+    %dst_i2 = index.rem %dst_q1, %dst_d2_bounded : index
+    %dst_i3 = index.div %dst_q1, %dst_d2_bounded : index
+    %src_i0 = index.rem %dst_i0, %src_d0_bounded : index
+    %src_i1 = index.rem %dst_i1, %src_d1_bounded : index
+    %src_i2 = index.rem %dst_i2, %src_d2_bounded : index
+    %src_i3 = index.rem %dst_i3, %src_d3_bounded : index
+    %src_32 = index.mul %src_i3, %src_d2_bounded : index
+    %src_32_add = index.add %src_32, %src_i2 : index
+    %src_321 = index.mul %src_32_add, %src_d1_bounded : index
+    %src_321_add = index.add %src_321, %src_i1 : index
+    %src_3210 = index.mul %src_321_add, %src_d0_bounded : index
+    %src_index0 = index.add %src_3210, %src_i0 : index
+    %src_index = index.assume %src_index0 [range(%src_index0, 0, 1073741823), lt(%src_index0, %src_total_size_bounded)] : index
+    %value = view.load %src0_view[%src_index] : view<[%src_total_size_bounded]xf32, #dense> -> f32
+    view.store %value, %dst_view[%linear] : f32, view<[%dst_total_size_bounded]xf32, #dense>
+  }
+  kernel.return
+}

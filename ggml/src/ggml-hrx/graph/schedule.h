@@ -9,6 +9,15 @@
 
 namespace ggml::hrx {
 
+struct DeferredCompileParameter {
+    ValueId value = kInvalidId;
+    std::string property;
+
+    bool operator==(const DeferredCompileParameter & other) const {
+        return value == other.value && property == other.property;
+    }
+};
+
 struct KernelSpecialization {
     enum class ExecutionKind : uint8_t {
         Native,
@@ -22,6 +31,7 @@ struct KernelSpecialization {
     std::map<std::string, int64_t> integer_parameters;
     ExecutionKind execution_kind = ExecutionKind::Native;
     std::map<std::string, std::string> compile_parameters;
+    std::map<std::string, DeferredCompileParameter> deferred_compile_parameters;
     uint64_t kernel_id = GGML_HRX_KERNEL_ID_UNCATALOGED;
 };
 
@@ -30,9 +40,11 @@ struct TensorBinding {
     ValueId value = kInvalidId;
     size_t offset = 0;
     size_t length = 0;
+    std::string storage_binding;
 
     bool operator==(const TensorBinding & other) const {
-        return role == other.role && value == other.value && offset == other.offset && length == other.length;
+        return role == other.role && value == other.value && offset == other.offset && length == other.length &&
+               storage_binding == other.storage_binding;
     }
     bool operator!=(const TensorBinding & other) const { return !(*this == other); }
 };
@@ -41,6 +53,14 @@ struct Dispatch {
     KernelSpecialization kernel;
     std::vector<TensorBinding> bindings;
     std::vector<uint32_t> dependencies;
+    ValueId streamed_weight = kInvalidId;
+    ValueId streamed_expert_ids = kInvalidId;
+    bool streamed_missing_suffix = false;
+    uint32_t streamed_expert_begin = 0;
+    uint32_t streamed_expert_end = 0xffffffffu;
+    uint32_t streamed_load_chunk_size = 0;
+
+    bool streamed() const { return streamed_weight != kInvalidId || streamed_expert_ids != kInvalidId; }
 };
 
 enum class RootDisposition : uint8_t {

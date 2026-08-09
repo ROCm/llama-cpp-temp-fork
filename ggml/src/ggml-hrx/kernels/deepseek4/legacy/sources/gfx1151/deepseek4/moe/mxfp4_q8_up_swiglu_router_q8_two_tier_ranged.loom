@@ -1,0 +1,1192 @@
+// High-capacity two-tier streamed MXFP4 x Q8 expert-stationary MUL_MAT_ID for gfx1151.
+//
+// Each workgroup owns 128 output rows of one expert. Eight wave32s each own a
+// 16-row signed-int8 WMMA tile while sharing up to 32 routed activations and a
+// 32-value K tile. Activations and their F32 K32 scales are produced by the
+// native quant_act_q8 prepass.
+// host_cache begins with int32 slot_map[1024] followed by the immutable
+// begin-layer residency cohort map. The global slot ID dynamically selects
+// device_cache for slots [0, D) or host_cache for slots [D, D + H). No expert
+// identity or tier is compiled into the kernel.
+
+config.decl @hrx2_shape_mul_mat_id_k : %value: index where [range(%value, 32, 32768), mul(%value, 32)]
+config.decl @hrx2_shape_mul_mat_id_rows : %value: index where [range(%value, 1, 32768)]
+config.decl @hrx2_shape_mul_mat_id_nexperts : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2_shape_mul_mat_id_nselected : %value: index where [range(%value, 1, 128)]
+config.decl @hrx2_shape_mul_mat_id_ntokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_mul_mat_id_src1_selected_stride : %value: index where [range(%value, 0, 1048576)]
+config.decl @hrx2_shape_mul_mat_id_src1_token_stride : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2_shape_mul_mat_id_dst_token_stride : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2_shape_mul_mat_id_host_slot_base_offset_bytes : %value: index where [range(%value, 0, 274877906944)]
+config.decl @hrx2_shape_mul_mat_id_device_slot_base_offset_bytes : %value: index where [range(%value, 0, 274877906944)]
+config.decl @hrx2_shape_mul_mat_id_device_slot_count : %value: index where [range(%value, 0, 11008)]
+config.decl @hrx2_shape_mul_mat_id_host_slot_count : %value: index where [range(%value, 0, 11008)]
+config.decl @hrx2_shape_mul_mat_id_slot_stride_bytes : %value: index where [range(%value, 1, 274877906944)]
+config.decl @hrx2_up_only_plane_offset_bytes : %value: index where [range(%value, 0, 274877906944)]
+config.decl @hrx2_up_clamp_min : %value: f32
+config.decl @hrx2_up_clamp_max : %value: f32
+config.decl @hrx2_router_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_mul_mat_id_streamed_cohort : %value: index where [range(%value, 0, 2)]
+
+kernel.def export("hrx2_mxfp4_q8_up_swiglu_router_q8_two_tier_ranged") @hrx2_mxfp4_q8_up_swiglu_router_q8_two_tier_ranged() {
+  %one = index.constant 1 : index
+  %rows_per_tile = index.constant 128 : index
+  %workgroup_size = index.constant 256 : index
+  %rows0 = config.get @hrx2_shape_mul_mat_id_rows : index
+  %nexperts0 = config.get @hrx2_shape_mul_mat_id_nexperts : index
+  %rows = index.assume %rows0 [range(%rows0, 1, 32768)] : index
+  %nexperts = index.assume %nexperts0 [range(%nexperts0, 1, 1024)] : index
+  %tiles_numerator = index.add %rows, %rows_per_tile : index
+  %tiles_adjusted = index.sub %tiles_numerator, %one : index
+  %row_tiles = index.div %tiles_adjusted, %rows_per_tile : index
+  kernel.launch.config workgroups(%row_tiles, %nexperts, %one) workgroup_size(%workgroup_size, %one, %one) : index
+} launch(%expert_begin_i64: i64, %expert_end_i64: i64, %host_cache: buffer, %device_cache: buffer, %aq: buffer, %as: buffer,
+          %out_qs: buffer, %out_scales: buffer, %gate: buffer, %router: buffer, %table: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %four = index.constant 4 : index
+  %five_i32 = scalar.constant 5 : i32
+  %eleven_i32 = scalar.constant 11 : i32
+  %down_token_stride_i32 = scalar.constant 4096 : i32
+  %eight = index.constant 8 : index
+  %twelve = index.constant 12 : index
+  %thirteen = index.constant 13 : index
+  %sixteen = index.constant 16 : index
+  %seventeen = index.constant 17 : index
+  %thirtytwo = index.constant 32 : index
+  %onetwentyeight = index.constant 128 : index
+  %twofiftyfive = index.constant 255 : index
+  %twofiftysix = index.constant 256 : index
+  %fivehundredtwelve = index.constant 512 : index
+  %sevenhundredsixtyeight = index.constant 768 : index
+  %one_thousand_twentyfour = index.constant 1024 : index
+  %one_thousand_twohundred_eighty = index.constant 1280 : index
+  %one_thousand_fivehundred_thirtysix = index.constant 1536 : index
+  %one_thousand_sevenhundred_ninetytwo = index.constant 1792 : index
+  %two_thousand_fortyeight = index.constant 2048 : index
+  %two_thousand_threehundred_four = index.constant 2304 : index
+  %two_thousand_fivehundred_sixty = index.constant 2560 : index
+  %two_thousand_eighthundred_sixteen = index.constant 2816 : index
+  %three_thousand_seventytwo = index.constant 3072 : index
+  %three_thousand_threehundred_twentyeight = index.constant 3328 : index
+  %three_thousand_fivehundred_eightyfour = index.constant 3584 : index
+  %segment15_slots = index.constant 3840 : index
+  %segment16_slots = index.constant 4096 : index
+  %segment17_slots = index.constant 4352 : index
+  %segment18_slots = index.constant 4608 : index
+  %segment19_slots = index.constant 4864 : index
+  %segment20_slots = index.constant 5120 : index
+  %segment21_slots = index.constant 5376 : index
+  %segment22_slots = index.constant 5632 : index
+  %segment23_slots = index.constant 5888 : index
+  %segment24_slots = index.constant 6144 : index
+  %segment25_slots = index.constant 6400 : index
+  %segment26_slots = index.constant 6656 : index
+  %segment27_slots = index.constant 6912 : index
+  %segment28_slots = index.constant 7168 : index
+  %segment29_slots = index.constant 7424 : index
+  %segment30_slots = index.constant 7680 : index
+  %segment31_slots = index.constant 7936 : index
+  %segment32_slots = index.constant 8192 : index
+  %segment33_slots = index.constant 8448 : index
+  %segment34_slots = index.constant 8704 : index
+  %segment35_slots = index.constant 8960 : index
+  %segment36_slots = index.constant 9216 : index
+  %segment37_slots = index.constant 9472 : index
+  %segment38_slots = index.constant 9728 : index
+  %segment39_slots = index.constant 9984 : index
+  %segment40_slots = index.constant 10240 : index
+  %segment41_slots = index.constant 10496 : index
+  %segment42_slots = index.constant 10752 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %minus_one_i32 = scalar.constant -1 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %two_i32 = scalar.constant 2 : i32
+  %eight_i32 = scalar.constant 8 : i32
+  %twentythree_i32 = scalar.constant 23 : i32
+  %twentyfour_i32 = scalar.constant 24 : i32
+  %byte_mask_i32 = scalar.constant 255 : i32
+  %minimum_scale_bits_i32 = scalar.constant 0x00200000 : i32
+  %quiet_nan_bits_i32 = scalar.constant 0x7fc00000 : i32
+  %zero_i8 = scalar.constant 0 : i8
+  %zero_f32 = scalar.constant 0.0 : f32
+  %qact_amax_eps = scalar.constant 1.0e-30 : f32
+  %qact_inv127 = scalar.constant 0.00787401574803149606 : f32
+  %qact_f127 = scalar.constant 127.0 : f32
+  %shuffle_xor1 = scalar.constant 1 : i32
+  %shuffle_xor2 = scalar.constant 2 : i32
+  %shuffle_xor4 = scalar.constant 4 : i32
+  %shuffle_xor8 = scalar.constant 8 : i32
+  %shuffle_xor16 = scalar.constant 16 : i32
+  %shuffle_width = scalar.constant 32 : i32
+  %zero_i8x32 = vector.constant 0 : vector<32xi8>
+  %zero_i32x4 = vector.constant 0 : vector<4xi32>
+  %zero_i32x8 = vector.constant 0 : vector<8xi32>
+  %zero_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %e2m1_zero = vector.constant 0 : vector<32xi8>
+  %e2m1_one = vector.constant 1 : vector<32xi8>
+  %e2m1_two = vector.constant 2 : vector<32xi8>
+  %e2m1_four = vector.constant 4 : vector<32xi8>
+  %e2m1_six = vector.constant 6 : vector<32xi8>
+  %e2m1_seven = vector.constant 7 : vector<32xi8>
+  %e2m1_eight = vector.constant 8 : vector<32xi8>
+
+  %k0 = config.get @hrx2_shape_mul_mat_id_k : index
+  %rows0 = config.get @hrx2_shape_mul_mat_id_rows : index
+  %nexperts0 = config.get @hrx2_shape_mul_mat_id_nexperts : index
+  %nselected0 = config.get @hrx2_shape_mul_mat_id_nselected : index
+  %ntokens0 = config.get @hrx2_shape_mul_mat_id_ntokens : index
+  %src1_selected_stride0 = config.get @hrx2_shape_mul_mat_id_src1_selected_stride : index
+  %src1_token_stride0 = config.get @hrx2_shape_mul_mat_id_src1_token_stride : index
+  %dst_token_stride0 = config.get @hrx2_shape_mul_mat_id_dst_token_stride : index
+  %host_slot_base_offset0 = config.get @hrx2_shape_mul_mat_id_host_slot_base_offset_bytes : index
+  %device_slot_base_offset0 = config.get @hrx2_shape_mul_mat_id_device_slot_base_offset_bytes : index
+  %device_slot_count0 = config.get @hrx2_shape_mul_mat_id_device_slot_count : index
+  %host_slot_count0 = config.get @hrx2_shape_mul_mat_id_host_slot_count : index
+  %slot_stride0 = config.get @hrx2_shape_mul_mat_id_slot_stride_bytes : index
+  %plane_offset0 = config.get @hrx2_up_only_plane_offset_bytes : index
+  %streamed_cohort0 = config.get @hrx2_shape_mul_mat_id_streamed_cohort : index
+  %up_clamp_min = config.get @hrx2_up_clamp_min : f32
+  %up_clamp_max = config.get @hrx2_up_clamp_max : f32
+  %router_token_stride = config.get @hrx2_router_token_stride : index
+  %k = index.assume %k0 [range(%k0, 32, 32768)] : index
+  %rows = index.assume %rows0 [range(%rows0, 1, 32768)] : index
+  %nexperts = index.assume %nexperts0 [range(%nexperts0, 1, 1024)] : index
+  %nselected = index.assume %nselected0 [range(%nselected0, 1, 128)] : index
+  %ntokens = index.assume %ntokens0 [range(%ntokens0, 1, 1048576)] : index
+  %src1_selected_stride = index.assume %src1_selected_stride0 [range(%src1_selected_stride0, 0, 1048576)] : index
+  %src1_token_stride = index.assume %src1_token_stride0 [range(%src1_token_stride0, 1, 1073741824)] : index
+  %dst_token_stride = index.assume %dst_token_stride0 [range(%dst_token_stride0, 1, 1073741824)] : index
+  %host_slot_base_offset = index.assume %host_slot_base_offset0 [range(%host_slot_base_offset0, 0, 274877906944)] : index
+  %device_slot_base_offset = index.assume %device_slot_base_offset0 [range(%device_slot_base_offset0, 0, 274877906944)] : index
+  %device_slot_count = index.assume %device_slot_count0 [range(%device_slot_count0, 0, 11008)] : index
+  %host_slot_count = index.assume %host_slot_count0 [range(%host_slot_count0, 0, 11008)] : index
+  %slot_count0 = index.add %device_slot_count, %host_slot_count : index
+  %slot_count = index.assume %slot_count0 [range(%slot_count0, 1, 11008)] : index
+  %slot_stride = index.assume %slot_stride0 [range(%slot_stride0, 1, 274877906944)] : index
+  %plane_offset = index.assume %plane_offset0 [range(%plane_offset0, 0, 274877906944)] : index
+  %streamed_cohort = index.assume %streamed_cohort0 [range(%streamed_cohort0, 0, 2)] : index
+
+  %tile0 = kernel.workgroup.id<x> : index
+  %tile = index.assume %tile0 [range(%tile0, 0, 32767)] : index
+  %expert0 = kernel.workgroup.id<y> : index
+  %expert = index.assume %expert0 [range(%expert0, 0, 1023)] : index
+  %expert_begin_scalar = scalar.assume %expert_begin_i64 [range(%expert_begin_i64, 0, 1023)] : i64
+  %expert_end_scalar = scalar.assume %expert_end_i64 [range(%expert_end_i64, 1, 1024)] : i64
+  %expert_begin = index.cast %expert_begin_scalar : i64 to index
+  %expert_end = index.cast %expert_end_scalar : i64 to index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %wave = index.div %lane, %thirtytwo : index
+  %wave_lane = index.rem %lane, %thirtytwo : index
+  %wave_row_base = index.mul %wave, %sixteen : index
+  %row_tile_base = index.mul %tile, %onetwentyeight : index
+
+  %host_cache_global = buffer.assume.memory_space<global> %host_cache : buffer
+  %device_cache_global = buffer.assume.memory_space<global> %device_cache : buffer
+  %aq_global = buffer.assume.memory_space<global> %aq : buffer
+  %as_global = buffer.assume.memory_space<global> %as : buffer
+  %out_qs_global = buffer.assume.memory_space<global> %out_qs : buffer
+  %out_scales_global = buffer.assume.memory_space<global> %out_scales : buffer
+  %gate_global = buffer.assume.memory_space<global> %gate : buffer
+  %router_global = buffer.assume.memory_space<global> %router : buffer
+  %table_global = buffer.assume.memory_space<global> %table : buffer
+  // Header loads stay rooted in host_cache and depend only on the workgroup
+  // expert ID, preserving the scalar SGPR lookup contract.
+  %host_cache_na, %device_cache_na, %aq_na, %as_na, %out_qs_na, %out_scales_na, %gate_na, %router_na, %table_na = buffer.assume.noalias %host_cache_global, %device_cache_global, %aq_global, %as_global, %out_qs_global, %out_scales_global, %gate_global, %router_global, %table_global : buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %cache_i32_view = buffer.view %host_cache_na[%base] : buffer -> view<1024xi32, #dense>
+  %cohort_offset = index.constant 4096 : offset
+  %cache_cohort_view = buffer.view %host_cache_na[%cohort_offset] : buffer -> view<1024xi32, #dense>
+  %aq_view = buffer.view %aq_na[%base] : buffer -> view<1073741824xi8, #dense>
+  %aq_word_view = buffer.view %aq_na[%base] : buffer -> view<268435456xi32, #dense>
+  %as_view = buffer.view %as_na[%base] : buffer -> view<33554432xf32, #dense>
+  %out_qs_view = buffer.view %out_qs_na[%base] : buffer -> view<1073741824xi8, #dense>
+  %out_scale_view = buffer.view %out_scales_na[%base] : buffer -> view<33554432xf32, #dense>
+  %gate_view = buffer.view %gate_na[%base] : buffer -> view<1073741824xf32, #dense>
+  %router_view = buffer.view %router_na[%base] : buffer -> view<268435456xf32, #dense>
+  %table_view = buffer.view %table_na[%base] : buffer -> view<268437504xi32, #dense>
+
+  // The two 16-match accumulator tiles share one decoded 32x128 weight tile.
+  // Result storage aliases activation/weight staging after the K loop.
+  %scratch_bytes = index.constant 8464 : offset
+  %scratch = buffer.alloca %scratch_bytes {base_alignment = 16, memory_space = workgroup} : buffer
+  %meta_view = buffer.view %scratch[%base] : buffer -> view<4xi32, #dense>
+  %is_lane_zero = index.cmp eq, %lane, %zero : index
+  %tok_offset = index.constant 16 : offset
+  %tok_view = buffer.view %scratch[%tok_offset] : buffer -> view<32xi32, #dense>
+  %sel_offset = index.constant 144 : offset
+  %sel_view = buffer.view %scratch[%sel_offset] : buffer -> view<32xi32, #dense>
+  %act_offset = index.constant 272 : offset
+  %act_ping_view = buffer.view %scratch[%act_offset] : buffer -> view<2x32x32xi8, #dense>
+  %act_word_ping_view = buffer.view %scratch[%act_offset] : buffer -> view<2x256xi32, #dense>
+  %act0_view = buffer.view %scratch[%act_offset] : buffer -> view<32x32xi8, #dense>
+  %act1_offset = index.constant 1296 : offset
+  %act1_view = buffer.view %scratch[%act1_offset] : buffer -> view<32x32xi8, #dense>
+  %act_scale_offset = index.constant 2320 : offset
+  %act_scale_ping_view = buffer.view %scratch[%act_scale_offset] : buffer -> view<2x32xf32, #dense>
+  %act_scale0_view = buffer.view %scratch[%act_scale_offset] : buffer -> view<32xf32, #dense>
+  %act_scale1_offset = index.constant 2448 : offset
+  %act_scale1_view = buffer.view %scratch[%act_scale1_offset] : buffer -> view<32xf32, #dense>
+  %weight_offset = index.constant 1424 : offset
+  %weight_word_view = buffer.view %scratch[%weight_offset] : buffer -> view<1024xi32, #dense>
+  %rhs_layout = encoding.layout.strided [1, 32] : encoding<layout>
+  %weight_view = buffer.view %scratch[%weight_offset] : buffer -> view<32x128xi8, %rhs_layout>
+  %weight_scale_offset = index.constant 5520 : offset
+  %weight_scale_view = buffer.view %scratch[%weight_scale_offset] : buffer -> view<128xf32, #dense>
+  %result_offset = index.constant 272 : offset
+  %result_view = buffer.view %scratch[%result_offset] : buffer -> view<16x128xf32, #dense>
+
+  %table_stride0 = index.mul %ntokens, %nselected : index
+  %table_stride = index.mul %table_stride0, %two : index
+  %table_base0 = index.mul %expert, %table_stride : index
+  %table_base = index.assume %table_base0 [range(%table_base0, 0, 268435455)] : index
+  // The slot map is read-only and indexed only by the workgroup expert ID,
+  // so Loom lowers this to scalar memory and keeps the physical slot in an
+  // SGPR. This is required for a 64-bit slot-stride base without VGPR64 math.
+  %slot_i32 = view.load %cache_i32_view[%expert] : view<1024xi32, #dense> -> i32
+  scf.if %is_lane_zero {
+    %total_raw = view.load %table_view[%table_base] : view<268437504xi32, #dense> -> i32
+    view.store %total_raw, %meta_view[%zero] : i32, view<4xi32, #dense>
+  }
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+  %total_i32 = view.load %meta_view[%zero] : view<4xi32, #dense> -> i32
+  %total_index0 = index.cast %total_i32 : i32 to index
+  %total = index.assume %total_index0 [range(%total_index0, 0, 134217728)] : index
+  %all_cohorts = index.cmp eq, %streamed_cohort, %zero : index
+  %cohort_i32 = view.load %cache_cohort_view[%expert] : view<1024xi32, #dense> -> i32
+  %streamed_cohort_i32 = index.cast %streamed_cohort : index to i32
+  %selected_cohort = scalar.cmpi eq, %cohort_i32, %streamed_cohort_i32 : i32
+  %cohort_selected = scalar.ori %all_cohorts, %selected_cohort : i1
+  %expert_at_or_after_begin = index.cmp uge, %expert, %expert_begin : index
+  %expert_before_end = index.cmp ult, %expert, %expert_end : index
+  %expert_in_range = scalar.andi %expert_at_or_after_begin, %expert_before_end : i1
+  %cohort_active = scalar.andi %cohort_selected, %expert_in_range : i1
+  scf.if %cohort_active {
+  %slot_nonnegative = scalar.cmpi sgt, %slot_i32, %minus_one_i32 : i32
+  %blocks_per_row = index.div %k, %thirtytwo : index
+  %slot_nonnegative_i32 = scf.select %slot_nonnegative, %slot_i32, %zero_i32 : i32
+  %slot_index0 = index.cast %slot_nonnegative_i32 : i32 to index
+  %slot_in_range = index.cmp ult, %slot_index0, %slot_count : index
+  %slot_valid = scalar.andi %slot_nonnegative, %slot_in_range : i1
+  %slot_safe0 = scf.select %slot_in_range, %slot_index0, %zero : index
+  %slot_global = index.assume %slot_safe0 [range(%slot_safe0, 0, 11007)] : index
+  // Workgroup-uniform tier selection preserves one matrix dispatch while
+  // addressing device-local and mapped-host payloads through separate bindings.
+  %slot_is_device = index.cmp ult, %slot_global, %device_slot_count : index
+  %tier_bias = scf.select %slot_is_device, %zero, %device_slot_count : index
+  %tier_slot0 = index.sub %slot_global, %tier_bias : index
+  %tier_slot = index.assume %tier_slot0 [range(%tier_slot0, 0, 11007)] : index
+  %slot_base_offset = scf.select %slot_is_device, %device_slot_base_offset, %host_slot_base_offset : index
+  %payload_cache_na = scf.select %slot_is_device, %device_cache_na, %host_cache_na : buffer
+  // Keep the per-lane dynamic address within a 256-slot (<4 GiB) window.
+  // The 43 segments use compile-time constant coefficients behind a two-level uniform switch, so the AMDGPU
+  // lowering carries them in the 64-bit scalar address rather than creating a
+  // VGPR64 address. This preserves the full physical slot range through 11007.
+  %slot_segment0 = index.div %tier_slot, %twofiftysix : index
+  %slot_segment = index.assume %slot_segment0 [range(%slot_segment0, 0, 42)] : index
+  %slot_group0 = index.div %slot_segment, %eight : index
+  %slot_group = index.assume %slot_group0 [range(%slot_group0, 0, 5)] : index
+  %slot_in_group0 = index.rem %slot_segment, %eight : index
+  %slot_in_group = index.assume %slot_in_group0 [range(%slot_in_group0, 0, 7)] : index
+  %slot_local0 = index.rem %tier_slot, %twofiftysix : index
+  %slot_local = index.assume %slot_local0 [range(%slot_local0, 0, 255)] : index
+  %slot_local_bytes = index.mul %slot_local, %slot_stride : index
+  %slot_local_payload0 = index.add %slot_base_offset, %slot_local_bytes : index
+  %slot_local_payload = index.add %slot_local_payload0, %plane_offset : index
+  %slot_local_payload_offset = index.cast %slot_local_payload : index to offset
+  %segment1_base = index.mul %twofiftysix, %slot_stride : index
+  %segment2_base = index.mul %fivehundredtwelve, %slot_stride : index
+  %segment3_base = index.mul %sevenhundredsixtyeight, %slot_stride : index
+  %segment4_base = index.mul %one_thousand_twentyfour, %slot_stride : index
+  %segment5_base = index.mul %one_thousand_twohundred_eighty, %slot_stride : index
+  %segment6_base = index.mul %one_thousand_fivehundred_thirtysix, %slot_stride : index
+  %segment7_base = index.mul %one_thousand_sevenhundred_ninetytwo, %slot_stride : index
+  %segment8_base = index.mul %two_thousand_fortyeight, %slot_stride : index
+  %segment9_base = index.mul %two_thousand_threehundred_four, %slot_stride : index
+  %segment10_base = index.mul %two_thousand_fivehundred_sixty, %slot_stride : index
+  %segment11_base = index.mul %two_thousand_eighthundred_sixteen, %slot_stride : index
+  %segment12_base = index.mul %three_thousand_seventytwo, %slot_stride : index
+  %segment13_base = index.mul %three_thousand_threehundred_twentyeight, %slot_stride : index
+  %segment14_base = index.mul %three_thousand_fivehundred_eightyfour, %slot_stride : index
+  %segment15_base = index.mul %segment15_slots, %slot_stride : index
+  %segment16_base = index.mul %segment16_slots, %slot_stride : index
+  %segment17_base = index.mul %segment17_slots, %slot_stride : index
+  %segment18_base = index.mul %segment18_slots, %slot_stride : index
+  %segment19_base = index.mul %segment19_slots, %slot_stride : index
+  %segment20_base = index.mul %segment20_slots, %slot_stride : index
+  %segment21_base = index.mul %segment21_slots, %slot_stride : index
+  %segment22_base = index.mul %segment22_slots, %slot_stride : index
+  %segment23_base = index.mul %segment23_slots, %slot_stride : index
+  %segment24_base = index.mul %segment24_slots, %slot_stride : index
+  %segment25_base = index.mul %segment25_slots, %slot_stride : index
+  %segment26_base = index.mul %segment26_slots, %slot_stride : index
+  %segment27_base = index.mul %segment27_slots, %slot_stride : index
+  %segment28_base = index.mul %segment28_slots, %slot_stride : index
+  %segment29_base = index.mul %segment29_slots, %slot_stride : index
+  %segment30_base = index.mul %segment30_slots, %slot_stride : index
+  %segment31_base = index.mul %segment31_slots, %slot_stride : index
+  %segment32_base = index.mul %segment32_slots, %slot_stride : index
+  %segment33_base = index.mul %segment33_slots, %slot_stride : index
+  %segment34_base = index.mul %segment34_slots, %slot_stride : index
+  %segment35_base = index.mul %segment35_slots, %slot_stride : index
+  %segment36_base = index.mul %segment36_slots, %slot_stride : index
+  %segment37_base = index.mul %segment37_slots, %slot_stride : index
+  %segment38_base = index.mul %segment38_slots, %slot_stride : index
+  %segment39_base = index.mul %segment39_slots, %slot_stride : index
+  %segment40_base = index.mul %segment40_slots, %slot_stride : index
+  %segment41_base = index.mul %segment41_slots, %slot_stride : index
+  %segment42_base = index.mul %segment42_slots, %slot_stride : index
+  %slot_view = buffer.view %payload_cache_na[%slot_local_payload_offset] : buffer -> view<274877906944xi8, #dense>
+
+  %i8_schema = encoding.define #matrix_operand<element_format=i8, payload_elements=16, payload_registers=4> : encoding<schema>
+
+  scf.for %window_base = [%zero to %total step %thirtytwo] {
+    %fill_lane = index.cmp ult, %lane, %thirtytwo : index
+    scf.if %fill_lane {
+      view.store %zero_i32, %tok_view[%lane] : i32, view<32xi32, #dense>
+      view.store %zero_i32, %sel_view[%lane] : i32, view<32xi32, #dense>
+      %match_index = index.add %window_base, %lane : index
+      %match_valid = index.cmp ult, %match_index, %total : index
+      scf.if %match_valid {
+        %table_match0 = index.add %table_base, %one : index
+        %table_match1 = index.add %table_match0, %match_index : index
+        %table_match = index.assume %table_match1 [range(%table_match1, 0, 268435455)] : index
+        %packed = view.load %table_view[%table_match] : view<268437504xi32, #dense> -> i32
+        %packed_index0 = index.cast %packed : i32 to index
+        %packed_index = index.assume %packed_index0 [range(%packed_index0, 0, 134217727)] : index
+        %token = index.div %packed_index, %onetwentyeight : index
+        %selected = index.rem %packed_index, %onetwentyeight : index
+        %token_i32 = index.cast %token : index to i32
+        %selected_i32 = index.cast %selected : index to i32
+        view.store %token_i32, %tok_view[%lane] : i32, view<32xi32, #dense>
+        view.store %selected_i32, %sel_view[%lane] : i32, view<32xi32, #dense>
+      }
+    }
+    kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+    %window_remaining = index.sub %total, %window_base : index
+    %window_full = index.cmp ugt, %window_remaining, %thirtytwo : index
+    %window_match_count0 = scf.select %window_full, %thirtytwo, %window_remaining : index
+    %window_match_count = index.assume %window_match_count0 [range(%window_match_count0, 1, 32)] : index
+    %has_second_window = index.cmp ugt, %window_match_count, %sixteen : index
+    %match_count0 = scf.select %has_second_window, %sixteen, %window_match_count : index
+    %match_count = index.assume %match_count0 [range(%match_count0, 1, 16)] : index
+    // Keep the range valid when the uniform second-window branch is not taken.
+    %remaining_for_second = scf.select %has_second_window, %window_match_count, %seventeen : index
+    %second_window_remaining = index.sub %remaining_for_second, %sixteen : index
+    %second_window_full = index.cmp ugt, %second_window_remaining, %sixteen : index
+    %match_count_second0 = scf.select %second_window_full, %sixteen, %second_window_remaining : index
+    %match_count_second = index.assume %match_count_second0 [range(%match_count_second0, 1, 16)] : index
+
+    %accumulator, %accumulator_second = scf.for %k_chunk = [%zero to %k step %onetwentyeight](%acc = %zero_f32x8, %acc_second = %zero_f32x8 : vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+      // Four lanes fetch four adjacent canonical records for one row. Two
+      // row phases cover the wave's 16 rows; subgroup broadcasts select the
+      // record for each increasing K32 phase without changing stored format.
+      %block4 = index.rem %wave_lane, %four : index
+      %row8 = index.div %wave_lane, %four : index
+      %block_base = index.div %k_chunk, %thirtytwo : index
+      %block = index.add %block_base, %block4 : index
+      %block_k_base = index.mul %block, %thirtytwo : index
+      %weight_k_valid = index.cmp ult, %block_k_base, %k : index
+      %decoded_row0_low, %decoded_row0_high, %decoded_row0_scale, %decoded_row1_low, %decoded_row1_high, %decoded_row1_scale = scf.for %row_phase = [%zero to %two step %one](%carry_row0_low = %zero_i32x4, %carry_row0_high = %zero_i32x4, %carry_row0_scale = %zero_f32, %carry_row1_low = %zero_i32x4, %carry_row1_high = %zero_i32x4, %carry_row1_scale = %zero_f32 : vector<4xi32>, vector<4xi32>, f32, vector<4xi32>, vector<4xi32>, f32) -> (vector<4xi32>, vector<4xi32>, f32, vector<4xi32>, vector<4xi32>, f32) {
+        %row_phase8 = index.mul %row_phase, %eight : index
+        %row_in_wave = index.add %row8, %row_phase8 : index
+        %row_local = index.add %wave_row_base, %row_in_wave : index
+        %row = index.add %row_tile_base, %row_local : index
+        %row_valid = index.cmp ult, %row, %rows : index
+        %row_k_valid = scalar.andi %row_valid, %weight_k_valid : i1
+        %weight_valid = scalar.andi %row_k_valid, %slot_valid : i1
+        %decoded_low, %decoded_high, %weight_scale = scf.if %weight_valid -> (vector<4xi32>, vector<4xi32>, f32) {
+          %row_block0 = index.mul %row, %blocks_per_row : index
+          %row_block = index.add %row_block0, %block : index
+          %plane_byte = index.mul %row_block, %seventeen : index
+          // Both selectors are uniform. Grouping eight segments per outer
+          // arm bounds dispatch selection to at most twelve scalar comparisons
+          // while every payload load retains a compile-time scalar base.
+          %scale_i8, %payload_i8 = scf.switch %slot_group -> (i8, vector<16xi8>) {
+          case 0 {
+            %g0_scale_i8, %g0_payload_i8 = scf.switch %slot_in_group -> (i8, vector<16xi8>) {
+            case 0 {
+              %s0_addr0 = index.add %zero, %plane_byte : index
+              %s0_scale_i8 = view.load %slot_view[%s0_addr0] : view<274877906944xi8, #dense> -> i8
+              %s0_payload_addr = index.add %s0_addr0, %one : index
+              %s0_payload_i8 = vector.load %slot_view[%s0_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s0_scale_i8, %s0_payload_i8 : i8, vector<16xi8>
+            }
+            case 1 {
+              %s1_addr0 = index.add %segment1_base, %plane_byte : index
+              %s1_scale_i8 = view.load %slot_view[%s1_addr0] : view<274877906944xi8, #dense> -> i8
+              %s1_payload_addr = index.add %s1_addr0, %one : index
+              %s1_payload_i8 = vector.load %slot_view[%s1_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s1_scale_i8, %s1_payload_i8 : i8, vector<16xi8>
+            }
+            case 2 {
+              %s2_addr0 = index.add %segment2_base, %plane_byte : index
+              %s2_scale_i8 = view.load %slot_view[%s2_addr0] : view<274877906944xi8, #dense> -> i8
+              %s2_payload_addr = index.add %s2_addr0, %one : index
+              %s2_payload_i8 = vector.load %slot_view[%s2_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s2_scale_i8, %s2_payload_i8 : i8, vector<16xi8>
+            }
+            case 3 {
+              %s3_addr0 = index.add %segment3_base, %plane_byte : index
+              %s3_scale_i8 = view.load %slot_view[%s3_addr0] : view<274877906944xi8, #dense> -> i8
+              %s3_payload_addr = index.add %s3_addr0, %one : index
+              %s3_payload_i8 = vector.load %slot_view[%s3_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s3_scale_i8, %s3_payload_i8 : i8, vector<16xi8>
+            }
+            case 4 {
+              %s4_addr0 = index.add %segment4_base, %plane_byte : index
+              %s4_scale_i8 = view.load %slot_view[%s4_addr0] : view<274877906944xi8, #dense> -> i8
+              %s4_payload_addr = index.add %s4_addr0, %one : index
+              %s4_payload_i8 = vector.load %slot_view[%s4_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s4_scale_i8, %s4_payload_i8 : i8, vector<16xi8>
+            }
+            case 5 {
+              %s5_addr0 = index.add %segment5_base, %plane_byte : index
+              %s5_scale_i8 = view.load %slot_view[%s5_addr0] : view<274877906944xi8, #dense> -> i8
+              %s5_payload_addr = index.add %s5_addr0, %one : index
+              %s5_payload_i8 = vector.load %slot_view[%s5_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s5_scale_i8, %s5_payload_i8 : i8, vector<16xi8>
+            }
+            case 6 {
+              %s6_addr0 = index.add %segment6_base, %plane_byte : index
+              %s6_scale_i8 = view.load %slot_view[%s6_addr0] : view<274877906944xi8, #dense> -> i8
+              %s6_payload_addr = index.add %s6_addr0, %one : index
+              %s6_payload_i8 = vector.load %slot_view[%s6_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s6_scale_i8, %s6_payload_i8 : i8, vector<16xi8>
+            }
+            default {
+              %s7_addr0 = index.add %segment7_base, %plane_byte : index
+              %s7_scale_i8 = view.load %slot_view[%s7_addr0] : view<274877906944xi8, #dense> -> i8
+              %s7_payload_addr = index.add %s7_addr0, %one : index
+              %s7_payload_i8 = vector.load %slot_view[%s7_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s7_scale_i8, %s7_payload_i8 : i8, vector<16xi8>
+            }
+            }
+            scf.yield %g0_scale_i8, %g0_payload_i8 : i8, vector<16xi8>
+          }
+          case 1 {
+            %g1_scale_i8, %g1_payload_i8 = scf.switch %slot_in_group -> (i8, vector<16xi8>) {
+            case 0 {
+              %s8_addr0 = index.add %segment8_base, %plane_byte : index
+              %s8_scale_i8 = view.load %slot_view[%s8_addr0] : view<274877906944xi8, #dense> -> i8
+              %s8_payload_addr = index.add %s8_addr0, %one : index
+              %s8_payload_i8 = vector.load %slot_view[%s8_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s8_scale_i8, %s8_payload_i8 : i8, vector<16xi8>
+            }
+            case 1 {
+              %s9_addr0 = index.add %segment9_base, %plane_byte : index
+              %s9_scale_i8 = view.load %slot_view[%s9_addr0] : view<274877906944xi8, #dense> -> i8
+              %s9_payload_addr = index.add %s9_addr0, %one : index
+              %s9_payload_i8 = vector.load %slot_view[%s9_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s9_scale_i8, %s9_payload_i8 : i8, vector<16xi8>
+            }
+            case 2 {
+              %s10_addr0 = index.add %segment10_base, %plane_byte : index
+              %s10_scale_i8 = view.load %slot_view[%s10_addr0] : view<274877906944xi8, #dense> -> i8
+              %s10_payload_addr = index.add %s10_addr0, %one : index
+              %s10_payload_i8 = vector.load %slot_view[%s10_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s10_scale_i8, %s10_payload_i8 : i8, vector<16xi8>
+            }
+            case 3 {
+              %s11_addr0 = index.add %segment11_base, %plane_byte : index
+              %s11_scale_i8 = view.load %slot_view[%s11_addr0] : view<274877906944xi8, #dense> -> i8
+              %s11_payload_addr = index.add %s11_addr0, %one : index
+              %s11_payload_i8 = vector.load %slot_view[%s11_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s11_scale_i8, %s11_payload_i8 : i8, vector<16xi8>
+            }
+            case 4 {
+              %s12_addr0 = index.add %segment12_base, %plane_byte : index
+              %s12_scale_i8 = view.load %slot_view[%s12_addr0] : view<274877906944xi8, #dense> -> i8
+              %s12_payload_addr = index.add %s12_addr0, %one : index
+              %s12_payload_i8 = vector.load %slot_view[%s12_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s12_scale_i8, %s12_payload_i8 : i8, vector<16xi8>
+            }
+            case 5 {
+              %s13_addr0 = index.add %segment13_base, %plane_byte : index
+              %s13_scale_i8 = view.load %slot_view[%s13_addr0] : view<274877906944xi8, #dense> -> i8
+              %s13_payload_addr = index.add %s13_addr0, %one : index
+              %s13_payload_i8 = vector.load %slot_view[%s13_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s13_scale_i8, %s13_payload_i8 : i8, vector<16xi8>
+            }
+            case 6 {
+              %s14_addr0 = index.add %segment14_base, %plane_byte : index
+              %s14_scale_i8 = view.load %slot_view[%s14_addr0] : view<274877906944xi8, #dense> -> i8
+              %s14_payload_addr = index.add %s14_addr0, %one : index
+              %s14_payload_i8 = vector.load %slot_view[%s14_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s14_scale_i8, %s14_payload_i8 : i8, vector<16xi8>
+            }
+            default {
+              %s15_addr0 = index.add %segment15_base, %plane_byte : index
+              %s15_scale_i8 = view.load %slot_view[%s15_addr0] : view<274877906944xi8, #dense> -> i8
+              %s15_payload_addr = index.add %s15_addr0, %one : index
+              %s15_payload_i8 = vector.load %slot_view[%s15_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s15_scale_i8, %s15_payload_i8 : i8, vector<16xi8>
+            }
+            }
+            scf.yield %g1_scale_i8, %g1_payload_i8 : i8, vector<16xi8>
+          }
+          case 2 {
+            %g2_scale_i8, %g2_payload_i8 = scf.switch %slot_in_group -> (i8, vector<16xi8>) {
+            case 0 {
+              %s16_addr0 = index.add %segment16_base, %plane_byte : index
+              %s16_scale_i8 = view.load %slot_view[%s16_addr0] : view<274877906944xi8, #dense> -> i8
+              %s16_payload_addr = index.add %s16_addr0, %one : index
+              %s16_payload_i8 = vector.load %slot_view[%s16_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s16_scale_i8, %s16_payload_i8 : i8, vector<16xi8>
+            }
+            case 1 {
+              %s17_addr0 = index.add %segment17_base, %plane_byte : index
+              %s17_scale_i8 = view.load %slot_view[%s17_addr0] : view<274877906944xi8, #dense> -> i8
+              %s17_payload_addr = index.add %s17_addr0, %one : index
+              %s17_payload_i8 = vector.load %slot_view[%s17_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s17_scale_i8, %s17_payload_i8 : i8, vector<16xi8>
+            }
+            case 2 {
+              %s18_addr0 = index.add %segment18_base, %plane_byte : index
+              %s18_scale_i8 = view.load %slot_view[%s18_addr0] : view<274877906944xi8, #dense> -> i8
+              %s18_payload_addr = index.add %s18_addr0, %one : index
+              %s18_payload_i8 = vector.load %slot_view[%s18_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s18_scale_i8, %s18_payload_i8 : i8, vector<16xi8>
+            }
+            case 3 {
+              %s19_addr0 = index.add %segment19_base, %plane_byte : index
+              %s19_scale_i8 = view.load %slot_view[%s19_addr0] : view<274877906944xi8, #dense> -> i8
+              %s19_payload_addr = index.add %s19_addr0, %one : index
+              %s19_payload_i8 = vector.load %slot_view[%s19_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s19_scale_i8, %s19_payload_i8 : i8, vector<16xi8>
+            }
+            case 4 {
+              %s20_addr0 = index.add %segment20_base, %plane_byte : index
+              %s20_scale_i8 = view.load %slot_view[%s20_addr0] : view<274877906944xi8, #dense> -> i8
+              %s20_payload_addr = index.add %s20_addr0, %one : index
+              %s20_payload_i8 = vector.load %slot_view[%s20_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s20_scale_i8, %s20_payload_i8 : i8, vector<16xi8>
+            }
+            case 5 {
+              %s21_addr0 = index.add %segment21_base, %plane_byte : index
+              %s21_scale_i8 = view.load %slot_view[%s21_addr0] : view<274877906944xi8, #dense> -> i8
+              %s21_payload_addr = index.add %s21_addr0, %one : index
+              %s21_payload_i8 = vector.load %slot_view[%s21_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s21_scale_i8, %s21_payload_i8 : i8, vector<16xi8>
+            }
+            case 6 {
+              %s22_addr0 = index.add %segment22_base, %plane_byte : index
+              %s22_scale_i8 = view.load %slot_view[%s22_addr0] : view<274877906944xi8, #dense> -> i8
+              %s22_payload_addr = index.add %s22_addr0, %one : index
+              %s22_payload_i8 = vector.load %slot_view[%s22_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s22_scale_i8, %s22_payload_i8 : i8, vector<16xi8>
+            }
+            default {
+              %s23_addr0 = index.add %segment23_base, %plane_byte : index
+              %s23_scale_i8 = view.load %slot_view[%s23_addr0] : view<274877906944xi8, #dense> -> i8
+              %s23_payload_addr = index.add %s23_addr0, %one : index
+              %s23_payload_i8 = vector.load %slot_view[%s23_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s23_scale_i8, %s23_payload_i8 : i8, vector<16xi8>
+            }
+            }
+            scf.yield %g2_scale_i8, %g2_payload_i8 : i8, vector<16xi8>
+          }
+          case 3 {
+            %g3_scale_i8, %g3_payload_i8 = scf.switch %slot_in_group -> (i8, vector<16xi8>) {
+            case 0 {
+              %s24_addr0 = index.add %segment24_base, %plane_byte : index
+              %s24_scale_i8 = view.load %slot_view[%s24_addr0] : view<274877906944xi8, #dense> -> i8
+              %s24_payload_addr = index.add %s24_addr0, %one : index
+              %s24_payload_i8 = vector.load %slot_view[%s24_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s24_scale_i8, %s24_payload_i8 : i8, vector<16xi8>
+            }
+            case 1 {
+              %s25_addr0 = index.add %segment25_base, %plane_byte : index
+              %s25_scale_i8 = view.load %slot_view[%s25_addr0] : view<274877906944xi8, #dense> -> i8
+              %s25_payload_addr = index.add %s25_addr0, %one : index
+              %s25_payload_i8 = vector.load %slot_view[%s25_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s25_scale_i8, %s25_payload_i8 : i8, vector<16xi8>
+            }
+            case 2 {
+              %s26_addr0 = index.add %segment26_base, %plane_byte : index
+              %s26_scale_i8 = view.load %slot_view[%s26_addr0] : view<274877906944xi8, #dense> -> i8
+              %s26_payload_addr = index.add %s26_addr0, %one : index
+              %s26_payload_i8 = vector.load %slot_view[%s26_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s26_scale_i8, %s26_payload_i8 : i8, vector<16xi8>
+            }
+            case 3 {
+              %s27_addr0 = index.add %segment27_base, %plane_byte : index
+              %s27_scale_i8 = view.load %slot_view[%s27_addr0] : view<274877906944xi8, #dense> -> i8
+              %s27_payload_addr = index.add %s27_addr0, %one : index
+              %s27_payload_i8 = vector.load %slot_view[%s27_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s27_scale_i8, %s27_payload_i8 : i8, vector<16xi8>
+            }
+            case 4 {
+              %s28_addr0 = index.add %segment28_base, %plane_byte : index
+              %s28_scale_i8 = view.load %slot_view[%s28_addr0] : view<274877906944xi8, #dense> -> i8
+              %s28_payload_addr = index.add %s28_addr0, %one : index
+              %s28_payload_i8 = vector.load %slot_view[%s28_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s28_scale_i8, %s28_payload_i8 : i8, vector<16xi8>
+            }
+            case 5 {
+              %s29_addr0 = index.add %segment29_base, %plane_byte : index
+              %s29_scale_i8 = view.load %slot_view[%s29_addr0] : view<274877906944xi8, #dense> -> i8
+              %s29_payload_addr = index.add %s29_addr0, %one : index
+              %s29_payload_i8 = vector.load %slot_view[%s29_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s29_scale_i8, %s29_payload_i8 : i8, vector<16xi8>
+            }
+            case 6 {
+              %s30_addr0 = index.add %segment30_base, %plane_byte : index
+              %s30_scale_i8 = view.load %slot_view[%s30_addr0] : view<274877906944xi8, #dense> -> i8
+              %s30_payload_addr = index.add %s30_addr0, %one : index
+              %s30_payload_i8 = vector.load %slot_view[%s30_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s30_scale_i8, %s30_payload_i8 : i8, vector<16xi8>
+            }
+            default {
+              %s31_addr0 = index.add %segment31_base, %plane_byte : index
+              %s31_scale_i8 = view.load %slot_view[%s31_addr0] : view<274877906944xi8, #dense> -> i8
+              %s31_payload_addr = index.add %s31_addr0, %one : index
+              %s31_payload_i8 = vector.load %slot_view[%s31_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s31_scale_i8, %s31_payload_i8 : i8, vector<16xi8>
+            }
+            }
+            scf.yield %g3_scale_i8, %g3_payload_i8 : i8, vector<16xi8>
+          }
+          case 4 {
+            %g4_scale_i8, %g4_payload_i8 = scf.switch %slot_in_group -> (i8, vector<16xi8>) {
+            case 0 {
+              %s32_addr0 = index.add %segment32_base, %plane_byte : index
+              %s32_scale_i8 = view.load %slot_view[%s32_addr0] : view<274877906944xi8, #dense> -> i8
+              %s32_payload_addr = index.add %s32_addr0, %one : index
+              %s32_payload_i8 = vector.load %slot_view[%s32_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s32_scale_i8, %s32_payload_i8 : i8, vector<16xi8>
+            }
+            case 1 {
+              %s33_addr0 = index.add %segment33_base, %plane_byte : index
+              %s33_scale_i8 = view.load %slot_view[%s33_addr0] : view<274877906944xi8, #dense> -> i8
+              %s33_payload_addr = index.add %s33_addr0, %one : index
+              %s33_payload_i8 = vector.load %slot_view[%s33_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s33_scale_i8, %s33_payload_i8 : i8, vector<16xi8>
+            }
+            case 2 {
+              %s34_addr0 = index.add %segment34_base, %plane_byte : index
+              %s34_scale_i8 = view.load %slot_view[%s34_addr0] : view<274877906944xi8, #dense> -> i8
+              %s34_payload_addr = index.add %s34_addr0, %one : index
+              %s34_payload_i8 = vector.load %slot_view[%s34_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s34_scale_i8, %s34_payload_i8 : i8, vector<16xi8>
+            }
+            case 3 {
+              %s35_addr0 = index.add %segment35_base, %plane_byte : index
+              %s35_scale_i8 = view.load %slot_view[%s35_addr0] : view<274877906944xi8, #dense> -> i8
+              %s35_payload_addr = index.add %s35_addr0, %one : index
+              %s35_payload_i8 = vector.load %slot_view[%s35_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s35_scale_i8, %s35_payload_i8 : i8, vector<16xi8>
+            }
+            case 4 {
+              %s36_addr0 = index.add %segment36_base, %plane_byte : index
+              %s36_scale_i8 = view.load %slot_view[%s36_addr0] : view<274877906944xi8, #dense> -> i8
+              %s36_payload_addr = index.add %s36_addr0, %one : index
+              %s36_payload_i8 = vector.load %slot_view[%s36_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s36_scale_i8, %s36_payload_i8 : i8, vector<16xi8>
+            }
+            case 5 {
+              %s37_addr0 = index.add %segment37_base, %plane_byte : index
+              %s37_scale_i8 = view.load %slot_view[%s37_addr0] : view<274877906944xi8, #dense> -> i8
+              %s37_payload_addr = index.add %s37_addr0, %one : index
+              %s37_payload_i8 = vector.load %slot_view[%s37_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s37_scale_i8, %s37_payload_i8 : i8, vector<16xi8>
+            }
+            case 6 {
+              %s38_addr0 = index.add %segment38_base, %plane_byte : index
+              %s38_scale_i8 = view.load %slot_view[%s38_addr0] : view<274877906944xi8, #dense> -> i8
+              %s38_payload_addr = index.add %s38_addr0, %one : index
+              %s38_payload_i8 = vector.load %slot_view[%s38_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s38_scale_i8, %s38_payload_i8 : i8, vector<16xi8>
+            }
+            default {
+              %s39_addr0 = index.add %segment39_base, %plane_byte : index
+              %s39_scale_i8 = view.load %slot_view[%s39_addr0] : view<274877906944xi8, #dense> -> i8
+              %s39_payload_addr = index.add %s39_addr0, %one : index
+              %s39_payload_i8 = vector.load %slot_view[%s39_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s39_scale_i8, %s39_payload_i8 : i8, vector<16xi8>
+            }
+            }
+            scf.yield %g4_scale_i8, %g4_payload_i8 : i8, vector<16xi8>
+          }
+          default {
+            %g5_scale_i8, %g5_payload_i8 = scf.switch %slot_in_group -> (i8, vector<16xi8>) {
+            case 0 {
+              %s40_addr0 = index.add %segment40_base, %plane_byte : index
+              %s40_scale_i8 = view.load %slot_view[%s40_addr0] : view<274877906944xi8, #dense> -> i8
+              %s40_payload_addr = index.add %s40_addr0, %one : index
+              %s40_payload_i8 = vector.load %slot_view[%s40_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s40_scale_i8, %s40_payload_i8 : i8, vector<16xi8>
+            }
+            case 1 {
+              %s41_addr0 = index.add %segment41_base, %plane_byte : index
+              %s41_scale_i8 = view.load %slot_view[%s41_addr0] : view<274877906944xi8, #dense> -> i8
+              %s41_payload_addr = index.add %s41_addr0, %one : index
+              %s41_payload_i8 = vector.load %slot_view[%s41_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s41_scale_i8, %s41_payload_i8 : i8, vector<16xi8>
+            }
+            default {
+              %s42_addr0 = index.add %segment42_base, %plane_byte : index
+              %s42_scale_i8 = view.load %slot_view[%s42_addr0] : view<274877906944xi8, #dense> -> i8
+              %s42_payload_addr = index.add %s42_addr0, %one : index
+              %s42_payload_i8 = vector.load %slot_view[%s42_payload_addr] : view<274877906944xi8, #dense> -> vector<16xi8>
+              scf.yield %s42_scale_i8, %s42_payload_i8 : i8, vector<16xi8>
+            }
+            }
+            scf.yield %g5_scale_i8, %g5_payload_i8 : i8, vector<16xi8>
+          }
+          }
+          %scale_i32 = scalar.extui %scale_i8 : i8 to i32
+          %payload_i32 = vector.bitcast %payload_i8 : vector<16xi8> to vector<4xi32>
+          // Each payload byte is [high E2M1 nibble | low E2M1 nibble].
+          // Decode four bytes at once with independent packed-byte arithmetic.
+          // low produces logical K[0..15], high produces K[16..31].
+          %nibble_mask = vector.constant 0x0f0f0f0f : vector<4xi32>
+          %magnitude_mask = vector.constant 0x07070707 : vector<4xi32>
+          %byte_ones = vector.constant 0x01010101 : vector<4xi32>
+          %two_bit_mask = vector.constant 0x03030303 : vector<4xi32>
+          %byte_fill = vector.constant 0x000000ff : vector<4xi32>
+          %shift_one = vector.constant 1 : vector<4xi32>
+          %shift_two = vector.constant 2 : vector<4xi32>
+          %shift_three = vector.constant 3 : vector<4xi32>
+          %shift_four = vector.constant 4 : vector<4xi32>
+          %shift_seven = vector.constant 7 : vector<4xi32>
+
+          %code_low = vector.andi %payload_i32, %nibble_mask : vector<4xi32>
+          %payload_high0 = vector.shrui %payload_i32, %shift_four : vector<4xi32>
+          %code_high = vector.andi %payload_high0, %nibble_mask : vector<4xi32>
+
+          %low_mag0 = vector.andi %code_low, %magnitude_mask : vector<4xi32>
+          %low_rem = vector.andi %low_mag0, %two_bit_mask : vector<4xi32>
+          %low_rem_shift = vector.shrui %low_rem, %shift_one : vector<4xi32>
+          %low_both0 = vector.andi %low_rem, %low_rem_shift : vector<4xi32>
+          %low_both = vector.andi %low_both0, %byte_ones : vector<4xi32>
+          %low_both_x2 = vector.shli %low_both, %shift_one : vector<4xi32>
+          %low_extra = vector.addi %low_rem, %low_both_x2 : vector<4xi32>
+          %low_high0 = vector.shrui %low_mag0, %shift_two : vector<4xi32>
+          %low_high = vector.andi %low_high0, %byte_ones : vector<4xi32>
+          %low_large_mask = vector.muli %low_high, %byte_fill : vector<4xi32>
+          %low_large_extra = vector.andi %low_extra, %low_large_mask : vector<4xi32>
+          %low_mag = vector.addi %low_mag0, %low_large_extra : vector<4xi32>
+          %low_nz_s1 = vector.shrui %low_mag, %shift_one : vector<4xi32>
+          %low_nz1 = vector.ori %low_mag, %low_nz_s1 : vector<4xi32>
+          %low_nz_s2 = vector.shrui %low_nz1, %shift_two : vector<4xi32>
+          %low_nz2 = vector.ori %low_nz1, %low_nz_s2 : vector<4xi32>
+          %low_nonzero = vector.andi %low_nz2, %byte_ones : vector<4xi32>
+          %low_sign0 = vector.shrui %code_low, %shift_three : vector<4xi32>
+          %low_sign_raw = vector.andi %low_sign0, %byte_ones : vector<4xi32>
+          %low_sign = vector.andi %low_sign_raw, %low_nonzero : vector<4xi32>
+          %low_sign_mask = vector.muli %low_sign, %byte_fill : vector<4xi32>
+          %low_signed0 = vector.xori %low_mag, %low_sign_mask : vector<4xi32>
+          %decoded_low = vector.addi %low_signed0, %low_sign : vector<4xi32>
+
+          %high_mag0 = vector.andi %code_high, %magnitude_mask : vector<4xi32>
+          %high_rem = vector.andi %high_mag0, %two_bit_mask : vector<4xi32>
+          %high_rem_shift = vector.shrui %high_rem, %shift_one : vector<4xi32>
+          %high_both0 = vector.andi %high_rem, %high_rem_shift : vector<4xi32>
+          %high_both = vector.andi %high_both0, %byte_ones : vector<4xi32>
+          %high_both_x2 = vector.shli %high_both, %shift_one : vector<4xi32>
+          %high_extra = vector.addi %high_rem, %high_both_x2 : vector<4xi32>
+          %high_high0 = vector.shrui %high_mag0, %shift_two : vector<4xi32>
+          %high_high = vector.andi %high_high0, %byte_ones : vector<4xi32>
+          %high_large_mask = vector.muli %high_high, %byte_fill : vector<4xi32>
+          %high_large_extra = vector.andi %high_extra, %high_large_mask : vector<4xi32>
+          %high_mag = vector.addi %high_mag0, %high_large_extra : vector<4xi32>
+          %high_nz_s1 = vector.shrui %high_mag, %shift_one : vector<4xi32>
+          %high_nz1 = vector.ori %high_mag, %high_nz_s1 : vector<4xi32>
+          %high_nz_s2 = vector.shrui %high_nz1, %shift_two : vector<4xi32>
+          %high_nz2 = vector.ori %high_nz1, %high_nz_s2 : vector<4xi32>
+          %high_nonzero = vector.andi %high_nz2, %byte_ones : vector<4xi32>
+          %high_sign0 = vector.shrui %code_high, %shift_three : vector<4xi32>
+          %high_sign_raw = vector.andi %high_sign0, %byte_ones : vector<4xi32>
+          %high_sign = vector.andi %high_sign_raw, %high_nonzero : vector<4xi32>
+          %high_sign_mask = vector.muli %high_sign, %byte_fill : vector<4xi32>
+          %high_signed0 = vector.xori %high_mag, %high_sign_mask : vector<4xi32>
+          %decoded_high = vector.addi %high_signed0, %high_sign : vector<4xi32>
+
+          // kvalues_mxfp4 is twice the E2M1 value, so use half of the E8M0
+          // scale: 2^(e-128). Preserve the two subnormal scales and NaN.
+          %scale_is_small = scalar.cmpi ult, %scale_i32, %two_i32 : i32
+          %small_shift = scf.select %scale_is_small, %scale_i32, %zero_i32 : i32
+          %small_scale_bits = scalar.shli %minimum_scale_bits_i32, %small_shift : i32
+          %normal_scale_safe = scf.select %scale_is_small, %one_i32, %scale_i32 : i32
+          %normal_exponent = scalar.subi %normal_scale_safe, %one_i32 : i32
+          %normal_scale_bits = scalar.shli %normal_exponent, %twentythree_i32 : i32
+          %finite_scale_bits = scf.select %scale_is_small, %small_scale_bits, %normal_scale_bits : i32
+          %scale_is_nan = scalar.cmpi eq, %scale_i32, %byte_mask_i32 : i32
+          %scale_bits = scf.select %scale_is_nan, %quiet_nan_bits_i32, %finite_scale_bits : i32
+          %scale_f32 = scalar.bitcast %scale_bits : i32 to f32
+          scf.yield %decoded_low, %decoded_high, %scale_f32 : vector<4xi32>, vector<4xi32>, f32
+        } else {
+          scf.yield %zero_i32x4, %zero_i32x4, %zero_f32 : vector<4xi32>, vector<4xi32>, f32
+        }
+        %is_row0 = index.cmp eq, %row_phase, %zero : index
+        %next_row0_low = scf.select %is_row0, %decoded_low, %carry_row0_low : vector<4xi32>
+        %next_row0_high = scf.select %is_row0, %decoded_high, %carry_row0_high : vector<4xi32>
+        %next_row0_scale = scf.select %is_row0, %weight_scale, %carry_row0_scale : f32
+        %next_row1_low = scf.select %is_row0, %carry_row1_low, %decoded_low : vector<4xi32>
+        %next_row1_high = scf.select %is_row0, %carry_row1_high, %decoded_high : vector<4xi32>
+        %next_row1_scale = scf.select %is_row0, %carry_row1_scale, %weight_scale : f32
+        scf.yield %next_row0_low, %next_row0_high, %next_row0_scale, %next_row1_low, %next_row1_high, %next_row1_scale : vector<4xi32>, vector<4xi32>, f32, vector<4xi32>, vector<4xi32>, f32
+      }
+
+      %chunk_accumulator, %chunk_accumulator_second = scf.for %inner_block = [%zero to %four step %one](%inner_acc = %acc, %inner_acc_second = %acc_second : vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+        %inner_k_offset = index.mul %inner_block, %thirtytwo : index
+        %k_base = index.add %k_chunk, %inner_k_offset : index
+        %act_buffer0 = index.rem %inner_block, %two : index
+        %act_buffer = index.assume %act_buffer0 [range(%act_buffer0, 0, 1)] : index
+        %act_buffer_is_zero = index.cmp eq, %act_buffer, %zero : index
+      // One packed word per active lane covers the 16x32 Q8 tile.  The
+      // native quantizer writes eight little-endian int8x4 words per K32 group;
+      // keeping that representation makes both global and LDS accesses b32.
+      %activation_word_lane = index.cmp ult, %lane, %twofiftysix : index
+      scf.if %activation_word_lane {
+        %match = index.div %lane, %eight : index
+        %word_in_group = index.rem %lane, %eight : index
+        %match_valid = index.cmp ult, %match, %window_match_count : index
+        %activation_word = scf.if %match_valid -> (i32) {
+          %token_i32 = view.load %tok_view[%match] : view<32xi32, #dense> -> i32
+          %selected_i32 = view.load %sel_view[%match] : view<32xi32, #dense> -> i32
+          %k_base_i32 = index.cast %k_base : index to i32
+          %word_in_group_i32 = index.cast %word_in_group : index to i32
+          %token_base_i32 = scalar.muli %token_i32, %down_token_stride_i32 : i32
+          %selected_base_i32 = scalar.constant 0 : i32
+          %source0_i32 = scalar.addi %token_base_i32, %selected_base_i32 : i32
+          %source1_i32 = scalar.addi %source0_i32, %k_base_i32 : i32
+          %source_word_base_i32 = scalar.shrui %source1_i32, %two_i32 : i32
+          %source_word_i32 = scalar.addi %source_word_base_i32, %word_in_group_i32 : i32
+          %source_word1 = index.cast %source_word_i32 : i32 to index
+          %source_word = index.assume %source_word1 [range(%source_word1, 0, 268435455)] : index
+          %value = view.load %aq_word_view[%source_word] : view<268435456xi32, #dense> -> i32
+          scf.yield %value : i32
+        } else {
+          scf.yield %zero_i32 : i32
+        }
+        view.store %activation_word, %act_word_ping_view[%act_buffer, %lane] : i32, view<2x256xi32, #dense>
+      }
+
+      // Store activation scales in the exact eight-register WMMA fragment
+      // order used by the native Q8 kernels: even rows followed by odd rows.
+      scf.if %fill_lane {
+        %scale_match_valid = index.cmp ult, %lane, %window_match_count : index
+        %activation_scale = scf.if %scale_match_valid -> (f32) {
+          %token_i32 = view.load %tok_view[%lane] : view<32xi32, #dense> -> i32
+          %selected_i32 = view.load %sel_view[%lane] : view<32xi32, #dense> -> i32
+          %k_base_scale_i32 = index.cast %k_base : index to i32
+          %token_scale_base_i32 = scalar.muli %token_i32, %down_token_stride_i32 : i32
+          %selected_scale_base_i32 = scalar.constant 0 : i32
+          %source_scale0_i32 = scalar.addi %token_scale_base_i32, %selected_scale_base_i32 : i32
+          %source_scale1_i32 = scalar.addi %source_scale0_i32, %k_base_scale_i32 : i32
+          %scale_index_i32 = scalar.shrui %source_scale1_i32, %five_i32 : i32
+          %scale_index0 = index.cast %scale_index_i32 : i32 to index
+          %scale_index = index.assume %scale_index0 [range(%scale_index0, 0, 33554431)] : index
+          %scale = view.load %as_view[%scale_index] : view<33554432xf32, #dense> -> f32
+          scf.yield %scale : f32
+        } else {
+          scf.yield %zero_f32 : f32
+        }
+        %scale_match_local = index.rem %lane, %sixteen : index
+        %scale_match_tile = index.div %lane, %sixteen : index
+        %scale_parity = index.rem %scale_match_local, %two : index
+        %scale_register = index.div %scale_match_local, %two : index
+        %scale_plane = index.mul %scale_parity, %eight : index
+        %scale_tile_base = index.mul %scale_match_tile, %sixteen : index
+        %scale_destination0 = index.add %scale_tile_base, %scale_plane : index
+        %scale_destination1 = index.add %scale_destination0, %scale_register : index
+        %scale_destination = index.assume %scale_destination1 [range(%scale_destination1, 0, 31)] : index
+        view.store %activation_scale, %act_scale_ping_view[%act_buffer, %scale_destination] : f32, view<2x32xf32, #dense>
+      }
+
+      %source_row8 = index.rem %wave_lane, %eight : index
+        %source_lane0 = index.mul %source_row8, %four : index
+        %source_lane = index.add %source_lane0, %inner_block : index
+        %source_lane_i32 = index.cast %source_lane : index to i32
+        %row0_low_wave = kernel.subgroup.broadcast %decoded_row0_low from %source_lane_i32 : vector<4xi32>, i32
+        %row0_high_wave = kernel.subgroup.broadcast %decoded_row0_high from %source_lane_i32 : vector<4xi32>, i32
+        %row0_scale_wave = kernel.subgroup.broadcast %decoded_row0_scale from %source_lane_i32 : f32, i32
+        %row1_low_wave = kernel.subgroup.broadcast %decoded_row1_low from %source_lane_i32 : vector<4xi32>, i32
+        %row1_high_wave = kernel.subgroup.broadcast %decoded_row1_high from %source_lane_i32 : vector<4xi32>, i32
+        %row1_scale_wave = kernel.subgroup.broadcast %decoded_row1_scale from %source_lane_i32 : f32, i32
+        %fragment_row = index.rem %wave_lane, %sixteen : index
+        %rhs_uses_row0 = index.cmp ult, %fragment_row, %eight : index
+        %decoded_low_wave = scf.select %rhs_uses_row0, %row0_low_wave, %row1_low_wave : vector<4xi32>
+        %decoded_high_wave = scf.select %rhs_uses_row0, %row0_high_wave, %row1_high_wave : vector<4xi32>
+        %weight_scale_wave = scf.select %rhs_uses_row0, %row0_scale_wave, %row1_scale_wave : f32
+        kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+      %lhs0_raw = scf.if %act_buffer_is_zero -> (vector<16xi8>) {
+        %lhs0_ping = vector.fragment.load<lhs> %act0_view[%zero, %zero] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs0_ping : vector<16xi8>
+      } else {
+        %lhs0_pong = vector.fragment.load<lhs> %act1_view[%zero, %zero] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs0_pong : vector<16xi8>
+      }
+      %lhs0_words = vector.bitcast %lhs0_raw : vector<16xi8> to vector<4xi32>
+      %lhs0 = vector.fragment<lhs> %lhs0_words shape [%sixteen, %sixteen] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %rhs0 = vector.fragment<rhs> %decoded_low_wave shape [%sixteen, %sixteen] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %int_acc = vector.fragment<init> %zero_i32x8 shape [%sixteen, %sixteen] : vector<8xi32>
+      %int_next0 = vector.mma %lhs0, %rhs0, %int_acc : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %lhs1_raw = scf.if %act_buffer_is_zero -> (vector<16xi8>) {
+        %lhs1_ping = vector.fragment.load<lhs> %act0_view[%zero, %sixteen] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs1_ping : vector<16xi8>
+      } else {
+        %lhs1_pong = vector.fragment.load<lhs> %act1_view[%zero, %sixteen] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs1_pong : vector<16xi8>
+      }
+      %lhs1_words = vector.bitcast %lhs1_raw : vector<16xi8> to vector<4xi32>
+      %lhs1 = vector.fragment<lhs> %lhs1_words shape [%sixteen, %sixteen] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %rhs1 = vector.fragment<rhs> %decoded_high_wave shape [%sixteen, %sixteen] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %int_next1 = vector.mma %lhs1, %rhs1, %int_next0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %dot_f32 = vector.sitofp %int_next1 : vector<8xi32> to vector<8xf32>
+      %lane_lo = index.rem %wave_lane, %sixteen : index
+      %lane_hi = index.div %wave_lane, %sixteen : index
+      %activation_scale_base0 = index.mul %lane_hi, %eight : index
+      %activation_scale_base = index.assume %activation_scale_base0 [range(%activation_scale_base0, 0, 8)] : index
+      %activation_scales = scf.if %act_buffer_is_zero -> (vector<8xf32>) {
+        %activation_scales_ping = vector.load %act_scale0_view[%activation_scale_base] : view<32xf32, #dense> -> vector<8xf32>
+        scf.yield %activation_scales_ping : vector<8xf32>
+      } else {
+        %activation_scales_pong = vector.load %act_scale1_view[%activation_scale_base] : view<32xf32, #dense> -> vector<8xf32>
+        scf.yield %activation_scales_pong : vector<8xf32>
+      }
+      %weight_scales = vector.splat %weight_scale_wave : vector<8xf32>
+      %combined_scales = vector.mulf %activation_scales, %weight_scales : vector<8xf32>
+      %next = vector.fmaf %dot_f32, %combined_scales, %inner_acc : vector<8xf32>
+      %next_second = scf.if %has_second_window -> (vector<8xf32>) {
+        %lhs_second0_raw = scf.if %act_buffer_is_zero -> (vector<16xi8>) {
+        %lhs_second0_ping = vector.fragment.load<lhs> %act0_view[%sixteen, %zero] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs_second0_ping : vector<16xi8>
+      } else {
+        %lhs_second0_pong = vector.fragment.load<lhs> %act1_view[%sixteen, %zero] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs_second0_pong : vector<16xi8>
+      }
+        %lhs_second0_words = vector.bitcast %lhs_second0_raw : vector<16xi8> to vector<4xi32>
+        %lhs_second0 = vector.fragment<lhs> %lhs_second0_words shape [%sixteen, %sixteen] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+        %int_second_acc = vector.fragment<init> %zero_i32x8 shape [%sixteen, %sixteen] : vector<8xi32>
+        %int_second_next0 = vector.mma %lhs_second0, %rhs0, %int_second_acc : vector<4xi32>, vector<4xi32>, vector<8xi32>
+        %lhs_second1_raw = scf.if %act_buffer_is_zero -> (vector<16xi8>) {
+        %lhs_second1_ping = vector.fragment.load<lhs> %act0_view[%sixteen, %sixteen] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs_second1_ping : vector<16xi8>
+      } else {
+        %lhs_second1_pong = vector.fragment.load<lhs> %act1_view[%sixteen, %sixteen] shape [%sixteen, %sixteen] : view<32x32xi8, #dense> -> vector<16xi8>
+        scf.yield %lhs_second1_pong : vector<16xi8>
+      }
+        %lhs_second1_words = vector.bitcast %lhs_second1_raw : vector<16xi8> to vector<4xi32>
+        %lhs_second1 = vector.fragment<lhs> %lhs_second1_words shape [%sixteen, %sixteen] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+        %int_second_next1 = vector.mma %lhs_second1, %rhs1, %int_second_next0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+        %dot_second_f32 = vector.sitofp %int_second_next1 : vector<8xi32> to vector<8xf32>
+        %activation_scale_second_base0 = index.add %activation_scale_base, %sixteen : index
+        %activation_scale_second_base = index.assume %activation_scale_second_base0 [range(%activation_scale_second_base0, 16, 24)] : index
+        %activation_scales_second = scf.if %act_buffer_is_zero -> (vector<8xf32>) {
+        %activation_scales_second_ping = vector.load %act_scale0_view[%activation_scale_second_base] : view<32xf32, #dense> -> vector<8xf32>
+        scf.yield %activation_scales_second_ping : vector<8xf32>
+      } else {
+        %activation_scales_second_pong = vector.load %act_scale1_view[%activation_scale_second_base] : view<32xf32, #dense> -> vector<8xf32>
+        scf.yield %activation_scales_second_pong : vector<8xf32>
+      }
+        %combined_scales_second = vector.mulf %activation_scales_second, %weight_scales : vector<8xf32>
+        %next_second_value = vector.fmaf %dot_second_f32, %combined_scales_second, %inner_acc_second : vector<8xf32>
+        scf.yield %next_second_value : vector<8xf32>
+      } else {
+        scf.yield %inner_acc_second : vector<8xf32>
+      }
+        scf.yield %next, %next_second : vector<8xf32>, vector<8xf32>
+      }
+      scf.yield %chunk_accumulator, %chunk_accumulator_second : vector<8xf32>, vector<8xf32>
+    }
+    kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+    vector.fragment.store<result> %accumulator, %result_view[%zero, %wave_row_base] shape [%sixteen, %sixteen] : vector<8xf32>, view<16x128xf32, #dense>
+    kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+    scf.for %q8_output_pass_a = [%zero to %eight step %one] {
+      %q8_pass_base_a = index.mul %q8_output_pass_a, %eight : index
+      %q8_output_group_a = index.add %q8_pass_base_a, %wave : index
+      %q8_match_a = index.div %q8_output_group_a, %four : index
+      %q8_row_block_a = index.rem %q8_output_group_a, %four : index
+      %q8_match_valid_a = index.cmp ult, %q8_match_a, %match_count : index
+      %q8_row_block_base_a = index.mul %q8_row_block_a, %thirtytwo : index
+      %q8_row_local_a = index.add %q8_row_block_base_a, %wave_lane : index
+      %q8_row_a = index.add %row_tile_base, %q8_row_local_a : index
+      %q8_row_valid_a = index.cmp ult, %q8_row_a, %rows : index
+      %q8_output_valid_a = scalar.andi %q8_match_valid_a, %q8_row_valid_a : i1
+      %q8_fused_weighted_a = scf.if %q8_output_valid_a -> (f32) {
+        %q8_token_i32_a = view.load %tok_view[%q8_match_a] : view<32xi32, #dense> -> i32
+        %q8_selected_i32_a = view.load %sel_view[%q8_match_a] : view<32xi32, #dense> -> i32
+        %q8_token0_a = index.cast %q8_token_i32_a : i32 to index
+        %q8_token_a = index.assume %q8_token0_a [range(%q8_token0_a, 0, 1048575)] : index
+        %q8_selected0_a = index.cast %q8_selected_i32_a : i32 to index
+        %q8_selected_a = index.assume %q8_selected0_a [range(%q8_selected0_a, 0, 127)] : index
+        %q8_token_base_a = index.mul %q8_token_a, %dst_token_stride : index
+        %q8_selected_base_a = index.mul %q8_selected_a, %rows : index
+        %q8_destination_a_a = index.add %q8_token_base_a, %q8_selected_base_a : index
+        %q8_destination_b_a = index.add %q8_destination_a_a, %q8_row_a : index
+        %q8_destination_a = index.assume %q8_destination_b_a [range(%q8_destination_b_a, 0, 1073741823)] : index
+        %q8_up_raw_a = view.load %result_view[%q8_match_a, %q8_row_local_a] : view<16x128xf32, #dense> -> f32
+        %q8_gate_value_a = view.load %gate_view[%q8_destination_a] : view<1073741824xf32, #dense> -> f32
+        %q8_gate_silu_a = scalar.siluf %q8_gate_value_a : f32
+        %q8_up_hi_a = scalar.minnumf %q8_up_raw_a, %up_clamp_max : f32
+        %q8_up_clamped_a = scalar.maxnumf %q8_up_hi_a, %up_clamp_min : f32
+        %q8_fused_a = scalar.mulf %q8_gate_silu_a, %q8_up_clamped_a : f32
+        %q8_router_token_base_a = index.mul %q8_token_a, %router_token_stride : index
+        %q8_router_index0_a = index.add %q8_router_token_base_a, %q8_selected_a : index
+        %q8_router_index_a = index.assume %q8_router_index0_a [range(%q8_router_index0_a, 0, 268435455)] : index
+        %q8_route_weight_a = view.load %router_view[%q8_router_index_a] : view<268435456xf32, #dense> -> f32
+        %q8_weighted_a = scalar.mulf %q8_fused_a, %q8_route_weight_a : f32
+        scf.yield %q8_weighted_a : f32
+      } else {
+        scf.yield %zero_f32 : f32
+      }
+
+      %q8_absolute_a = scalar.absf %q8_fused_weighted_a : f32
+      %q8_max1_peer_a, %q8_max1_valid_a = kernel.subgroup.shuffle<xor> %q8_absolute_a, %shuffle_xor1, %shuffle_width : f32, i32, i32
+      %q8_max1_a = scalar.maxnumf %q8_absolute_a, %q8_max1_peer_a : f32
+      %q8_max2_peer_a, %q8_max2_valid_a = kernel.subgroup.shuffle<xor> %q8_max1_a, %shuffle_xor2, %shuffle_width : f32, i32, i32
+      %q8_max2_a = scalar.maxnumf %q8_max1_a, %q8_max2_peer_a : f32
+      %q8_max4_peer_a, %q8_max4_valid_a = kernel.subgroup.shuffle<xor> %q8_max2_a, %shuffle_xor4, %shuffle_width : f32, i32, i32
+      %q8_max4_a = scalar.maxnumf %q8_max2_a, %q8_max4_peer_a : f32
+      %q8_max8_peer_a, %q8_max8_valid_a = kernel.subgroup.shuffle<xor> %q8_max4_a, %shuffle_xor8, %shuffle_width : f32, i32, i32
+      %q8_max8_a = scalar.maxnumf %q8_max4_a, %q8_max8_peer_a : f32
+      %q8_max16_peer_a, %q8_max16_valid_a = kernel.subgroup.shuffle<xor> %q8_max8_a, %shuffle_xor16, %shuffle_width : f32, i32, i32
+      %q8_group_max_a = scalar.maxnumf %q8_max8_a, %q8_max16_peer_a : f32
+      %q8_amax_a = scalar.maxnumf %q8_group_max_a, %qact_amax_eps : f32
+      %q8_scale_a = scalar.mulf<reassoc|nnan|ninf|nsz> %q8_amax_a, %qact_inv127 : f32
+      %q8_rscale_a = scalar.divf<reassoc|nnan|ninf|nsz> %qact_f127, %q8_amax_a : f32
+      %q8_scaled_a = scalar.mulf %q8_fused_weighted_a, %q8_rscale_a : f32
+      %q8_rounded_a = scalar.roundf %q8_scaled_a : f32
+      %q8_q32_a = scalar.fptosi %q8_rounded_a : f32 to i32
+      %q8_q8_a = scalar.trunci %q8_q32_a : i32 to i8
+
+      %q8_store_token_i32_a = view.load %tok_view[%q8_match_a] : view<32xi32, #dense> -> i32
+      %q8_store_selected_i32_a = view.load %sel_view[%q8_match_a] : view<32xi32, #dense> -> i32
+      %q8_store_token0_a = index.cast %q8_store_token_i32_a : i32 to index
+      %q8_store_token_a = index.assume %q8_store_token0_a [range(%q8_store_token0_a, 0, 1048575)] : index
+      %q8_store_selected0_a = index.cast %q8_store_selected_i32_a : i32 to index
+      %q8_store_selected_a = index.assume %q8_store_selected0_a [range(%q8_store_selected0_a, 0, 127)] : index
+      %q8_store_token_base_a = index.mul %q8_store_token_a, %dst_token_stride : index
+      %q8_store_selected_base_a = index.mul %q8_store_selected_a, %rows : index
+      %q8_store_destination_a_a = index.add %q8_store_token_base_a, %q8_store_selected_base_a : index
+      %q8_store_destination_b_a = index.add %q8_store_destination_a_a, %q8_row_a : index
+      %q8_store_destination_a = index.assume %q8_store_destination_b_a [range(%q8_store_destination_b_a, 0, 1073741823)] : index
+      scf.if %q8_output_valid_a {
+        view.store %q8_q8_a, %out_qs_view[%q8_store_destination_a] : i8, view<1073741824xi8, #dense>
+      }
+
+      %q8_dst_token_group_stride_a = index.div %dst_token_stride, %thirtytwo : index
+      %q8_selected_group_stride_a = index.div %rows, %thirtytwo : index
+      %q8_token_group_base_a = index.mul %q8_store_token_a, %q8_dst_token_group_stride_a : index
+      %q8_selected_group_base_a = index.mul %q8_store_selected_a, %q8_selected_group_stride_a : index
+      %q8_row_tile_group_base_a = index.mul %tile, %four : index
+      %q8_group_index_a_a = index.add %q8_token_group_base_a, %q8_selected_group_base_a : index
+      %q8_group_index_b_a = index.add %q8_group_index_a_a, %q8_row_tile_group_base_a : index
+      %q8_group_index0_a = index.add %q8_group_index_b_a, %q8_row_block_a : index
+      %q8_group_index_a = index.assume %q8_group_index0_a [range(%q8_group_index0_a, 0, 33554431)] : index
+      %q8_is_scale_leader_a = index.cmp eq, %wave_lane, %zero : index
+      %q8_store_scale_a = scalar.andi %q8_output_valid_a, %q8_is_scale_leader_a : i1
+      scf.if %q8_store_scale_a {
+        view.store %q8_scale_a, %out_scale_view[%q8_group_index_a] : f32, view<33554432xf32, #dense>
+      }
+    }
+    kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+    // The second accumulator reuses the same LDS result tile after every lane
+    // has consumed the first one.
+    scf.if %has_second_window {
+      vector.fragment.store<result> %accumulator_second, %result_view[%zero, %wave_row_base] shape [%sixteen, %sixteen] : vector<8xf32>, view<16x128xf32, #dense>
+      kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+      scf.for %q8_output_pass_b = [%zero to %eight step %one] {
+        %q8_pass_base_b = index.mul %q8_output_pass_b, %eight : index
+        %q8_output_group_b = index.add %q8_pass_base_b, %wave : index
+        %q8_match_b = index.div %q8_output_group_b, %four : index
+        %q8_row_block_b = index.rem %q8_output_group_b, %four : index
+        %q8_match_slot_b = index.add %q8_match_b, %sixteen : index
+        %q8_match_valid_b = index.cmp ult, %q8_match_b, %match_count_second : index
+        %q8_row_block_base_b = index.mul %q8_row_block_b, %thirtytwo : index
+        %q8_row_local_b = index.add %q8_row_block_base_b, %wave_lane : index
+        %q8_row_b = index.add %row_tile_base, %q8_row_local_b : index
+        %q8_row_valid_b = index.cmp ult, %q8_row_b, %rows : index
+        %q8_output_valid_b = scalar.andi %q8_match_valid_b, %q8_row_valid_b : i1
+        %q8_fused_weighted_b = scf.if %q8_output_valid_b -> (f32) {
+          %q8_token_i32_b = view.load %tok_view[%q8_match_slot_b] : view<32xi32, #dense> -> i32
+          %q8_selected_i32_b = view.load %sel_view[%q8_match_slot_b] : view<32xi32, #dense> -> i32
+          %q8_token0_b = index.cast %q8_token_i32_b : i32 to index
+          %q8_token_b = index.assume %q8_token0_b [range(%q8_token0_b, 0, 1048575)] : index
+          %q8_selected0_b = index.cast %q8_selected_i32_b : i32 to index
+          %q8_selected_b = index.assume %q8_selected0_b [range(%q8_selected0_b, 0, 127)] : index
+          %q8_token_base_b = index.mul %q8_token_b, %dst_token_stride : index
+          %q8_selected_base_b = index.mul %q8_selected_b, %rows : index
+          %q8_destination_a_b = index.add %q8_token_base_b, %q8_selected_base_b : index
+          %q8_destination_b_b = index.add %q8_destination_a_b, %q8_row_b : index
+          %q8_destination_b = index.assume %q8_destination_b_b [range(%q8_destination_b_b, 0, 1073741823)] : index
+          %q8_up_raw_b = view.load %result_view[%q8_match_b, %q8_row_local_b] : view<16x128xf32, #dense> -> f32
+          %q8_gate_value_b = view.load %gate_view[%q8_destination_b] : view<1073741824xf32, #dense> -> f32
+          %q8_gate_silu_b = scalar.siluf %q8_gate_value_b : f32
+          %q8_up_hi_b = scalar.minnumf %q8_up_raw_b, %up_clamp_max : f32
+          %q8_up_clamped_b = scalar.maxnumf %q8_up_hi_b, %up_clamp_min : f32
+          %q8_fused_b = scalar.mulf %q8_gate_silu_b, %q8_up_clamped_b : f32
+          %q8_router_token_base_b = index.mul %q8_token_b, %router_token_stride : index
+          %q8_router_index0_b = index.add %q8_router_token_base_b, %q8_selected_b : index
+          %q8_router_index_b = index.assume %q8_router_index0_b [range(%q8_router_index0_b, 0, 268435455)] : index
+          %q8_route_weight_b = view.load %router_view[%q8_router_index_b] : view<268435456xf32, #dense> -> f32
+          %q8_weighted_b = scalar.mulf %q8_fused_b, %q8_route_weight_b : f32
+          scf.yield %q8_weighted_b : f32
+        } else {
+          scf.yield %zero_f32 : f32
+        }
+
+        %q8_absolute_b = scalar.absf %q8_fused_weighted_b : f32
+        %q8_max1_peer_b, %q8_max1_valid_b = kernel.subgroup.shuffle<xor> %q8_absolute_b, %shuffle_xor1, %shuffle_width : f32, i32, i32
+        %q8_max1_b = scalar.maxnumf %q8_absolute_b, %q8_max1_peer_b : f32
+        %q8_max2_peer_b, %q8_max2_valid_b = kernel.subgroup.shuffle<xor> %q8_max1_b, %shuffle_xor2, %shuffle_width : f32, i32, i32
+        %q8_max2_b = scalar.maxnumf %q8_max1_b, %q8_max2_peer_b : f32
+        %q8_max4_peer_b, %q8_max4_valid_b = kernel.subgroup.shuffle<xor> %q8_max2_b, %shuffle_xor4, %shuffle_width : f32, i32, i32
+        %q8_max4_b = scalar.maxnumf %q8_max2_b, %q8_max4_peer_b : f32
+        %q8_max8_peer_b, %q8_max8_valid_b = kernel.subgroup.shuffle<xor> %q8_max4_b, %shuffle_xor8, %shuffle_width : f32, i32, i32
+        %q8_max8_b = scalar.maxnumf %q8_max4_b, %q8_max8_peer_b : f32
+        %q8_max16_peer_b, %q8_max16_valid_b = kernel.subgroup.shuffle<xor> %q8_max8_b, %shuffle_xor16, %shuffle_width : f32, i32, i32
+        %q8_group_max_b = scalar.maxnumf %q8_max8_b, %q8_max16_peer_b : f32
+        %q8_amax_b = scalar.maxnumf %q8_group_max_b, %qact_amax_eps : f32
+        %q8_scale_b = scalar.mulf<reassoc|nnan|ninf|nsz> %q8_amax_b, %qact_inv127 : f32
+        %q8_rscale_b = scalar.divf<reassoc|nnan|ninf|nsz> %qact_f127, %q8_amax_b : f32
+        %q8_scaled_b = scalar.mulf %q8_fused_weighted_b, %q8_rscale_b : f32
+        %q8_rounded_b = scalar.roundf %q8_scaled_b : f32
+        %q8_q32_b = scalar.fptosi %q8_rounded_b : f32 to i32
+        %q8_q8_b = scalar.trunci %q8_q32_b : i32 to i8
+
+        %q8_store_token_i32_b = view.load %tok_view[%q8_match_slot_b] : view<32xi32, #dense> -> i32
+        %q8_store_selected_i32_b = view.load %sel_view[%q8_match_slot_b] : view<32xi32, #dense> -> i32
+        %q8_store_token0_b = index.cast %q8_store_token_i32_b : i32 to index
+        %q8_store_token_b = index.assume %q8_store_token0_b [range(%q8_store_token0_b, 0, 1048575)] : index
+        %q8_store_selected0_b = index.cast %q8_store_selected_i32_b : i32 to index
+        %q8_store_selected_b = index.assume %q8_store_selected0_b [range(%q8_store_selected0_b, 0, 127)] : index
+        %q8_store_token_base_b = index.mul %q8_store_token_b, %dst_token_stride : index
+        %q8_store_selected_base_b = index.mul %q8_store_selected_b, %rows : index
+        %q8_store_destination_a_b = index.add %q8_store_token_base_b, %q8_store_selected_base_b : index
+        %q8_store_destination_b_b = index.add %q8_store_destination_a_b, %q8_row_b : index
+        %q8_store_destination_b = index.assume %q8_store_destination_b_b [range(%q8_store_destination_b_b, 0, 1073741823)] : index
+        scf.if %q8_output_valid_b {
+          view.store %q8_q8_b, %out_qs_view[%q8_store_destination_b] : i8, view<1073741824xi8, #dense>
+        }
+
+        %q8_dst_token_group_stride_b = index.div %dst_token_stride, %thirtytwo : index
+        %q8_selected_group_stride_b = index.div %rows, %thirtytwo : index
+        %q8_token_group_base_b = index.mul %q8_store_token_b, %q8_dst_token_group_stride_b : index
+        %q8_selected_group_base_b = index.mul %q8_store_selected_b, %q8_selected_group_stride_b : index
+        %q8_row_tile_group_base_b = index.mul %tile, %four : index
+        %q8_group_index_a_b = index.add %q8_token_group_base_b, %q8_selected_group_base_b : index
+        %q8_group_index_b_b = index.add %q8_group_index_a_b, %q8_row_tile_group_base_b : index
+        %q8_group_index0_b = index.add %q8_group_index_b_b, %q8_row_block_b : index
+        %q8_group_index_b = index.assume %q8_group_index0_b [range(%q8_group_index0_b, 0, 33554431)] : index
+        %q8_is_scale_leader_b = index.cmp eq, %wave_lane, %zero : index
+        %q8_store_scale_b = scalar.andi %q8_output_valid_b, %q8_is_scale_leader_b : i1
+        scf.if %q8_store_scale_b {
+          view.store %q8_scale_b, %out_scale_view[%q8_group_index_b] : f32, view<33554432xf32, #dense>
+        }
+      }
+      kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+    }
+  }
+  }
+  kernel.return
+}

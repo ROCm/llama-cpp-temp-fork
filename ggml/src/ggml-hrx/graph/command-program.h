@@ -33,7 +33,22 @@ struct CommandBinding {
     StorageId storage = kInvalidId;
     size_t offset = 0;
     size_t length = 0;
+    std::string storage_binding;
     ResourceAccess access = ResourceAccess::Read;
+};
+
+struct StreamedExpertCommand {
+    int32_t layer = -1;
+    ValueId weight = kInvalidId;
+    ValueId expert_ids = kInvalidId;
+    bool missing_suffix = false;
+    uint32_t expert_begin = 0;
+    uint32_t expert_end = 0xffffffffu;
+    uint32_t load_chunk_size = 0;
+
+    bool valid() const {
+        return layer >= 0 && weight != kInvalidId && expert_ids != kInvalidId;
+    }
 };
 
 struct Command {
@@ -46,6 +61,7 @@ struct Command {
     uint32_t subgroup_size = 0;
     std::vector<CommandBinding> bindings;
     std::vector<uint32_t> dependencies;
+    StreamedExpertCommand streamed;
 };
 
 struct TransientAllocation {

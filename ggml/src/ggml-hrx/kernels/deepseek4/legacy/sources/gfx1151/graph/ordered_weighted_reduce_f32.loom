@@ -1,0 +1,119 @@
+// Ordered weighted reduction for selected expert outputs.
+// router weights live through this terminal dispatch.
+
+config.decl @hrx2_reduce_rows : %value: index where [range(%value, 8, 32768), mul(%value, 8)]
+config.decl @hrx2_reduce_nselected : %value: index where [range(%value, 1, 128)]
+config.decl @hrx2_reduce_ntokens : %value: index where [range(%value, 1, 16384)]
+config.decl @hrx2_reduce_selected_token_stride : %value: index where [range(%value, 8, 1073741824)]
+config.decl @hrx2_reduce_router_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_reduce_dst_token_stride : %value: index where [range(%value, 8, 1073741824)]
+
+kernel.def export("hrx2_ordered_weighted_reduce_f32") @hrx2_ordered_weighted_reduce_f32() {
+  %one = index.constant 1 : index
+  %rows_per_group = index.constant 2048 : index
+  %wg = index.constant 256 : index
+  %rows0 = config.get @hrx2_reduce_rows : index
+  %tokens0 = config.get @hrx2_reduce_ntokens : index
+  %rows = index.assume %rows0 [range(%rows0, 8, 32768)] : index
+  %tokens = index.assume %tokens0 [range(%tokens0, 1, 16384)] : index
+  %rounded = index.add %rows, %rows_per_group : index
+  %adjusted = index.sub %rounded, %one : index
+  %row_groups = index.div %adjusted, %rows_per_group : index
+  kernel.launch.config workgroups(%row_groups, %tokens, %one)
+      workgroup_size(%wg, %one, %one) : index
+} launch(%selected: buffer, %router: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %eight = index.constant 8 : index
+  %twofiftyfive = index.constant 255 : index
+  %twohundredfiftysix = index.constant 256 : index
+  %rows_per_group = index.constant 2048 : index
+  %lds_bytes = index.constant 512 : offset
+  %zero_v = vector.constant 0.0 : vector<8xf32>
+
+  %rows0 = config.get @hrx2_reduce_rows : index
+  %nselected0 = config.get @hrx2_reduce_nselected : index
+  %ntokens0 = config.get @hrx2_reduce_ntokens : index
+  %selected_token_stride0 = config.get @hrx2_reduce_selected_token_stride : index
+  %router_token_stride0 = config.get @hrx2_reduce_router_token_stride : index
+  %dst_token_stride0 = config.get @hrx2_reduce_dst_token_stride : index
+  %rows = index.assume %rows0 [range(%rows0, 8, 32768), mul(%rows0, 8)] : index
+  %nselected = index.assume %nselected0 [range(%nselected0, 1, 128)] : index
+  %ntokens = index.assume %ntokens0 [range(%ntokens0, 1, 16384)] : index
+  %selected_token_stride = index.assume %selected_token_stride0
+      [range(%selected_token_stride0, 8, 1073741824)] : index
+  %router_token_stride = index.assume %router_token_stride0
+      [range(%router_token_stride0, 1, 1048576)] : index
+  %dst_token_stride = index.assume %dst_token_stride0
+      [range(%dst_token_stride0, 8, 1073741824)] : index
+
+  %row_group0 = kernel.workgroup.id<x> : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 0, 15)] : index
+  %token0 = kernel.workgroup.id<y> : index
+  %token = index.assume %token0 [range(%token0, 0, 16383)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %row_group_base = index.mul %row_group, %rows_per_group : index
+  %lane_row = index.mul %lane, %eight : index
+  %row = index.add %row_group_base, %lane_row : index
+  %row_last = index.add %row, %eight : index
+  %row_active = index.cmp ule, %row_last, %rows : index
+
+  %selected_g = buffer.assume.memory_space<global> %selected : buffer
+  %router_g = buffer.assume.memory_space<global> %router : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %selected_na, %router_na, %dst_na = buffer.assume.noalias
+      %selected_g, %router_g, %dst_g : buffer, buffer, buffer
+  %selected_v = buffer.view %selected_na[%base] :
+      buffer -> view<1073741824xf32, #dense>
+  %router_v = buffer.view %router_na[%base] :
+      buffer -> view<268435456xf32, #dense>
+  %dst_v = buffer.view %dst_na[%base] :
+      buffer -> view<1073741824xf32, #dense>
+  %scratch = buffer.alloca %lds_bytes
+      {base_alignment = 16, memory_space = workgroup} : buffer
+  %weight_v = buffer.view %scratch[%base] : buffer -> view<128xf32, #dense>
+
+  // One lane loads each routing weight. Every output row then reuses LDS.
+  %weight_owner = index.cmp ult, %lane, %nselected : index
+  scf.if %weight_owner {
+    %router_token_base = index.mul %token, %router_token_stride : index
+    %router_index0 = index.add %router_token_base, %lane : index
+    %router_index = index.assume %router_index0 [range(%router_index0, 0, 268435455)] : index
+    %weight = view.load %router_v[%router_index] : view<268435456xf32, #dense> -> f32
+    view.store %weight, %weight_v[%lane] : f32, view<128xf32, #dense>
+  }
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+  scf.if %row_active {
+    %selected_token_base = index.mul %token, %selected_token_stride : index
+    %sum = scf.for %slot = [%zero to %nselected step %one](
+        %acc = %zero_v : vector<8xf32>) -> (vector<8xf32>) {
+      %slot_offset = index.mul %slot, %rows : index
+      %selected_base = index.add %selected_token_base, %slot_offset : index
+      %selected_index0 = index.add %selected_base, %row : index
+      %selected_index = index.assume %selected_index0
+          [range(%selected_index0, 0, 1073741816)] : index
+      %x = vector.load %selected_v[%selected_index] :
+          view<1073741824xf32, #dense> -> vector<8xf32>
+      %weight = view.load %weight_v[%slot] : view<128xf32, #dense> -> f32
+      %weight_vec = vector.splat %weight : vector<8xf32>
+      %product = vector.mulf<nnan|ninf|nsz> %x, %weight_vec : vector<8xf32>
+      %is_first = index.cmp eq, %slot, %zero : index
+      %next = scf.if %is_first -> (vector<8xf32>) {
+        scf.yield %product : vector<8xf32>
+      } else {
+        %added = vector.addf<nnan|ninf|nsz> %acc, %product : vector<8xf32>
+        scf.yield %added : vector<8xf32>
+      }
+      scf.yield %next : vector<8xf32>
+    }
+    %dst_token_base = index.mul %token, %dst_token_stride : index
+    %dst_index0 = index.add %dst_token_base, %row : index
+    %dst_index = index.assume %dst_index0 [range(%dst_index0, 0, 1073741816)] : index
+    vector.store %sum, %dst_v[%dst_index] :
+        vector<8xf32>, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}

@@ -1,0 +1,212 @@
+// DeepSeek-V4 compressed-attention state stage, PP512.
+//
+// The first kernel replaces CONCAT -> VIEW -> SET_ROWS and the two identical
+// SUM nodes.  The accepted graph computes the same SUM twice; one exact
+// workgroup reduction is sufficient because both consumers have identical
+// inputs.  The second kernel replaces the two SCALE(0, 0) -> ADD -> GET_ROWS
+// -> RESHAPE -> SET_ROWS chains while retaining the accepted floating-point
+// multiply/add sequence (including its NaN behavior).
+
+kernel.def export("hrx2_dsv4_hca_stage03_concat_sum_setrows_f32_f16")
+    @hrx2_dsv4_hca_stage03_concat_sum_setrows_f32_f16() {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%one, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%main: buffer, %rope: buffer, %set_indices: buffer,
+         %cache_k: buffer, %sum: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %zero_f32 = scalar.constant 0.0 : f32
+  %two = index.constant 2 : index
+  %width = index.constant 512 : index
+  %main_width = index.constant 448 : index
+  %rope_width = index.constant 64 : index
+  %total = index.constant 2048 : index
+  %threads = index.constant 256 : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+
+  %main_g = buffer.assume.memory_space<global> %main : buffer
+  %rope_g = buffer.assume.memory_space<global> %rope : buffer
+  %indices_g = buffer.assume.memory_space<global> %set_indices : buffer
+  %cache_g = buffer.assume.memory_space<global> %cache_k : buffer
+  %sum_g = buffer.assume.memory_space<global> %sum : buffer
+  %main_na, %rope_na, %indices_na, %cache_na, %sum_na =
+      buffer.assume.noalias %main_g, %rope_g, %indices_g, %cache_g, %sum_g :
+      buffer, buffer, buffer, buffer, buffer
+  %main_v = buffer.view %main_na[%base] :
+      buffer -> view<2048xf32, #dense>
+  %rope_v = buffer.view %rope_na[%base] :
+      buffer -> view<256xf32, #dense>
+  // SET_ROWS receives I64 indices; the accepted generic kernel reads the low
+  // i32 word at element index row*2.
+  %indices_v = buffer.view %indices_na[%base] :
+      buffer -> view<8xi32, #dense>
+  %cache_v = buffer.view %cache_na[%base] :
+      buffer -> view<131072xi16, #dense>
+  %sum_v = buffer.view %sum_na[%base] :
+      buffer -> view<1xf32, #dense>
+
+  %lane_sum = scf.for %i = [%lane to %total step %threads]
+      (%acc = %zero_f32 : f32) -> (f32) {
+    %row = index.div %i, %width : index
+    %col = index.rem %i, %width : index
+    %is_main = index.cmp ult, %col, %main_width : index
+    %value = scf.if %is_main -> (f32) {
+      %x = view.load %main_v[%i] : view<2048xf32, #dense> -> f32
+      scf.yield %x : f32
+    } else {
+      %rope_row0 = index.mul %row, %rope_width : index
+      %rope_col = index.sub %col, %main_width : index
+      %rope_index0 = index.add %rope_row0, %rope_col : index
+      %rope_index = index.assume %rope_index0 [range(%rope_index0, 0, 255)] : index
+      %x = view.load %rope_v[%rope_index] : view<256xf32, #dense> -> f32
+      scf.yield %x : f32
+    }
+
+    %index_word0 = index.mul %row, %two : index
+    %index_word = index.assume %index_word0
+        [range(%index_word0, 0, 6), mul(%index_word0, 2)] : index
+    %cache_row_i32 = view.load %indices_v[%index_word] :
+        view<8xi32, #dense> -> i32
+    %cache_row_nonnegative = scalar.cmpi sge, %cache_row_i32,
+        %zero_i32 : i32
+    scf.if %cache_row_nonnegative {
+      %cache_row = index.cast %cache_row_i32 : i32 to index
+      %cache_row_valid = index.cmp ult, %cache_row, %threads : index
+      scf.if %cache_row_valid {
+        %cache_base0 = index.mul %cache_row, %width : index
+        %cache_index0 = index.add %cache_base0, %col : index
+        %cache_index = index.assume %cache_index0
+            [range(%cache_index0, 0, 131071)] : index
+        %half = scalar.fptrunc %value : f32 to f16
+        %half_bits = scalar.bitcast %half : f16 to i16
+        view.store %half_bits, %cache_v[%cache_index] :
+            i16, view<131072xi16, #dense>
+      }
+    }
+
+    // Match hrx2_sum_f32's per-lane order and arithmetic flags.
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %value : f32
+    scf.yield %next : f32
+  }
+  %total_sum = kernel.workgroup.reduce<addf> %lane_sum : f32
+  %is_lane0 = index.cmp eq, %lane, %zero : index
+  scf.if %is_lane0 {
+    view.store %total_sum, %sum_v[%zero] : f32, view<1xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_dsv4_hca_stage03_state_update_f32")
+    @hrx2_dsv4_hca_stage03_state_update_f32() {
+  %one = index.constant 1 : index
+  %groups = index.constant 512 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%groups, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%sum: buffer, %state_kv: buffer, %state_score: buffer,
+         %get_indices: buffer, %set_indices: buffer,
+         %cache_kv: buffer, %cache_score: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %zero_f32 = scalar.constant 0.0 : f32
+  %width = index.constant 512 : index
+  %branch_elements = index.constant 65536 : index
+  %total = index.constant 131072 : index
+  %threads = index.constant 256 : index
+  %wg0 = kernel.workgroup.id<x> : index
+  %wg = index.assume %wg0 [range(%wg0, 0, 511)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %linear_base0 = index.mul %wg, %threads : index
+  %linear0 = index.add %linear_base0, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 131071)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %sum_g = buffer.assume.memory_space<global> %sum : buffer
+  %state_kv_g = buffer.assume.memory_space<global> %state_kv : buffer
+  %state_score_g = buffer.assume.memory_space<global> %state_score : buffer
+  %get_indices_g = buffer.assume.memory_space<global> %get_indices : buffer
+  %set_indices_g = buffer.assume.memory_space<global> %set_indices : buffer
+  %cache_kv_g = buffer.assume.memory_space<global> %cache_kv : buffer
+  %cache_score_g = buffer.assume.memory_space<global> %cache_score : buffer
+  %sum_na, %state_kv_na, %state_score_na, %get_indices_na,
+      %set_indices_na, %cache_kv_na, %cache_score_na = buffer.assume.noalias
+      %sum_g, %state_kv_g, %state_score_g, %get_indices_g,
+      %set_indices_g, %cache_kv_g, %cache_score_g :
+      buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %sum_v = buffer.view %sum_na[%base] : buffer -> view<1xf32, #dense>
+  %state_kv_v = buffer.view %state_kv_na[%base] :
+      buffer -> view<262144xf32, #dense>
+  %state_score_v = buffer.view %state_score_na[%base] :
+      buffer -> view<262144xf32, #dense>
+  %get_indices_v = buffer.view %get_indices_na[%base] :
+      buffer -> view<128xi32, #dense>
+  %set_indices_v = buffer.view %set_indices_na[%base] :
+      buffer -> view<128xi32, #dense>
+  %cache_kv_v = buffer.view %cache_kv_na[%base] :
+      buffer -> view<65536xf32, #dense>
+  %cache_score_v = buffer.view %cache_score_na[%base] :
+      buffer -> view<65536xf32, #dense>
+
+  scf.if %in_bounds {
+    %branch = index.div %linear, %branch_elements : index
+    %local = index.rem %linear, %branch_elements : index
+    %slot = index.div %local, %width : index
+    %col = index.rem %local, %width : index
+    %get_row_i32 = view.load %get_indices_v[%slot] :
+        view<128xi32, #dense> -> i32
+    %set_row_i32 = view.load %set_indices_v[%slot] :
+        view<128xi32, #dense> -> i32
+    %get_nonnegative = scalar.cmpi sge, %get_row_i32, %zero_i32 : i32
+    %set_nonnegative = scalar.cmpi sge, %set_row_i32, %zero_i32 : i32
+    %get_row = index.cast %get_row_i32 : i32 to index
+    %set_row = index.cast %set_row_i32 : i32 to index
+    %get_valid = index.cmp ult, %get_row, %width : index
+    %set_limit = index.constant 128 : index
+    %set_valid = index.cmp ult, %set_row, %set_limit : index
+    %rows_nonnegative = scalar.andi %get_nonnegative, %set_nonnegative : i1
+    %rows_valid = scalar.andi %get_valid, %set_valid : i1
+    %active = scalar.andi %rows_nonnegative, %rows_valid : i1
+    scf.if %active {
+      %src_base0 = index.mul %get_row, %width : index
+      %src_index0 = index.add %src_base0, %col : index
+      %src_index = index.assume %src_index0
+          [range(%src_index0, 0, 262143)] : index
+      %dst_base0 = index.mul %set_row, %width : index
+      %dst_index0 = index.add %dst_base0, %col : index
+      %dst_index = index.assume %dst_index0
+          [range(%dst_index0, 0, 65535)] : index
+      %is_score = index.cmp eq, %branch, %one : index
+      %state_value = scf.if %is_score -> (f32) {
+        %x = view.load %state_score_v[%src_index] :
+            view<262144xf32, #dense> -> f32
+        scf.yield %x : f32
+      } else {
+        %x = view.load %state_kv_v[%src_index] :
+            view<262144xf32, #dense> -> f32
+        scf.yield %x : f32
+      }
+
+      // Preserve SCALE(0, 0), then ADD, exactly as the accepted kernels.
+      %sum_value = view.load %sum_v[%zero] : view<1xf32, #dense> -> f32
+      %scaled = scalar.mulf<nnan|ninf|nsz> %sum_value, %zero_f32 : f32
+      %scaled_bias = scalar.addf<nnan|ninf|nsz> %scaled, %zero_f32 : f32
+      %result = scalar.addf<nnan|ninf|nsz> %state_value,
+          %scaled_bias : f32
+      scf.if %is_score {
+        view.store %result, %cache_score_v[%dst_index] :
+            f32, view<65536xf32, #dense>
+      } else {
+        view.store %result, %cache_kv_v[%dst_index] :
+            f32, view<65536xf32, #dense>
+      }
+    }
+  }
+  kernel.return
+}

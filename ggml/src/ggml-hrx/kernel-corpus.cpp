@@ -72,7 +72,7 @@ static bool kernel_variant_contract_equal(const kernel_definition & lhs, const k
 // The corpus records refer to source records from the first include.
 // clang-format off
 #include "kernel-corpus-sources.inc"
-#include "kernel-corpus-qwen.inc"
+#include "kernel-corpus.inc"
 // clang-format on
 
 }  // namespace
@@ -89,8 +89,8 @@ const kernel_source * get_kernel_source(const char * source_path) {
     return nullptr;
 }
 
-const kernel_corpus & get_qwen_kernel_corpus() {
-    return qwen_kernel_corpus;
+const kernel_corpus & get_kernel_corpus() {
+    return embedded_kernel_corpus;
 }
 
 kernel_resolve_result resolve_kernel_definition(const kernel_corpus &               corpus,

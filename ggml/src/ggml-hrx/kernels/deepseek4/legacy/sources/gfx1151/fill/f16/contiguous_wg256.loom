@@ -1,0 +1,33 @@
+config.decl @shape_fill_f16_total_size : %value: index where [range(%value, 1, 1073741824)]
+config.decl @tuning_fill_f16_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_fill_f16") @hrx2_fill_f16() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %total_size = config.get @shape_fill_f16_total_size : index
+  %workgroup_size = config.get @tuning_fill_f16_workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total_size, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%value: f32, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %total_size = config.get @shape_fill_f16_total_size : index
+  %workgroup_size = config.get @tuning_fill_f16_workgroup_size : index
+  %total_size_bounded = index.assume %total_size [range(%total_size, 1, 1073741824)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 33554431)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_base = index.mul %workgroup, %workgroup_size : index
+  %linear0 = index.add %linear_base, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %linear, %total_size_bounded : index
+  %value_f16 = scalar.fptrunc %value : f32 to f16
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<[%total_size_bounded]xf16, #dense>
+  scf.if %in_bounds {
+    view.store %value_f16, %dst_view[%linear] : f16, view<[%total_size_bounded]xf16, #dense>
+  }
+  kernel.return
+}

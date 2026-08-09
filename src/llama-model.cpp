@@ -1022,6 +1022,10 @@ struct llama_model::impl {
     // contexts where the model tensors metadata is stored as well as the corresponding buffers:
     std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
 
+    // File-backed tensor descriptors and their metadata-only GGML context. The
+    // loader transfers ownership here only after resident tensor loading ends.
+    std::unique_ptr<llama_streamed_tensor_sources> streamed_tensor_sources;
+
     buft_list_t cpu_buft_list;
     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
 
@@ -1525,6 +1529,11 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
+    if (ml.streamed_tensor_sources) {
+        for (const auto & source : ml.streamed_tensor_sources->all()) {
+            tensors_by_name.emplace_back(source->name, source->tensor);
+        }
+    }
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
@@ -1645,6 +1654,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     if (ml.no_alloc) {
+        pimpl->streamed_tensor_sources = ml.take_streamed_tensor_sources();
         return true;
     }
 
@@ -1661,14 +1671,21 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    pimpl->streamed_tensor_sources = ml.take_streamed_tensor_sources();
+
     return true;
 }
 
-ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+ggml_tensor * llama_model_base::create_tensor(
+        llama_model_loader & ml,
+        const LLM_TN_IMPL & tn,
+        const std::initializer_list<int64_t> & ne,
+        int flags,
+        const llama_streamed_tensor_group_spec * streamed_group) {
     const buft_list_t * buft_list_layer = tn.bid == -1 ? nullptr : pimpl->dev_layer.at(tn.bid).buft_list;
     return ml.create_tensor(
         hparams, &pimpl->cpu_buft_list, pimpl->dev_input.buft_list, pimpl->dev_output.buft_list, buft_list_layer,
-        tn, ne, flags);
+        tn, ne, flags, streamed_group);
 }
 
 std::string llama_model::arch_name() const {
@@ -2803,11 +2820,16 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
     TENSOR_DUPLICATED     (llama_model_loader::TENSOR_DUPLICATED),
     TENSOR_NOT_REQUIRED   (llama_model_loader::TENSOR_NOT_REQUIRED),
     TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
-    TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
+    TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL),
+    TENSOR_STREAMABLE     (llama_model_loader::TENSOR_STREAMABLE) {}
 
-ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+ggml_tensor * llama_model_base::create_tensor(
+        const LLM_TN_IMPL & tn,
+        const std::initializer_list<int64_t> & ne,
+        int flags,
+        const llama_streamed_tensor_group_spec * streamed_group) {
     GGML_ASSERT(ml != nullptr);
-    return create_tensor(*ml, tn, ne, flags);
+    return create_tensor(*ml, tn, ne, flags, streamed_group);
 }
 
 void llama_model_base::create_tensor_gate_up_exps(llama_layer & layer, int bid, int64_t n_embd_, int64_t n_ff_, int64_t n_expert_, int flags) {

@@ -1,0 +1,38 @@
+config.decl @hrx2_shape_cont_i32_total : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2_tuning_cont_i32_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_cont_i32_contiguous") @hrx2_cont_i32_contiguous() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %total = config.get @hrx2_shape_cont_i32_total : index
+  %workgroup_size = config.get @hrx2_tuning_cont_i32_workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %total = config.get @hrx2_shape_cont_i32_total : index
+  %workgroup_size = config.get @hrx2_tuning_cont_i32_workgroup_size : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %total_bounded = index.assume %total [range(%total, 1, 1073741824)] : index
+  %in_bounds = index.cmp ult, %linear, %total_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xi32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xi32, #dense>
+
+  scf.if %in_bounds {
+    %value = view.load %src0_view[%linear] : view<1073741824xi32, #dense> -> i32
+    view.store %value, %dst_view[%linear] : i32, view<1073741824xi32, #dense>
+  }
+  kernel.return
+}

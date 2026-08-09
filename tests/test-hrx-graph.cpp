@@ -95,6 +95,34 @@ static void build_fork_join_graph(Fixture & fixture, const char * prefix) {
     ggml_build_forward_expand(fixture.graph, result);
 }
 
+static void test_region_cycle_pruning() {
+    Fixture       fixture;
+    ggml_tensor * x = ggml_new_tensor_1d(fixture.context, GGML_TYPE_F32, 8);
+    ggml_tensor * y = ggml_new_tensor_1d(fixture.context, GGML_TYPE_F32, 8);
+    ggml_tensor * z = ggml_new_tensor_1d(fixture.context, GGML_TYPE_F32, 8);
+    ggml_set_input(x);
+    ggml_set_input(y);
+    ggml_set_input(z);
+    ggml_tensor * first  = ggml_add(fixture.context, x, y);
+    ggml_tensor * middle = ggml_mul(fixture.context, first, z);
+    ggml_tensor * last   = ggml_add(fixture.context, middle, y);
+    ggml_set_output(last);
+    ggml_build_forward_expand(fixture.graph, last);
+
+    const ggml::hrx::Graph graph = ggml::hrx::Graph::import(fixture.graph);
+    REQUIRE(graph.valid());
+    REQUIRE(graph.operations.size() == 3);
+    const ggml::hrx::GraphIndex index(graph);
+    REQUIRE(index.valid());
+
+    const ggml::hrx::Decision prefix = index.validate_region({ 0 }, { graph.operations[0].output });
+    REQUIRE(prefix.allowed);
+
+    const ggml::hrx::Decision non_convex = index.validate_region({ 0, 2 }, { graph.operations[2].output }, true);
+    REQUIRE(!non_convex.allowed);
+    REQUIRE(non_convex.reason == ggml::hrx::DecisionReason::ContractedCycle);
+}
+
 static void test_deterministic_import_and_schedule() {
     const ggml::hrx::Graph first  = make_arithmetic_graph("first");
     const ggml::hrx::Graph second = make_arithmetic_graph("second");
@@ -557,10 +585,11 @@ static void test_command_program_and_diagnostics() {
 }
 
 static void test_pinned_kernel_corpus_manifest() {
-    const ggml::hrx::kernel_corpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    const ggml::hrx::kernel_corpus & corpus = ggml::hrx::get_kernel_corpus();
     REQUIRE(ggml::hrx::verify_kernel_corpus(corpus).valid());
-    REQUIRE(std::string(corpus.upstream_revision) == "c09218e7ca354654b6c66dddaf80f6294e4748bb");
-    REQUIRE(corpus.kernels.size() == 57);
+    REQUIRE(std::string(corpus.upstream_revision) ==
+            "c09218e7ca354654b6c66dddaf80f6294e4748bb+local-qualified-dsv4-route-corpus");
+    REQUIRE(corpus.kernels.size() == 135);
     REQUIRE(corpus.plan_case_count == 32);
     const char *                           family  = "qwen3_moe";
     const char *                           name    = "ggml_linear_q6k_q8_1_x4";
@@ -726,7 +755,7 @@ int main(int argc, char ** argv) {
         if (reactive.schedule.workload.rfind("prefill-", 0) == 0) {
             REQUIRE(checked_expert_tables == model.blocks.size());
         }
-        const ggml::hrx::kernel_corpus & executable_corpus = ggml::hrx::get_qwen_kernel_corpus();
+        const ggml::hrx::kernel_corpus & executable_corpus = ggml::hrx::get_kernel_corpus();
         const ggml::hrx::CommandProgram  executable_commands =
             ggml::hrx::build_command_program(reactive, executable_corpus);
         const size_t kernel_command_count = std::count_if(
@@ -886,6 +915,7 @@ int main(int argc, char ** argv) {
     }
     REQUIRE(argc == 1);
     test_deterministic_import_and_schedule();
+    test_region_cycle_pruning();
     test_set_rows_effects_and_views();
     test_reactive_cache_and_bindings();
     test_eager_capabilities_and_resource_verification();

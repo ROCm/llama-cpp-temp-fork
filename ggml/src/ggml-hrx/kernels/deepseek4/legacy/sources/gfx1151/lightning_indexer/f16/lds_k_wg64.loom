@@ -1,0 +1,121 @@
+config.decl @shape_lightning_indexer_n_embd : %value: index where [range(%value, 32, 512), mul(%value, 32)]
+config.decl @shape_lightning_indexer_n_head : %value: index where [range(%value, 1, 64)]
+config.decl @shape_lightning_indexer_n_tokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_lightning_indexer_n_kv : %value: index where [range(%value, 1, 65535)]
+config.decl @shape_lightning_indexer_n_stream : %value: index where [range(%value, 1, 64)]
+config.decl @shape_lightning_indexer_n_mask_stream : %value: index where [range(%value, 1, 64)]
+
+kernel.def export("hrx2_lightning_indexer_f16_lds_k_wg64") @hrx2_lightning_indexer_f16_lds_k_wg64() {
+  %one = index.constant 1 : index
+  %workgroup_size = index.constant 64 : index
+  %n_kv = config.get @shape_lightning_indexer_n_kv : index
+  %n_tokens = config.get @shape_lightning_indexer_n_tokens : index
+  %n_stream = config.get @shape_lightning_indexer_n_stream : index
+  kernel.launch.config workgroups(%n_kv, %n_tokens, %n_stream) workgroup_size(%workgroup_size, %one, %one) : index
+} launch(%q: buffer, %k: buffer, %weights: buffer, %mask: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %four = index.constant 4 : index
+  %workgroup_size = index.constant 64 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %n_embd = config.get @shape_lightning_indexer_n_embd : index
+  %n_head = config.get @shape_lightning_indexer_n_head : index
+  %n_tokens = config.get @shape_lightning_indexer_n_tokens : index
+  %n_kv = config.get @shape_lightning_indexer_n_kv : index
+  %n_stream = config.get @shape_lightning_indexer_n_stream : index
+  %n_mask_stream = config.get @shape_lightning_indexer_n_mask_stream : index
+  %n_embd_bounded = index.assume %n_embd [range(%n_embd, 32, 512)] : index
+  %n_head_bounded = index.assume %n_head [range(%n_head, 1, 64)] : index
+  %n_tokens_bounded = index.assume %n_tokens [range(%n_tokens, 1, 1048576)] : index
+  %n_kv_bounded = index.assume %n_kv [range(%n_kv, 1, 65535)] : index
+  %n_stream_bounded = index.assume %n_stream [range(%n_stream, 1, 64)] : index
+  %n_mask_stream_bounded = index.assume %n_mask_stream [range(%n_mask_stream, 1, 64)] : index
+  %kv0 = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %stream0 = kernel.workgroup.id<z> : index
+  %kv = index.assume %kv0 [range(%kv0, 0, 65534), lt(%kv0, %n_kv_bounded)] : index
+  %token = index.assume %token0 [range(%token0, 0, 1048575), lt(%token0, %n_tokens_bounded)] : index
+  %stream = index.assume %stream0 [range(%stream0, 0, 63), lt(%stream0, %n_stream_bounded)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+
+  %q_global = buffer.assume.memory_space<global> %q : buffer
+  %k_global = buffer.assume.memory_space<global> %k : buffer
+  %weights_global = buffer.assume.memory_space<global> %weights : buffer
+  %mask_global = buffer.assume.memory_space<global> %mask : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %q_noalias, %k_noalias, %weights_noalias, %mask_noalias, %dst_noalias = buffer.assume.noalias %q_global, %k_global, %weights_global, %mask_global, %dst_global : buffer, buffer, buffer, buffer, buffer
+  %q_view = buffer.view %q_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %k_view = buffer.view %k_noalias[%base] : buffer -> view<1073741824xf16, #dense>
+  %weights_view = buffer.view %weights_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %mask_view = buffer.view %mask_noalias[%base] : buffer -> view<1073741824xf16, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %lds_bytes_idx = index.mul %n_embd_bounded, %four : index
+  %lds_bytes = index.cast %lds_bytes_idx : index to offset
+  %scratch = buffer.alloca %lds_bytes {base_alignment = 16, memory_space = workgroup} : buffer
+  %k_stage = buffer.view %scratch[%base] : buffer -> view<[%n_embd_bounded]xf32, #dense>
+
+  %stream_k_rows0 = index.mul %stream, %n_kv_bounded : index
+  %k_row0 = index.add %stream_k_rows0, %kv : index
+  %k_row = index.assume %k_row0 [range(%k_row0, 0, 4194239)] : index
+  %k_row_base0 = index.mul %k_row, %n_embd_bounded : index
+  %k_row_base = index.assume %k_row_base0 [range(%k_row_base0, 0, 1073741823)] : index
+  scf.for %i = [%lane to %n_embd_bounded step %workgroup_size] {
+    %k_idx0 = index.add %k_row_base, %i : index
+    %k_idx = index.assume %k_idx0 [range(%k_idx0, 0, 1073741823)] : index
+    %k_f16 = view.load %k_view[%k_idx] : view<1073741824xf16, #dense> -> f16
+    %k_value = scalar.extf %k_f16 : f16 to f32
+    view.store %k_value, %k_stage[%i] : f32, view<[%n_embd_bounded]xf32, #dense>
+  }
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+  %head_valid = index.cmp ult, %lane, %n_head_bounded : index
+  %head_value = scf.if %head_valid -> (f32) {
+    %stream_q_tokens0 = index.mul %stream, %n_tokens_bounded : index
+    %q_token0 = index.add %stream_q_tokens0, %token : index
+    %q_token_heads0 = index.mul %q_token0, %n_head_bounded : index
+    %q_head0 = index.add %q_token_heads0, %lane : index
+    %q_head_base0 = index.mul %q_head0, %n_embd_bounded : index
+    %q_head_base = index.assume %q_head_base0 [range(%q_head_base0, 0, 1073741823)] : index
+    %dot = scf.for %channel = [%zero to %n_embd_bounded step %four](%acc = %zero_f32 : f32) -> (f32) {
+      %q_idx0 = index.add %q_head_base, %channel : index
+      %q_idx = index.assume %q_idx0 [range(%q_idx0, 0, 1073741820)] : index
+      %qv = vector.load %q_view[%q_idx] : view<1073741824xf32, #dense> -> vector<4xf32>
+      %kv_stage = vector.load %k_stage[%channel] : view<[%n_embd_bounded]xf32, #dense> -> vector<4xf32>
+      %next = vector.dotf %qv, %kv_stage, %acc : vector<4xf32>, vector<4xf32>, f32
+      scf.yield %next : f32
+    }
+    %relu = scalar.maxnumf %dot, %zero_f32 : f32
+    %weight_token0 = index.mul %q_token0, %n_head_bounded : index
+    %weight_idx0 = index.add %weight_token0, %lane : index
+    %weight_idx = index.assume %weight_idx0 [range(%weight_idx0, 0, 1073741823)] : index
+    %weight = view.load %weights_view[%weight_idx] : view<1073741824xf32, #dense> -> f32
+    %weighted = scalar.mulf %relu, %weight : f32
+    scf.yield %weighted : f32
+  } else {
+    scf.yield %zero_f32 : f32
+  }
+  %score = kernel.workgroup.reduce<addf> %head_value : f32
+
+  %lane_is_zero = index.cmp eq, %lane, %zero : index
+  scf.if %lane_is_zero {
+    %mask_stream = index.rem %stream, %n_mask_stream_bounded : index
+    %mask_stream_tokens0 = index.mul %mask_stream, %n_tokens_bounded : index
+    %mask_token0 = index.add %mask_stream_tokens0, %token : index
+    %mask_row0 = index.mul %mask_token0, %n_kv_bounded : index
+    %mask_idx0 = index.add %mask_row0, %kv : index
+    %mask_idx = index.assume %mask_idx0 [range(%mask_idx0, 0, 1073741823)] : index
+    %mask_f16 = view.load %mask_view[%mask_idx] : view<1073741824xf16, #dense> -> f16
+    %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+    %result = scalar.addf %score, %mask_f32 : f32
+    %dst_stream_tokens0 = index.mul %stream, %n_tokens_bounded : index
+    %dst_token0 = index.add %dst_stream_tokens0, %token : index
+    %dst_row0 = index.mul %dst_token0, %n_kv_bounded : index
+    %dst_idx0 = index.add %dst_row0, %kv : index
+    %dst_idx = index.assume %dst_idx0 [range(%dst_idx0, 0, 1073741823)] : index
+    view.store %result, %dst_view[%dst_idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}

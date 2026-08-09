@@ -115,7 +115,7 @@ struct kernel_resolve_result {
 };
 
 const kernel_source * get_kernel_source(const char * source_path);
-const kernel_corpus & get_qwen_kernel_corpus();
+const kernel_corpus & get_kernel_corpus();
 kernel_resolve_result resolve_kernel_definition(const kernel_corpus &               corpus,
                                                 const std::string &                 target,
                                                 const std::string &                 family,

@@ -1,0 +1,160 @@
+config.decl @shape_dsv4_hc_comb_n_tokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @tuning_dsv4_hc_comb_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_dsv4_hc_comb_f32") @hrx2_dsv4_hc_comb_f32() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %n_tokens = config.get @shape_dsv4_hc_comb_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_comb_workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %n_tokens, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%eps: f32, %n_iter_i32: i32, %mixes: buffer, %scale: buffer, %base_values: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %one = index.constant 1 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %n_tokens = config.get @shape_dsv4_hc_comb_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_comb_workgroup_size : index
+  %n_tokens_bounded = index.assume %n_tokens [range(%n_tokens, 1, 1048576)] : index
+  %n_iter0 = index.cast %n_iter_i32 : i32 to index
+  %n_iter = index.assume %n_iter0 [range(%n_iter0, 1, 64)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 32767)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %token_mul0 = index.mul %workgroup, %workgroup_size : index
+  %token0 = index.add %token_mul0, %lane : index
+  %token = index.assume %token0 [range(%token0, 0, 33554431)] : index
+  %in_bounds = index.cmp ult, %token, %n_tokens_bounded : index
+
+  %mixes_global = buffer.assume.memory_space<global> %mixes : buffer
+  %scale_global = buffer.assume.memory_space<global> %scale : buffer
+  %base_global = buffer.assume.memory_space<global> %base_values : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %mixes_noalias, %scale_noalias, %base_noalias, %dst_noalias = buffer.assume.noalias %mixes_global, %scale_global, %base_global, %dst_global : buffer, buffer, buffer, buffer
+  %mixes_view = buffer.view %mixes_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %scale_view = buffer.view %scale_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %base_view = buffer.view %base_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %scale_idx = index.constant 2 : index
+    %scale_comb_actual = view.load %scale_view[%scale_idx] : view<1073741824xf32, #dense> -> f32
+    %token_mixes0 = index.mul %token, %scale_idx : index
+    %twelve = index.constant 12 : index
+    %token_mixes1 = index.mul %token_mixes0, %twelve : index
+    %token_mixes = index.assume %token_mixes1 [range(%token_mixes1, 0, 1073741823)] : index
+    %eight = index.constant 8 : index
+    %offset0_raw = index.add %token_mixes, %eight : index
+    %offset0 = index.assume %offset0_raw [range(%offset0_raw, 0, 1073741823)] : index
+    %four = index.constant 4 : index
+    %offset1_raw = index.add %offset0, %four : index
+    %offset1 = index.assume %offset1_raw [range(%offset1_raw, 0, 1073741823)] : index
+    %offset2_raw = index.add %offset1, %four : index
+    %offset2 = index.assume %offset2_raw [range(%offset2_raw, 0, 1073741823)] : index
+    %offset3_raw = index.add %offset2, %four : index
+    %offset3 = index.assume %offset3_raw [range(%offset3_raw, 0, 1073741823)] : index
+
+    %mix0 = vector.load %mixes_view[%offset0] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %mix1 = vector.load %mixes_view[%offset1] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %mix2 = vector.load %mixes_view[%offset2] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %mix3 = vector.load %mixes_view[%offset3] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %base0 = vector.load %base_view[%eight] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %base1 = vector.load %base_view[%twelve] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %sixteen = index.constant 16 : index
+    %twenty = index.constant 20 : index
+    %base2 = vector.load %base_view[%sixteen] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %base3 = vector.load %base_view[%twenty] : view<1073741824xf32, #dense> -> vector<4xf32>
+    %scale_v = vector.splat %scale_comb_actual : vector<4xf32>
+    %raw0_scaled = vector.mulf %mix0, %scale_v : vector<4xf32>
+    %raw1_scaled = vector.mulf %mix1, %scale_v : vector<4xf32>
+    %raw2_scaled = vector.mulf %mix2, %scale_v : vector<4xf32>
+    %raw3_scaled = vector.mulf %mix3, %scale_v : vector<4xf32>
+    %raw0 = vector.addf %raw0_scaled, %base0 : vector<4xf32>
+    %raw1 = vector.addf %raw1_scaled, %base1 : vector<4xf32>
+    %raw2 = vector.addf %raw2_scaled, %base2 : vector<4xf32>
+    %raw3 = vector.addf %raw3_scaled, %base3 : vector<4xf32>
+    %neg_max = scalar.constant -3.4028234663852886e+38 : f32
+    %max0 = vector.reduce<maxnumf> %raw0, %neg_max : vector<4xf32>, f32
+    %max1 = vector.reduce<maxnumf> %raw1, %neg_max : vector<4xf32>, f32
+    %max2 = vector.reduce<maxnumf> %raw2, %neg_max : vector<4xf32>, f32
+    %max3 = vector.reduce<maxnumf> %raw3, %neg_max : vector<4xf32>, f32
+    %maxv0 = vector.splat %max0 : vector<4xf32>
+    %maxv1 = vector.splat %max1 : vector<4xf32>
+    %maxv2 = vector.splat %max2 : vector<4xf32>
+    %maxv3 = vector.splat %max3 : vector<4xf32>
+    %shift0 = vector.subf %raw0, %maxv0 : vector<4xf32>
+    %shift1 = vector.subf %raw1, %maxv1 : vector<4xf32>
+    %shift2 = vector.subf %raw2, %maxv2 : vector<4xf32>
+    %shift3 = vector.subf %raw3, %maxv3 : vector<4xf32>
+    %exp0 = vector.expf<afn> %shift0 : vector<4xf32>
+    %exp1 = vector.expf<afn> %shift1 : vector<4xf32>
+    %exp2 = vector.expf<afn> %shift2 : vector<4xf32>
+    %exp3 = vector.expf<afn> %shift3 : vector<4xf32>
+    %sum0 = vector.reduce<addf> %exp0, %zero_f32 : vector<4xf32>, f32
+    %sum1 = vector.reduce<addf> %exp1, %zero_f32 : vector<4xf32>, f32
+    %sum2 = vector.reduce<addf> %exp2, %zero_f32 : vector<4xf32>, f32
+    %sum3 = vector.reduce<addf> %exp3, %zero_f32 : vector<4xf32>, f32
+    %sumv0 = vector.splat %sum0 : vector<4xf32>
+    %sumv1 = vector.splat %sum1 : vector<4xf32>
+    %sumv2 = vector.splat %sum2 : vector<4xf32>
+    %sumv3 = vector.splat %sum3 : vector<4xf32>
+    %soft0_raw = vector.divf %exp0, %sumv0 : vector<4xf32>
+    %soft1_raw = vector.divf %exp1, %sumv1 : vector<4xf32>
+    %soft2_raw = vector.divf %exp2, %sumv2 : vector<4xf32>
+    %soft3_raw = vector.divf %exp3, %sumv3 : vector<4xf32>
+    %eps_v = vector.splat %eps : vector<4xf32>
+    %soft0 = vector.addf %soft0_raw, %eps_v : vector<4xf32>
+    %soft1 = vector.addf %soft1_raw, %eps_v : vector<4xf32>
+    %soft2 = vector.addf %soft2_raw, %eps_v : vector<4xf32>
+    %soft3 = vector.addf %soft3_raw, %eps_v : vector<4xf32>
+    %col01 = vector.addf %eps_v, %soft0 : vector<4xf32>
+    %col012 = vector.addf %col01, %soft1 : vector<4xf32>
+    %col0123 = vector.addf %col012, %soft2 : vector<4xf32>
+    %colsum = vector.addf %col0123, %soft3 : vector<4xf32>
+    %col0 = vector.divf %soft0, %colsum : vector<4xf32>
+    %col1 = vector.divf %soft1, %colsum : vector<4xf32>
+    %col2 = vector.divf %soft2, %colsum : vector<4xf32>
+    %col3 = vector.divf %soft3, %colsum : vector<4xf32>
+
+    %start_iter = index.constant 1 : index
+    %final0, %final1, %final2, %final3 = scf.for %iter = [%start_iter to %n_iter step %one](%cur0 = %col0 : vector<4xf32>, %cur1 = %col1 : vector<4xf32>, %cur2 = %col2 : vector<4xf32>, %cur3 = %col3 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+      %rowsum0 = vector.reduce<addf> %cur0, %eps : vector<4xf32>, f32
+      %rowsum1 = vector.reduce<addf> %cur1, %eps : vector<4xf32>, f32
+      %rowsum2 = vector.reduce<addf> %cur2, %eps : vector<4xf32>, f32
+      %rowsum3 = vector.reduce<addf> %cur3, %eps : vector<4xf32>, f32
+      %rowsumv0 = vector.splat %rowsum0 : vector<4xf32>
+      %rowsumv1 = vector.splat %rowsum1 : vector<4xf32>
+      %rowsumv2 = vector.splat %rowsum2 : vector<4xf32>
+      %rowsumv3 = vector.splat %rowsum3 : vector<4xf32>
+      %row0 = vector.divf %cur0, %rowsumv0 : vector<4xf32>
+      %row1 = vector.divf %cur1, %rowsumv1 : vector<4xf32>
+      %row2 = vector.divf %cur2, %rowsumv2 : vector<4xf32>
+      %row3 = vector.divf %cur3, %rowsumv3 : vector<4xf32>
+      %nextcol01 = vector.addf %eps_v, %row0 : vector<4xf32>
+      %nextcol012 = vector.addf %nextcol01, %row1 : vector<4xf32>
+      %nextcol0123 = vector.addf %nextcol012, %row2 : vector<4xf32>
+      %nextcolsum = vector.addf %nextcol0123, %row3 : vector<4xf32>
+      %next0 = vector.divf %row0, %nextcolsum : vector<4xf32>
+      %next1 = vector.divf %row1, %nextcolsum : vector<4xf32>
+      %next2 = vector.divf %row2, %nextcolsum : vector<4xf32>
+      %next3 = vector.divf %row3, %nextcolsum : vector<4xf32>
+      scf.yield %next0, %next1, %next2, %next3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    }
+
+    %token_dst0 = index.mul %token, %sixteen : index
+    %token_dst = index.assume %token_dst0 [range(%token_dst0, 0, 1073741823)] : index
+    %dst1_raw = index.add %token_dst, %four : index
+    %dst1 = index.assume %dst1_raw [range(%dst1_raw, 0, 1073741823)] : index
+    %dst2_raw = index.add %token_dst, %eight : index
+    %dst2 = index.assume %dst2_raw [range(%dst2_raw, 0, 1073741823)] : index
+    %dst3_raw = index.add %token_dst, %twelve : index
+    %dst3 = index.assume %dst3_raw [range(%dst3_raw, 0, 1073741823)] : index
+    vector.store %final0, %dst_view[%token_dst] : vector<4xf32>, view<1073741824xf32, #dense>
+    vector.store %final1, %dst_view[%dst1] : vector<4xf32>, view<1073741824xf32, #dense>
+    vector.store %final2, %dst_view[%dst2] : vector<4xf32>, view<1073741824xf32, #dense>
+    vector.store %final3, %dst_view[%dst3] : vector<4xf32>, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}

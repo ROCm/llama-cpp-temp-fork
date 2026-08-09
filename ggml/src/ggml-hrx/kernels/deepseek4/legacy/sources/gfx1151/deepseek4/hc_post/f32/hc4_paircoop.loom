@@ -1,0 +1,129 @@
+config.decl @shape_dsv4_hc_post_n_embd : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_dsv4_hc_post_hc : %value: index where [range(%value, 1, 64)]
+config.decl @shape_dsv4_hc_post_n_tokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @tuning_dsv4_hc_post_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+// HC=4 pair-cooperative DSV4 HC_POST. Two workgroups per token; each computes
+// two destination carriers and reuses x plus all four residual values.
+kernel.def export("hrx2_dsv4_hc_post_f32_hc4_paircoop") @hrx2_dsv4_hc_post_f32_hc4_paircoop() {
+  %unit = index.constant 1 : index
+  %two = index.constant 2 : index
+  %n_tokens = config.get @shape_dsv4_hc_post_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_post_workgroup_size : index
+  %workgroups = index.mul %n_tokens, %two : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%x: buffer, %residual: buffer, %post: buffer, %comb: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %twelve = index.constant 12 : index
+  %sixteen = index.constant 16 : index
+  %n_embd = config.get @shape_dsv4_hc_post_n_embd : index
+  %n_tokens = config.get @shape_dsv4_hc_post_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_post_workgroup_size : index
+  %n_embd_bounded = index.assume %n_embd [range(%n_embd, 1, 1048576)] : index
+  %n_tokens_bounded = index.assume %n_tokens [range(%n_tokens, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %workgroups0 = index.mul %n_tokens_bounded, %two : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 2097151), lt(%workgroup0, %workgroups0)] : index
+  %pair = index.rem %workgroup, %two : index
+  %token = index.div %workgroup, %two : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %x_count = index.mul %n_embd_bounded, %n_tokens_bounded : index
+  %plane_count = index.mul %x_count, %four : index
+  %post_count = index.mul %n_tokens_bounded, %four : index
+  %comb_count = index.mul %n_tokens_bounded, %sixteen : index
+  %x_global = buffer.assume.memory_space<global> %x : buffer
+  %residual_global = buffer.assume.memory_space<global> %residual : buffer
+  %post_global = buffer.assume.memory_space<global> %post : buffer
+  %comb_global = buffer.assume.memory_space<global> %comb : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %x_noalias, %residual_noalias, %post_noalias, %comb_noalias, %dst_noalias = buffer.assume.noalias %x_global, %residual_global, %post_global, %comb_global, %dst_global : buffer, buffer, buffer, buffer, buffer
+  %x_view = buffer.view %x_noalias[%base] : buffer -> view<[%x_count]xf32, #dense>
+  %residual_view = buffer.view %residual_noalias[%base] : buffer -> view<[%plane_count]xf32, #dense>
+  %post_view = buffer.view %post_noalias[%base] : buffer -> view<[%post_count]xf32, #dense>
+  %comb_view = buffer.view %comb_noalias[%base] : buffer -> view<[%comb_count]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%plane_count]xf32, #dense>
+
+  %token_x = index.mul %token, %n_embd_bounded : index
+  %token_hc = index.mul %token, %four : index
+  %token_plane = index.mul %token_hc, %n_embd_bounded : index
+  %token_comb = index.mul %token, %sixteen : index
+  %idst0 = index.mul %pair, %two : index
+  %idst1 = index.add %idst0, %one : index
+  %post_idx0 = index.add %token_hc, %idst0 : index
+  %post_idx1 = index.add %token_hc, %idst1 : index
+  %p0 = view.load %post_view[%post_idx0] : view<[%post_count]xf32, #dense> -> f32
+  %p1 = view.load %post_view[%post_idx1] : view<[%post_count]xf32, #dense> -> f32
+
+  %cb00 = index.add %token_comb, %idst0 : index
+  %cb01 = index.add %token_comb, %idst1 : index
+  %row1 = index.add %token_comb, %four : index
+  %cb10 = index.add %row1, %idst0 : index
+  %cb11 = index.add %row1, %idst1 : index
+  %row2 = index.add %token_comb, %eight : index
+  %cb20 = index.add %row2, %idst0 : index
+  %cb21 = index.add %row2, %idst1 : index
+  %row3 = index.add %token_comb, %twelve : index
+  %cb30 = index.add %row3, %idst0 : index
+  %cb31 = index.add %row3, %idst1 : index
+  %m00 = view.load %comb_view[%cb00] : view<[%comb_count]xf32, #dense> -> f32
+  %m01 = view.load %comb_view[%cb01] : view<[%comb_count]xf32, #dense> -> f32
+  %m10 = view.load %comb_view[%cb10] : view<[%comb_count]xf32, #dense> -> f32
+  %m11 = view.load %comb_view[%cb11] : view<[%comb_count]xf32, #dense> -> f32
+  %m20 = view.load %comb_view[%cb20] : view<[%comb_count]xf32, #dense> -> f32
+  %m21 = view.load %comb_view[%cb21] : view<[%comb_count]xf32, #dense> -> f32
+  %m30 = view.load %comb_view[%cb30] : view<[%comb_count]xf32, #dense> -> f32
+  %m31 = view.load %comb_view[%cb31] : view<[%comb_count]xf32, #dense> -> f32
+
+  %rplane1 = index.add %token_plane, %n_embd_bounded : index
+  %n_embd2 = index.mul %n_embd_bounded, %two : index
+  %rplane2 = index.add %token_plane, %n_embd2 : index
+  %n_embd3 = index.mul %n_embd_bounded, %three : index
+  %rplane3 = index.add %token_plane, %n_embd3 : index
+  %dplane0_delta = index.mul %idst0, %n_embd_bounded : index
+  %dplane0 = index.add %token_plane, %dplane0_delta : index
+  %dplane1_delta = index.mul %idst1, %n_embd_bounded : index
+  %dplane1 = index.add %token_plane, %dplane1_delta : index
+
+  scf.for %i = [%lane to %n_embd_bounded step %workgroup_size] {
+    %x_idx = index.add %token_x, %i : index
+    %r0_idx = index.add %token_plane, %i : index
+    %r1_idx = index.add %rplane1, %i : index
+    %r2_idx = index.add %rplane2, %i : index
+    %r3_idx = index.add %rplane3, %i : index
+    %xv = view.load %x_view[%x_idx] : view<[%x_count]xf32, #dense> -> f32
+    %r0 = view.load %residual_view[%r0_idx] : view<[%plane_count]xf32, #dense> -> f32
+    %r1 = view.load %residual_view[%r1_idx] : view<[%plane_count]xf32, #dense> -> f32
+    %r2 = view.load %residual_view[%r2_idx] : view<[%plane_count]xf32, #dense> -> f32
+    %r3 = view.load %residual_view[%r3_idx] : view<[%plane_count]xf32, #dense> -> f32
+    %a00 = scalar.mulf %xv, %p0 : f32
+    %a01 = scalar.mulf %xv, %p1 : f32
+    %q00 = scalar.mulf %r0, %m00 : f32
+    %q01 = scalar.mulf %r0, %m01 : f32
+    %a10 = scalar.addf %a00, %q00 : f32
+    %a11 = scalar.addf %a01, %q01 : f32
+    %q10 = scalar.mulf %r1, %m10 : f32
+    %q11 = scalar.mulf %r1, %m11 : f32
+    %a20 = scalar.addf %a10, %q10 : f32
+    %a21 = scalar.addf %a11, %q11 : f32
+    %q20 = scalar.mulf %r2, %m20 : f32
+    %q21 = scalar.mulf %r2, %m21 : f32
+    %a30 = scalar.addf %a20, %q20 : f32
+    %a31 = scalar.addf %a21, %q21 : f32
+    %q30 = scalar.mulf %r3, %m30 : f32
+    %q31 = scalar.mulf %r3, %m31 : f32
+    %out0 = scalar.addf %a30, %q30 : f32
+    %out1 = scalar.addf %a31, %q31 : f32
+    %dst0 = index.add %dplane0, %i : index
+    %dst1 = index.add %dplane1, %i : index
+    view.store %out0, %dst_view[%dst0] : f32, view<[%plane_count]xf32, #dense>
+    view.store %out1, %dst_view[%dst1] : f32, view<[%plane_count]xf32, #dense>
+  }
+  kernel.return
+}

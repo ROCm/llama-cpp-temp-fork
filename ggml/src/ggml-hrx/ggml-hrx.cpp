@@ -2,6 +2,7 @@
 
 #include "executable-program.h"
 #include "ggml-backend-impl.h"
+#include "ggml-hrx-streamed-expert-cache.h"
 #include "ggml-impl.h"
 #include "graph/command-program.h"
 #include "graph/graph-ir.h"
@@ -16,8 +17,11 @@
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <condition_variable>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -55,8 +59,16 @@ struct ggml_backend_hrx_buffer_context {
     uint64_t                          generation;
 };
 
+struct ggml_backend_hrx_streamed_weight_buffer_context {
+    ggml_backend_hrx_device_context *                  device = nullptr;
+    const ggml_backend_streamed_weight_source *        source = nullptr;
+    std::shared_ptr<ggml::hrx::streamed_expert_group> group;
+    alignas(std::max_align_t) uint8_t                  identity_token = 0;
+};
+
 struct ggml_backend_hrx_device_context {
-    hrx_device_t                                 device = nullptr;
+    hrx_device_t                                 device                 = nullptr;
+    hrx_stream_t                                 expert_transfer_stream = nullptr;
     std::string                                  name;
     std::string                                  description;
     std::string                                  architecture;
@@ -65,6 +77,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_buffer_type_context         buft_context = {};
     ggml::hrx::ReactivePlanCache                 plan_cache;
     std::unique_ptr<ggml::hrx::transfer_manager> transfers;
+    ggml::hrx::streamed_expert_group_registry    streamed_expert_groups;
     std::mutex                                   active_stream_mutex;
     hrx_stream_t                                 active_stream = nullptr;
 };
@@ -110,6 +123,14 @@ struct ggml_backend_hrx_reg_context {
 
     ~ggml_backend_hrx_reg_context() {
         for (auto & context : device_contexts) {
+            if (context->expert_transfer_stream != nullptr) {
+                hrx_status_t status = hrx_stream_synchronize(context->expert_transfer_stream);
+                if (!hrx_status_is_ok(status)) {
+                    hrx_status_ignore(status);
+                }
+                hrx_stream_release(context->expert_transfer_stream);
+                context->expert_transfer_stream = nullptr;
+            }
             if (context->device != nullptr) {
                 hrx_device_release(context->device);
             }
@@ -214,6 +235,15 @@ static ggml_backend_hrx_device_context * device_context(ggml_backend_dev_t devic
 
 static ggml_backend_hrx_buffer_context * buffer_context(ggml_backend_buffer_t buffer) {
     return static_cast<ggml_backend_hrx_buffer_context *>(buffer->context);
+}
+
+static void * streamed_weight_buffer_base(ggml_backend_buffer_t buffer);
+
+static ggml_backend_hrx_streamed_weight_buffer_context * streamed_weight_context(const ggml_tensor * tensor) {
+    if (tensor == nullptr || tensor->buffer == nullptr || tensor->buffer->iface.get_base != streamed_weight_buffer_base) {
+        return nullptr;
+    }
+    return static_cast<ggml_backend_hrx_streamed_weight_buffer_context *>(tensor->buffer->context);
 }
 
 static size_t tensor_offset(const ggml_backend_hrx_buffer_context * context, const ggml_tensor * tensor) {
@@ -350,6 +380,77 @@ static void buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
 static const ggml_backend_buffer_i buffer_i = {
     buffer_free, buffer_base, nullptr,     buffer_memset, buffer_set, buffer_get,
     nullptr,     nullptr,     buffer_copy, buffer_clear,  nullptr,
+};
+
+static void streamed_weight_buffer_free(ggml_backend_buffer_t buffer) {
+    delete static_cast<ggml_backend_hrx_streamed_weight_buffer_context *>(buffer->context);
+}
+
+static void * streamed_weight_buffer_base(ggml_backend_buffer_t buffer) {
+    auto * context = static_cast<ggml_backend_hrx_streamed_weight_buffer_context *>(buffer->context);
+    return context != nullptr ? &context->identity_token : nullptr;
+}
+
+[[noreturn]] static void reject_streamed_weight_access(const ggml_tensor * tensor) {
+    GGML_ABORT("streamed HRX weight '%s' has no canonical payload storage",
+               tensor != nullptr ? ggml_get_name(tensor) : "(null)");
+}
+
+[[noreturn]] static void streamed_weight_buffer_memset(ggml_backend_buffer_t buffer,
+                                                       ggml_tensor *         tensor,
+                                                       uint8_t               value,
+                                                       size_t                offset,
+                                                       size_t                size) {
+    GGML_UNUSED(buffer);
+    GGML_UNUSED(value);
+    GGML_UNUSED(offset);
+    GGML_UNUSED(size);
+    reject_streamed_weight_access(tensor);
+}
+
+[[noreturn]] static void streamed_weight_buffer_set(ggml_backend_buffer_t buffer,
+                                                    ggml_tensor *         tensor,
+                                                    const void *          data,
+                                                    size_t                offset,
+                                                    size_t                size) {
+    GGML_UNUSED(buffer);
+    GGML_UNUSED(data);
+    GGML_UNUSED(offset);
+    GGML_UNUSED(size);
+    reject_streamed_weight_access(tensor);
+}
+
+[[noreturn]] static void streamed_weight_buffer_get(ggml_backend_buffer_t buffer,
+                                                    const ggml_tensor *   tensor,
+                                                    void *                data,
+                                                    size_t                offset,
+                                                    size_t                size) {
+    GGML_UNUSED(buffer);
+    GGML_UNUSED(data);
+    GGML_UNUSED(offset);
+    GGML_UNUSED(size);
+    reject_streamed_weight_access(tensor);
+}
+
+[[noreturn]] static bool streamed_weight_buffer_copy(ggml_backend_buffer_t buffer,
+                                                     const ggml_tensor *   source,
+                                                     ggml_tensor *         destination) {
+    GGML_UNUSED(buffer);
+    reject_streamed_weight_access(destination != nullptr ? destination : source);
+}
+
+static const ggml_backend_buffer_i streamed_weight_buffer_i = {
+    streamed_weight_buffer_free,
+    streamed_weight_buffer_base,
+    nullptr,
+    streamed_weight_buffer_memset,
+    streamed_weight_buffer_set,
+    streamed_weight_buffer_get,
+    nullptr,
+    nullptr,
+    streamed_weight_buffer_copy,
+    nullptr,
+    nullptr,
 };
 
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
@@ -738,7 +839,64 @@ static ggml::hrx::executable_bindings resolve_executable_bindings(const ggml_bac
         binding.exported                              = resource.exported;
         ggml_backend_hrx_buffer_context * hrx_context = nullptr;
         size_t                            root_offset = 0;
-        if (tensor_hrx_binding(root, &hrx_context, &root_offset)) {
+        if (ggml_backend_hrx_streamed_weight_buffer_context * streamed = streamed_weight_context(root)) {
+            if (!streamed->group || !streamed->source) {
+                errors.push_back("streamed storage " + std::to_string(resource.storage) +
+                                 " has no expert-cache attachment");
+                continue;
+            }
+            ggml::hrx::streamed_expert_attachment attachment;
+            std::string                           error;
+            if (!streamed->group->resolve(context.device->device, context.device->expert_transfer_stream,
+                                          streamed->source, attachment, error)) {
+                errors.push_back("streamed storage " + std::to_string(resource.storage) +
+                                 " cannot resolve its expert cache: " + error);
+                continue;
+            }
+            const hrx_buffer_ref_t &                        host_cache   = attachment.host_cache;
+            const hrx_buffer_ref_t &                        device_cache = attachment.device_cache;
+            const ggml::hrx::expert_cache_attachment_layout & layout       = attachment.layout;
+            auto mix_identity = [](uint64_t hash, uint64_t value) {
+                hash ^= value + UINT64_C(0x9e3779b97f4a7c15) + (hash << 6) + (hash >> 2);
+                return hash;
+            };
+            uint64_t identity = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(streamed->group.get()));
+            identity = mix_identity(identity, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(host_cache.buffer)));
+            identity = mix_identity(identity, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device_cache.buffer)));
+            identity = mix_identity(identity, streamed->source->layer_index);
+            identity = mix_identity(identity, streamed->source->plane_index);
+            uint64_t generation = 1;
+            for (size_t value : { layout.slot_base_offset, layout.slot_count, layout.slot_stride, layout.plane_offset,
+                                  layout.plane_length, layout.device_slot_base_offset, layout.device_slot_count,
+                                  layout.host_slot_base_offset, layout.host_slot_count }) {
+                generation = mix_identity(generation, value);
+            }
+            binding.buffer          = host_cache.buffer;
+            binding.buffer_identity = identity;
+            binding.generation      = generation;
+            binding.capacity        = host_cache.length;
+            binding.offset          = host_cache.offset;
+            binding.layout          = "streamed_mxfp4_expert_plane_two_tier";
+            binding.views           = {
+                { "host_cache", host_cache.buffer,
+                  static_cast<uint64_t>(reinterpret_cast<uintptr_t>(host_cache.buffer)), host_cache.offset,
+                  host_cache.length },
+                { "device_cache", device_cache.buffer,
+                  static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device_cache.buffer)), device_cache.offset,
+                  device_cache.length },
+            };
+            binding.integer_properties = {
+                { "slot_base_offset", static_cast<int64_t>(layout.slot_base_offset) },
+                { "slot_count", static_cast<int64_t>(layout.slot_count) },
+                { "slot_stride", static_cast<int64_t>(layout.slot_stride) },
+                { "plane_offset", static_cast<int64_t>(layout.plane_offset) },
+                { "plane_length", static_cast<int64_t>(layout.plane_length) },
+                { "device_slot_base_offset", static_cast<int64_t>(layout.device_slot_base_offset) },
+                { "device_slot_count", static_cast<int64_t>(layout.device_slot_count) },
+                { "host_slot_base_offset", static_cast<int64_t>(layout.host_slot_base_offset) },
+                { "host_slot_count", static_cast<int64_t>(layout.host_slot_count) },
+            };
+        } else if (tensor_hrx_binding(root, &hrx_context, &root_offset)) {
             binding.buffer          = hrx_context->buffer;
             binding.buffer_identity = hrx_context->identity;
             binding.generation      = hrx_context->generation;
@@ -781,6 +939,137 @@ static ggml::hrx::executable_bindings resolve_executable_bindings(const ggml_bac
     const ggml::hrx::VerificationResult verification = ggml::hrx::verify_binding_snapshot(*frame.plan, result.snapshot);
     errors.insert(errors.end(), verification.errors.begin(), verification.errors.end());
     return result;
+}
+
+static ggml_backend_hrx_streamed_weight_buffer_context *
+streamed_weight_context(const ggml::hrx::ExecutionFrame & frame, ggml::hrx::ValueId value, std::string & error) {
+    if (!frame.plan || value >= frame.plan->graph.values.size()) {
+        error = "streamed executable references an invalid weight value";
+        return nullptr;
+    }
+    const ggml::hrx::StorageId storage = frame.plan->graph.values[value].access.storage;
+    if (storage >= frame.storage_roots.size() || frame.storage_roots[storage] == nullptr) {
+        error = "streamed executable weight has no live storage root";
+        return nullptr;
+    }
+    ggml_backend_hrx_streamed_weight_buffer_context * context = streamed_weight_context(frame.storage_roots[storage]);
+    if (context == nullptr || !context->group || context->source == nullptr) {
+        error = "streamed executable weight has no expert-cache attachment";
+        return nullptr;
+    }
+    return context;
+}
+
+class streamed_expert_execution_controller final : public ggml::hrx::streamed_execution_controller {
+public:
+    streamed_expert_execution_controller(ggml_backend_hrx_context & context, const ggml::hrx::ExecutionFrame & frame) :
+        context_(context), frame_(frame) {}
+
+    ggml::hrx::error_result acquire(const ggml::hrx::StreamedExpertCommand & contract,
+                                    const uint32_t *                         expert_ids,
+                                    size_t                                   expert_id_count) override {
+        std::unique_lock<std::mutex> lock(mutex_);
+        callback_error_.clear();
+        ggml::hrx::error_result result = acquire_locked(contract, expert_ids, expert_id_count);
+        if (result) {
+            callback_error_ = *result;
+        }
+        lock.unlock();
+        cv_.notify_all();
+        return result;
+    }
+
+    ggml::hrx::error_result wait(const ggml::hrx::StreamedExpertCommand & contract) override {
+        std::string error;
+        ggml_backend_hrx_streamed_weight_buffer_context * streamed =
+            streamed_weight_context(frame_, contract.weight, error);
+        if (streamed == nullptr) {
+            return error;
+        }
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [&] {
+            return !callback_error_.empty() ||
+                   (active_lease_ && active_group_ == streamed->group && active_layer_ == contract.layer &&
+                    active_expert_ids_ == contract.expert_ids);
+        });
+        if (!callback_error_.empty()) {
+            return callback_error_;
+        }
+        const uint32_t plane = streamed->source->plane_index;
+        if (!active_lease_->wait_for_planes(contract.expert_begin, contract.expert_end, &plane, 1, error)) {
+            return "wait for streamed expert plane " + std::to_string(plane) + " in layer " +
+                   std::to_string(active_layer_) + ": " + error;
+        }
+        return {};
+    }
+
+    ggml::hrx::error_result finish() override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        active_lease_.reset();
+        active_group_.reset();
+        active_layer_      = -1;
+        active_expert_ids_ = ggml::hrx::kInvalidId;
+        callback_error_.clear();
+        return {};
+    }
+
+private:
+    ggml::hrx::error_result acquire_locked(const ggml::hrx::StreamedExpertCommand & contract,
+                                           const uint32_t *                         expert_ids,
+                                           size_t                                   expert_id_count) {
+        std::string error;
+        ggml_backend_hrx_streamed_weight_buffer_context * streamed =
+            streamed_weight_context(frame_, contract.weight, error);
+        if (streamed == nullptr) {
+            return error;
+        }
+        if (streamed->source->layer_index != static_cast<uint32_t>(contract.layer)) {
+            return "streamed executable layer disagrees with its weight attachment";
+        }
+        ggml::hrx::streamed_expert_attachment attachment;
+        if (!streamed->group->resolve(context_.device->device, context_.device->expert_transfer_stream,
+                                      streamed->source, attachment, error)) {
+            return "resolve streamed expert layout: " + error;
+        }
+        if (attachment.layout.host_slot_count == 0) {
+            return "native streamed graph requires a mapped expert-cache header";
+        }
+        if (active_lease_ && active_group_ == streamed->group && active_layer_ == contract.layer &&
+            active_expert_ids_ == contract.expert_ids) {
+            return {};
+        }
+        active_lease_.reset();
+        active_group_      = streamed->group;
+        active_layer_      = contract.layer;
+        active_expert_ids_ = contract.expert_ids;
+        active_lease_      = active_group_->begin_layer(context_.device->device, context_.device->expert_transfer_stream,
+                                                        static_cast<uint32_t>(active_layer_), expert_ids,
+                                                        expert_id_count, contract.load_chunk_size, error);
+        if (!active_lease_) {
+            return "acquire exact streamed experts for layer " + std::to_string(active_layer_) + ": " + error;
+        }
+        if (!active_lease_->publish_header(context_.stream, error)) {
+            return "publish streamed expert map for layer " + std::to_string(active_layer_) + ": " + error;
+        }
+        return {};
+    }
+
+    ggml_backend_hrx_context &                       context_;
+    const ggml::hrx::ExecutionFrame &                frame_;
+    std::mutex                                       mutex_;
+    std::condition_variable                          cv_;
+    std::string                                      callback_error_;
+    std::shared_ptr<ggml::hrx::streamed_expert_group> active_group_;
+    std::unique_ptr<ggml::hrx::expert_cache_layer_lease> active_lease_;
+    ggml::hrx::ValueId                               active_expert_ids_ = ggml::hrx::kInvalidId;
+    int32_t                                          active_layer_      = -1;
+};
+
+static ggml::hrx::error_result launch_streamed_executable(ggml_backend_hrx_context &             context,
+                                                          const ggml::hrx::ExecutionFrame &       frame,
+                                                          ggml::hrx::prepared_executable_program & executable) {
+    streamed_expert_execution_controller controller(context, frame);
+    return executable.launch_streamed(context.stream, controller);
 }
 
 // Converts an eager GGML graph into an allocation-specific cached executable and submits it asynchronously.
@@ -919,7 +1208,9 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
         GGML_LOG_ERROR("%s: executable rebinding failed: %s\n", __func__, rebind_error->c_str());
         return GGML_STATUS_FAILED;
     }
-    const ggml::hrx::error_result launch_error = executable->launch(context->stream);
+    const bool streamed_launch = executable->has_streamed_execution();
+    const ggml::hrx::error_result launch_error =
+        streamed_launch ? launch_streamed_executable(*context, frame, *executable) : executable->launch(context->stream);
     if (launch_error) {
         dump_execution_state(context->diagnostics, *frame.plan, bindings, *executable,
                              context->device->transfers->stats(), context->weights->stats(), "launch_failed",
@@ -930,7 +1221,7 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
 
     // Debug prefix and synchronization modes replace async execution to localize failures to command boundaries.
     if (debug_synchronize || executable->command_prefix()) {
-        if (!HRX_CHECK(hrx_stream_synchronize(context->stream))) {
+        if (!streamed_launch && !HRX_CHECK(hrx_stream_synchronize(context->stream))) {
             dump_execution_state(context->diagnostics, *frame.plan, bindings, *executable,
                                  context->device->transfers->stats(), context->weights->stats(),
                                  "debug_synchronize_failed", "stream synchronization failed",
@@ -952,10 +1243,12 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
                                output_snapshot_error->c_str());
                 return GGML_STATUS_FAILED;
             }
-            const ggml::hrx::error_result completion_error = executable->complete_after_synchronize();
-            if (completion_error) {
-                GGML_LOG_ERROR("%s: debug-prefix readback failed: %s\n", __func__, completion_error->c_str());
-                return GGML_STATUS_FAILED;
+            if (!streamed_launch) {
+                const ggml::hrx::error_result completion_error = executable->complete_after_synchronize();
+                if (completion_error) {
+                    GGML_LOG_ERROR("%s: debug-prefix readback failed: %s\n", __func__, completion_error->c_str());
+                    return GGML_STATUS_FAILED;
+                }
             }
             if (!context->diagnostics.directory.empty()) {
                 const std::filesystem::path snapshot_directory =
@@ -1007,8 +1300,9 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     }
 
     // Retain completion state until backend_synchronize publishes host results and releases transients.
-    if (std::find(context->pending_completions.begin(), context->pending_completions.end(), executable) ==
-        context->pending_completions.end()) {
+    if (!streamed_launch &&
+        std::find(context->pending_completions.begin(), context->pending_completions.end(), executable) ==
+            context->pending_completions.end()) {
         context->pending_completions.push_back(executable);
     }
     ++context->launches;
@@ -1086,7 +1380,7 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
         context->device                                         = device_ctx;
         context->stream                                         = stream;
         context->name                                           = device_ctx->name;
-        context->corpus                                         = &ggml::hrx::get_qwen_kernel_corpus();
+        context->corpus                                         = &ggml::hrx::get_kernel_corpus();
         const ggml::hrx::VerificationResult corpus_verification = ggml::hrx::verify_kernel_corpus(*context->corpus);
         if (!corpus_verification.valid()) {
             GGML_LOG_ERROR("%s: embedded kernel corpus validation failed: %s\n", __func__,
@@ -1194,9 +1488,59 @@ static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t in
     return &context->devices[index];
 }
 
+static bool device_supports_streamed_weight(ggml_backend_dev_t device, const ggml_tensor * tensor) {
+    GGML_UNUSED(device);
+    return tensor != nullptr && tensor->type == GGML_TYPE_MXFP4 && ggml_is_contiguous(tensor);
+}
+
+static ggml_backend_buffer_t device_attach_streamed_weight(ggml_backend_dev_t                         device,
+                                                           ggml_tensor *                              tensor,
+                                                           const ggml_backend_streamed_weight_source * source) {
+    if (device == nullptr || tensor == nullptr || source == nullptr || tensor->buffer != nullptr ||
+        tensor->data != nullptr || tensor->view_src != nullptr || !device_supports_streamed_weight(device, tensor) ||
+        source->fd < 0 || source->length == 0 || source->length != ggml_nbytes(tensor) ||
+        source->offset > source->file_size || source->length > source->file_size - source->offset ||
+        source->group_identity == nullptr || source->record_count == 0 || source->plane_count == 0 ||
+        source->plane_index >= source->plane_count || source->length % source->record_count != 0 ||
+        source->record_size != source->length / source->record_count) {
+        return nullptr;
+    }
+
+    auto * context = new (std::nothrow) ggml_backend_hrx_streamed_weight_buffer_context;
+    if (context == nullptr) {
+        return nullptr;
+    }
+    context->device = device_context(device);
+    context->source = source;
+    std::string error;
+    context->group = context->device->streamed_expert_groups.attach(source, error);
+    if (!context->group) {
+        GGML_LOG_ERROR("%s: failed to attach streamed expert source: %s\n", __func__, error.c_str());
+        delete context;
+        return nullptr;
+    }
+
+    ggml_backend_buffer_t buffer =
+        ggml_backend_buffer_init(ggml_backend_dev_buffer_type(device), streamed_weight_buffer_i, context, 0);
+    if (buffer == nullptr) {
+        delete context;
+        return nullptr;
+    }
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    tensor->buffer = buffer;
+    tensor->data   = &context->identity_token;
+    GGML_ASSERT(streamed_weight_context(tensor) == context);
+    return buffer;
+}
+
 static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
     GGML_UNUSED(registry);
-    GGML_UNUSED(name);
+    if (name != nullptr && std::strcmp(name, "ggml_backend_dev_supports_streamed_weight") == 0) {
+        return reinterpret_cast<void *>(device_supports_streamed_weight);
+    }
+    if (name != nullptr && std::strcmp(name, "ggml_backend_dev_attach_streamed_weight") == 0) {
+        return reinterpret_cast<void *>(device_attach_streamed_weight);
+    }
     return nullptr;
 }
 
@@ -1249,6 +1593,10 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         if (!device_ctx->transfers->valid()) {
             GGML_LOG_ERROR("%s: transfer manager initialization failed: %s\n", __func__,
                            device_ctx->transfers->initialization_error().c_str());
+            hrx_device_release(hrx_device);
+            continue;
+        }
+        if (!HRX_CHECK(hrx_stream_create(hrx_device, 0, &device_ctx->expert_transfer_stream))) {
             hrx_device_release(hrx_device);
             continue;
         }

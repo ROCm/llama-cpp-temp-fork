@@ -84,6 +84,13 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
     hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE, "weight"),  {hc_mult}, 0);
     hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
 
+    if (n_expert <= 0 || uint64_t(n_expert) > uint64_t(UINT32_MAX)) {
+        throw std::runtime_error("DeepSeek-V4 expert count cannot be represented as streamed records");
+    }
+    const uint32_t expert_record_count = uint32_t(n_expert);
+    // All routed layers share one opaque residency group and replacement policy.
+    const uint64_t expert_group_key = 1;
+
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
@@ -136,9 +143,17 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
         }
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
-        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
-        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd,   n_expert}, 0);
-        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+        // The group records each expert's gate, up, and down planes and its layer coordinate.
+        const llama_streamed_tensor_group_spec gate_group = {expert_group_key, expert_record_count, uint32_t(i), 0, 3};
+        const llama_streamed_tensor_group_spec up_group   = {expert_group_key, expert_record_count, uint32_t(i), 1, 3};
+        const llama_streamed_tensor_group_spec down_group = {
+            expert_group_key, expert_record_count, uint32_t(i), 2, 3,
+            GGML_BACKEND_STREAMED_WEIGHT_LAYOUT_ROW_TILE_BLOCK, 16,
+        };
+
+        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, TENSOR_STREAMABLE, &gate_group);
+        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd,   n_expert}, TENSOR_STREAMABLE, &down_group);
+        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff_exp, n_expert}, TENSOR_STREAMABLE, &up_group);
 
         layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd,                     n_ff_exp * n_expert_shared}, 0);
         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_exp * n_expert_shared, n_embd                    }, 0);

@@ -1,5 +1,6 @@
 #include "reactive-plan.h"
 
+#include "hybrid-carrier-transformer.h"
 #include "routed-transformer-bindings.h"
 #include "routed-transformer-program.h"
 
@@ -19,6 +20,11 @@ static void append_error(VerificationResult & result, const std::string & error)
     result.errors.push_back(error);
 }
 
+static bool metadata_only(enum ggml_op op) {
+    return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE ||
+        op == GGML_OP_TRANSPOSE;
+}
+
 static Schedule atom_schedule(const Graph & graph) {
     Schedule result;
     result.graph_fingerprint = graph.fingerprint;
@@ -31,9 +37,9 @@ static Schedule atom_schedule(const Graph & graph) {
         invocation.stage = "atom";
         invocation.recipe = std::string("atom.") + ggml_op_name(operation.op);
         invocation.covered_operations.push_back(operation.id);
-        invocation.kernel.family = "hrx_atom";
+        invocation.kernel.family = metadata_only(operation.op) ? "hrx_metadata" : "hrx_atom";
         invocation.kernel.variant = ggml_op_name(operation.op);
-        invocation.kernel.kernel_id = kernel_catalog_id(
+        if (!metadata_only(operation.op)) invocation.kernel.kernel_id = kernel_catalog_id(
             invocation.kernel.family.c_str(), invocation.kernel.variant.c_str());
         invocation.kernel.execution_kind = KernelSpecialization::ExecutionKind::NativeEager;
         const RegionBoundary boundary = index.boundary(invocation.covered_operations);
@@ -43,19 +49,21 @@ static Schedule atom_schedule(const Graph & graph) {
         for (size_t i = 0; i < boundary.outputs.size(); ++i) {
             invocation.outputs.push_back({ "result" + std::to_string(i), boundary.outputs[i] });
         }
-        Dispatch dispatch;
-        dispatch.kernel = invocation.kernel;
-        dispatch.bindings.insert(dispatch.bindings.end(), invocation.inputs.begin(), invocation.inputs.end());
-        dispatch.bindings.insert(dispatch.bindings.end(), invocation.outputs.begin(), invocation.outputs.end());
-        if (dispatch_ordinal != 0) dispatch.dependencies.push_back(dispatch_ordinal - 1);
-        invocation.dispatches.push_back(std::move(dispatch));
+        if (!metadata_only(operation.op)) {
+            Dispatch dispatch;
+            dispatch.kernel = invocation.kernel;
+            dispatch.bindings.insert(dispatch.bindings.end(), invocation.inputs.begin(), invocation.inputs.end());
+            dispatch.bindings.insert(dispatch.bindings.end(), invocation.outputs.begin(), invocation.outputs.end());
+            if (dispatch_ordinal != 0) dispatch.dependencies.push_back(dispatch_ordinal - 1);
+            invocation.dispatches.push_back(std::move(dispatch));
+            ++dispatch_ordinal;
+        }
         result.invocations.push_back(std::move(invocation));
-        ++dispatch_ordinal;
     }
     for (ValueId root : graph.roots) {
         result.roots.push_back({ root, RootDisposition::Materialized, "ggml_atom_result" });
     }
-    result.expected_dispatch_count = result.invocations.size();
+    result.expected_dispatch_count = dispatch_ordinal;
     return result;
 }
 
@@ -69,20 +77,38 @@ bool eager_capability_declared(enum ggml_op op) {
         case GGML_OP_ADD:
         case GGML_OP_ARGSORT:
         case GGML_OP_CLAMP:
+        case GGML_OP_CONCAT:
+        case GGML_OP_CONT:
+        case GGML_OP_CPY:
         case GGML_OP_DIV:
+        case GGML_OP_DSV4_HC_COMB:
+        case GGML_OP_DSV4_HC_POST:
+        case GGML_OP_DSV4_HC_PRE:
+        case GGML_OP_FILL:
         case GGML_OP_FLASH_ATTN_EXT:
+        case GGML_OP_GATED_DELTA_NET:
         case GGML_OP_GET_ROWS:
         case GGML_OP_GLU:
+        case GGML_OP_L2_NORM:
+        case GGML_OP_LIGHTNING_INDEXER:
         case GGML_OP_MUL:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_PERMUTE:
+        case GGML_OP_REPEAT:
         case GGML_OP_RESHAPE:
         case GGML_OP_RMS_NORM:
         case GGML_OP_ROPE:
+        case GGML_OP_ROPE_BACK:
+        case GGML_OP_SCALE:
         case GGML_OP_SET_ROWS:
         case GGML_OP_SOFT_MAX:
+        case GGML_OP_SQRT:
+        case GGML_OP_SUB:
+        case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
+        case GGML_OP_TOP_K:
+        case GGML_OP_UNARY:
         case GGML_OP_VIEW:
             return true;
         default:
@@ -287,6 +313,31 @@ ProgramPlan build_reactive_plan(const Graph & graph, const std::string & target)
         if (!result.errors.empty()) return result;
 
     } else {
+        HybridCarrierTransformerProgramProof hybrid =
+            HybridCarrierTransformerProgramProof::recover(result.graph, target);
+        if (hybrid.structurally_recognized) {
+            if (!hybrid.valid()) {
+                result.errors = hybrid.errors;
+                result.errors.insert(result.errors.end(), hybrid.search.errors.begin(), hybrid.search.errors.end());
+                return result;
+            }
+            result.schedule = std::move(hybrid.schedule);
+            result.atom_fallback_count = std::count_if(
+                result.schedule.invocations.begin(), result.schedule.invocations.end(),
+                [](const Invocation & invocation) { return invocation.recipe.rfind("atom.", 0) == 0; });
+            result.planner_identity = HybridCarrierTransformerProvider::make_planner().identity();
+            result.fusion_search_text = SearchResult::format_report(hybrid.search);
+            result.fusion_search_json = SearchResult::serialize_report_json(hybrid.search);
+            result.fusion_regions_dot = SearchResult::region_dot(GraphIndex(graph), hybrid.search);
+            result.logical_program_text = HybridCarrierTransformerModel::format(*hybrid.logical_program);
+            result.logical_program_json = HybridCarrierTransformerModel::serialize_json(*hybrid.logical_program);
+            result.logical_program_dot = HybridCarrierTransformerModel::dot(*hybrid.logical_program);
+            if (result.atom_fallback_count != 0) {
+                result.warnings.push_back("hybrid-carrier structure recognized; the exact plan contains " +
+                                          std::to_string(result.atom_fallback_count) +
+                                          " native-eager atom recipes");
+            }
+        } else {
         result.schedule = atom_schedule(graph);
         result.planner_identity = "atom-recipes-v1";
         result.atom_fallback_count = graph.operations.size();
@@ -297,6 +348,7 @@ ProgramPlan build_reactive_plan(const Graph & graph, const std::string & target)
                                   std::to_string(result.atom_fallback_count) + " native-eager atom recipes");
         const VerificationResult schedule_verification = verify_schedule(graph, result.schedule);
         result.errors.insert(result.errors.end(), schedule_verification.errors.begin(), schedule_verification.errors.end());
+        }
     }
     if (!result.errors.empty()) return result;
     result.resources = build_resource_program(result.graph, result.schedule);

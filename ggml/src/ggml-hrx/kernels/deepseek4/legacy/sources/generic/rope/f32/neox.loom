@@ -1,0 +1,264 @@
+config.decl @shape_rope_ncols : %value: index where [range(%value, 2, 4096), mul(%value, 2)]
+config.decl @shape_rope_n_dims : %value: index where [range(%value, 2, 4096), mul(%value, 2)]
+config.decl @shape_rope_nheads : %value: index where [range(%value, 1, 256)]
+config.decl @shape_rope_ntokens : %value: index where [range(%value, 1, 8192)]
+config.decl @shape_rope_src0_head_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_rope_src0_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_rope_dst_head_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_rope_dst_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_rope_pos_token_stride : %value: index where [range(%value, 1, 1024)]
+config.decl @shape_rope_mode : %value: index where [range(%value, 0, 2)]
+config.decl @rope_sin_sign : %value: f32
+config.decl @rope_attn_factor : %value: f32
+config.decl @rope_beta_fast : %value: f32
+config.decl @rope_beta_slow : %value: f32
+config.decl @rope_ext_factor : %value: f32
+config.decl @rope_freq_base : %value: f32
+config.decl @rope_freq_scale : %value: f32
+config.decl @rope_n_ctx_orig : %value: index where [range(%value, 0, 1048576)]
+config.decl @tuning_rope_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_rope_neox_f32") @hrx2_rope_neox_f32() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @shape_rope_ncols : index
+  %nheads = config.get @shape_rope_nheads : index
+  %ntokens = config.get @shape_rope_ntokens : index
+  %workgroup_size = config.get @tuning_rope_workgroup_size : index
+  %two = index.constant 2 : index
+  %half_cols = index.div %ncols, %two : index
+  %rows = index.mul %nheads, %ntokens : index
+  %total = index.mul %half_cols, %rows : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %pos: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  %two_f32 = scalar.constant 2.0 : f32
+  %minus_two_f32 = scalar.constant -2.0 : f32
+  %point_one_f32 = scalar.constant 0.1 : f32
+  %point_001_f32 = scalar.constant 0.001 : f32
+  %two_pi_f32 = scalar.constant 6.283185307179586 : f32
+  %ln2_f32 = scalar.constant 0.6931471805599453 : f32
+  %ncols = config.get @shape_rope_ncols : index
+  %n_dims = config.get @shape_rope_n_dims : index
+  %nheads = config.get @shape_rope_nheads : index
+  %ntokens = config.get @shape_rope_ntokens : index
+  %src0_head_stride = config.get @shape_rope_src0_head_stride : index
+  %src0_token_stride = config.get @shape_rope_src0_token_stride : index
+  %dst_head_stride = config.get @shape_rope_dst_head_stride : index
+  %dst_token_stride = config.get @shape_rope_dst_token_stride : index
+  %pos_token_stride = config.get @shape_rope_pos_token_stride : index
+  %mode = config.get @shape_rope_mode : index
+  %sin_sign = config.get @rope_sin_sign : f32
+  %attn_factor = config.get @rope_attn_factor : f32
+  %beta_fast = config.get @rope_beta_fast : f32
+  %beta_slow = config.get @rope_beta_slow : f32
+  %ext_factor = config.get @rope_ext_factor : f32
+  %freq_base = config.get @rope_freq_base : f32
+  %freq_scale = config.get @rope_freq_scale : f32
+  %n_ctx_orig = config.get @rope_n_ctx_orig : index
+  %workgroup_size = config.get @tuning_rope_workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 2, 4096)] : index
+  %n_dims_bounded = index.assume %n_dims [range(%n_dims, 2, 4096)] : index
+  %nheads_bounded = index.assume %nheads [range(%nheads, 1, 256)] : index
+  %ntokens_bounded = index.assume %ntokens [range(%ntokens, 1, 8192)] : index
+  %src0_head_stride_bounded = index.assume %src0_head_stride [range(%src0_head_stride, 1, 1048576)] : index
+  %src0_token_stride_bounded = index.assume %src0_token_stride [range(%src0_token_stride, 1, 1048576)] : index
+  %dst_head_stride_bounded = index.assume %dst_head_stride [range(%dst_head_stride, 1, 1048576)] : index
+  %dst_token_stride_bounded = index.assume %dst_token_stride [range(%dst_token_stride, 1, 1048576)] : index
+  %pos_token_stride_bounded = index.assume %pos_token_stride [range(%pos_token_stride, 1, 1024)] : index
+  %n_ctx_orig_bounded = index.assume %n_ctx_orig [range(%n_ctx_orig, 0, 1048576)] : index
+  %n_ctx_orig_is_zero = index.cmp eq, %n_ctx_orig_bounded, %zero : index
+  %n_ctx_orig_nonzero = scf.select %n_ctx_orig_is_zero, %one, %n_ctx_orig_bounded : index
+  %n_ctx_orig_safe = index.assume %n_ctx_orig_nonzero [range(%n_ctx_orig_nonzero, 1, 1048576)] : index
+  %half_cols = index.div %ncols_bounded, %two : index
+  %half_dims = index.div %n_dims_bounded, %two : index
+  %n_dims_i32 = index.cast %n_dims_bounded : index to i32
+  %n_dims_f32 = scalar.sitofp %n_dims_i32 : i32 to f32
+  %theta_exponent = scalar.divf<nnan|ninf|nsz> %minus_two_f32, %n_dims_f32 : f32
+  %theta_scale = scalar.powf<afn> %freq_base, %theta_exponent : f32
+  %yarn_enabled = scalar.cmpf one, %ext_factor, %zero_f32 : f32
+  %rows0 = index.mul %nheads_bounded, %ntokens_bounded : index
+  %rows = index.assume %rows0 [range(%rows0, 1, 1048576)] : index
+  %total0 = index.mul %half_cols, %rows : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %src0_count = index.mul %src0_token_stride_bounded, %ntokens_bounded : index
+  %dst_count = index.mul %dst_token_stride_bounded, %ntokens_bounded : index
+  %pos_count = index.mul %pos_token_stride_bounded, %ntokens_bounded : index
+
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %pos_global = buffer.assume.memory_space<global> %pos : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<[%src0_count]xf32, #dense>
+  %pos_view = buffer.view %pos_global[%base] : buffer -> view<[%pos_count]xi32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<[%dst_count]xf32, #dense>
+
+  scf.if %in_bounds {
+    %pair = index.rem %linear, %half_cols : index
+    %row = index.div %linear, %half_cols : index
+    %head = index.rem %row, %nheads_bounded : index
+    %token = index.div %row, %nheads_bounded : index
+    %src0_head_base = index.mul %head, %src0_head_stride_bounded : index
+    %src0_token_base = index.mul %token, %src0_token_stride_bounded : index
+    %src0_base0 = index.add %src0_head_base, %src0_token_base : index
+    %src0_base = index.assume %src0_base0 [range(%src0_base0, 0, 1073741823)] : index
+    %dst_head_base = index.mul %head, %dst_head_stride_bounded : index
+    %dst_token_base = index.mul %token, %dst_token_stride_bounded : index
+    %dst_base0 = index.add %dst_head_base, %dst_token_base : index
+    %dst_base = index.assume %dst_base0 [range(%dst_base0, 0, 1073741823)] : index
+    %n_dims_under_cols = index.cmp ult, %half_dims, %half_cols : index
+    %active_half_dims = scf.if %n_dims_under_cols -> (index) {
+      scf.yield %half_dims : index
+    } else {
+      scf.yield %half_cols : index
+    }
+    %pair_in_rot = index.cmp ult, %pair, %active_half_dims : index
+    %pos_idx0 = index.mul %token, %pos_token_stride_bounded : index
+    %pos_idx = index.assume %pos_idx0 [range(%pos_idx0, 0, 4194303)] : index
+    scf.if %pair_in_rot {
+      %mode_normal = index.cmp eq, %mode, %zero : index
+      %normal_off0 = index.mul %pair, %two : index
+      %normal_off1 = index.add %normal_off0, %one : index
+      %neox_off1 = index.add %pair, %active_half_dims : index
+      %off0 = scf.select %mode_normal, %normal_off0, %pair : index
+      %off1 = scf.select %mode_normal, %normal_off1, %neox_off1 : index
+      %src0_idx0 = index.add %src0_base, %off0 : index
+      %src0_idx1 = index.add %src0_base, %off1 : index
+      %dst_idx0 = index.add %dst_base, %off0 : index
+      %dst_idx1 = index.add %dst_base, %off1 : index
+      %src0_idx0_safe = index.assume %src0_idx0 [lt(%src0_idx0, %src0_count)] : index
+      %src0_idx1_safe = index.assume %src0_idx1 [lt(%src0_idx1, %src0_count)] : index
+      %dst_idx0_safe = index.assume %dst_idx0 [lt(%dst_idx0, %dst_count)] : index
+      %dst_idx1_safe = index.assume %dst_idx1 [lt(%dst_idx1, %dst_count)] : index
+      %pos_i32 = view.load %pos_view[%pos_idx] : view<[%pos_count]xi32, #dense> -> i32
+      %pos_f32 = scalar.sitofp %pos_i32 : i32 to f32
+      %pair_i32 = index.cast %pair : index to i32
+      %pair_f32 = scalar.sitofp %pair_i32 : i32 to f32
+      %theta_pow = scalar.powf<afn> %theta_scale, %pair_f32 : f32
+      %theta_extrap = scalar.mulf<nnan|ninf|nsz> %pos_f32, %theta_pow : f32
+      %theta_interp = scalar.mulf<nnan|ninf|nsz> %theta_extrap, %freq_scale : f32
+      %theta = scf.if %yarn_enabled -> (f32) {
+        %n_ctx_orig_i32 = index.cast %n_ctx_orig_safe : index to i32
+        %n_ctx_orig_f32 = scalar.sitofp %n_ctx_orig_i32 : i32 to f32
+        %freq_base_log2 = scalar.log2f<afn> %freq_base : f32
+        %corr_den = scalar.mulf<nnan|ninf|nsz> %two_f32, %freq_base_log2 : f32
+        %fast_two_pi = scalar.mulf<nnan|ninf|nsz> %beta_fast, %two_pi_f32 : f32
+        %slow_two_pi = scalar.mulf<nnan|ninf|nsz> %beta_slow, %two_pi_f32 : f32
+        %fast_arg = scalar.divf<nnan|ninf|nsz> %n_ctx_orig_f32, %fast_two_pi : f32
+        %slow_arg = scalar.divf<nnan|ninf|nsz> %n_ctx_orig_f32, %slow_two_pi : f32
+        %fast_log2 = scalar.log2f<afn> %fast_arg : f32
+        %slow_log2 = scalar.log2f<afn> %slow_arg : f32
+        %corr_start_num = scalar.mulf<nnan|ninf|nsz> %n_dims_f32, %fast_log2 : f32
+        %corr_end_num = scalar.mulf<nnan|ninf|nsz> %n_dims_f32, %slow_log2 : f32
+        %corr_start_raw = scalar.divf<nnan|ninf|nsz> %corr_start_num, %corr_den : f32
+        %corr_end_raw = scalar.divf<nnan|ninf|nsz> %corr_end_num, %corr_den : f32
+        %corr_start_floor = scalar.floorf %corr_start_raw : f32
+        %corr_end_ceil = scalar.ceilf %corr_end_raw : f32
+        %corr_start_lt_zero = scalar.cmpf olt, %corr_start_floor, %zero_f32 : f32
+        %corr_start = scf.if %corr_start_lt_zero -> (f32) {
+          scf.yield %zero_f32 : f32
+        } else {
+          scf.yield %corr_start_floor : f32
+        }
+        %n_dims_minus_one = scalar.subf<nnan|ninf|nsz> %n_dims_f32, %one_f32 : f32
+        %corr_end_gt_max = scalar.cmpf ogt, %corr_end_ceil, %n_dims_minus_one : f32
+        %corr_end = scf.if %corr_end_gt_max -> (f32) {
+          scf.yield %n_dims_minus_one : f32
+        } else {
+          scf.yield %corr_end_ceil : f32
+        }
+        %corr_span = scalar.subf<nnan|ninf|nsz> %corr_end, %corr_start : f32
+        %corr_span_small = scalar.cmpf olt, %corr_span, %point_001_f32 : f32
+        %corr_den_safe = scf.if %corr_span_small -> (f32) {
+          scf.yield %point_001_f32 : f32
+        } else {
+          scf.yield %corr_span : f32
+        }
+        %pair_minus_start = scalar.subf<nnan|ninf|nsz> %pair_f32, %corr_start : f32
+        %ramp_unclamped = scalar.divf<nnan|ninf|nsz> %pair_minus_start, %corr_den_safe : f32
+        %ramp_lt_zero = scalar.cmpf olt, %ramp_unclamped, %zero_f32 : f32
+        %ramp_nonnegative = scf.if %ramp_lt_zero -> (f32) {
+          scf.yield %zero_f32 : f32
+        } else {
+          scf.yield %ramp_unclamped : f32
+        }
+        %ramp_gt_one = scalar.cmpf ogt, %ramp_nonnegative, %one_f32 : f32
+        %ramp_clamped = scf.if %ramp_gt_one -> (f32) {
+          scf.yield %one_f32 : f32
+        } else {
+          scf.yield %ramp_nonnegative : f32
+        }
+        %ramp = scalar.subf<nnan|ninf|nsz> %one_f32, %ramp_clamped : f32
+        %ramp_mix = scalar.mulf<nnan|ninf|nsz> %ramp, %ext_factor : f32
+        %one_minus_mix = scalar.subf<nnan|ninf|nsz> %one_f32, %ramp_mix : f32
+        %interp_part = scalar.mulf<nnan|ninf|nsz> %theta_interp, %one_minus_mix : f32
+        %extrap_part = scalar.mulf<nnan|ninf|nsz> %theta_extrap, %ramp_mix : f32
+        %theta_yarn = scalar.addf<nnan|ninf|nsz> %interp_part, %extrap_part : f32
+        scf.yield %theta_yarn : f32
+      } else {
+        scf.yield %theta_interp : f32
+      }
+      %mscale = scf.if %yarn_enabled -> (f32) {
+        %freq_scale_inv = scalar.divf<nnan|ninf|nsz> %one_f32, %freq_scale : f32
+        %freq_scale_inv_log2 = scalar.log2f<afn> %freq_scale_inv : f32
+        %freq_scale_inv_log = scalar.mulf<nnan|ninf|nsz> %freq_scale_inv_log2, %ln2_f32 : f32
+        %mscale_delta0 = scalar.mulf<nnan|ninf|nsz> %point_one_f32, %freq_scale_inv_log : f32
+        %mscale_delta = scalar.addf<nnan|ninf|nsz> %one_f32, %mscale_delta0 : f32
+        %mscale_yarn = scalar.mulf<nnan|ninf|nsz> %attn_factor, %mscale_delta : f32
+        scf.yield %mscale_yarn : f32
+      } else {
+        scf.yield %attn_factor : f32
+      }
+      %cos0 = scalar.cosf<afn> %theta : f32
+      %sin0 = scalar.sinf<afn> %theta : f32
+      %cos_theta = scalar.mulf<nnan|ninf|nsz> %cos0, %mscale : f32
+      %sin_scaled = scalar.mulf<nnan|ninf|nsz> %sin0, %mscale : f32
+      %sin_theta = scalar.mulf<nnan|ninf|nsz> %sin_scaled, %sin_sign : f32
+      %x0 = view.load %src0_view[%src0_idx0_safe] : view<[%src0_count]xf32, #dense> -> f32
+      %x1 = view.load %src0_view[%src0_idx1_safe] : view<[%src0_count]xf32, #dense> -> f32
+      %x0_cos = scalar.mulf<nnan|ninf|nsz> %x0, %cos_theta : f32
+      %x1_sin = scalar.mulf<nnan|ninf|nsz> %x1, %sin_theta : f32
+      %out0 = scalar.subf<nnan|ninf|nsz> %x0_cos, %x1_sin : f32
+      %x0_sin = scalar.mulf<nnan|ninf|nsz> %x0, %sin_theta : f32
+      %x1_cos = scalar.mulf<nnan|ninf|nsz> %x1, %cos_theta : f32
+      %out1 = scalar.addf<nnan|ninf|nsz> %x0_sin, %x1_cos : f32
+      view.store %out0, %dst_view[%dst_idx0_safe] : f32, view<[%dst_count]xf32, #dense>
+      view.store %out1, %dst_view[%dst_idx1_safe] : f32, view<[%dst_count]xf32, #dense>
+    } else {
+      %tail_pair = index.sub %pair, %half_dims : index
+      %tail_pair2 = index.mul %tail_pair, %two : index
+      %tail0 = index.add %n_dims_bounded, %tail_pair2 : index
+      %tail1 = index.add %tail0, %one : index
+      %src0_idx0 = index.add %src0_base, %tail0 : index
+      %src0_idx1 = index.add %src0_base, %tail1 : index
+      %dst_idx0 = index.add %dst_base, %tail0 : index
+      %dst_idx1 = index.add %dst_base, %tail1 : index
+      %src0_idx0_safe = index.assume %src0_idx0 [lt(%src0_idx0, %src0_count)] : index
+      %src0_idx1_safe = index.assume %src0_idx1 [lt(%src0_idx1, %src0_count)] : index
+      %dst_idx0_safe = index.assume %dst_idx0 [lt(%dst_idx0, %dst_count)] : index
+      %dst_idx1_safe = index.assume %dst_idx1 [lt(%dst_idx1, %dst_count)] : index
+      %x0 = view.load %src0_view[%src0_idx0_safe] : view<[%src0_count]xf32, #dense> -> f32
+      %x1 = view.load %src0_view[%src0_idx1_safe] : view<[%src0_count]xf32, #dense> -> f32
+      view.store %x0, %dst_view[%dst_idx0_safe] : f32, view<[%dst_count]xf32, #dense>
+      view.store %x1, %dst_view[%dst_idx1_safe] : f32, view<[%dst_count]xf32, #dense>
+    }
+  }
+  kernel.return
+}

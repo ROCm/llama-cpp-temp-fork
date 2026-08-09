@@ -1,0 +1,484 @@
+config.decl @shape_mul4d_ne0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_ne3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src0_ne0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src0_ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src0_ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src0_ne3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src1_ne0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src1_ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src1_ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_mul4d_src1_ne3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @stride_mul4d_src0_nb0 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_src0_nb1 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_src0_nb2 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_src0_nb3 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_src1_nb0 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_src1_nb1 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_src1_nb2 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_src1_nb3 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_dst_nb0 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_dst_nb1 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_dst_nb2 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @stride_mul4d_dst_nb3 : %value: index where [range(%value, 0, 1073741824)]
+config.decl @tuning_mul4d_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("mul_f32_non_contiguous") @mul_f32_non_contiguous() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %max_workgroups_x = index.constant 65535 : index
+  %ne0 = config.get @shape_mul4d_ne0 : index
+  %ne1 = config.get @shape_mul4d_ne1 : index
+  %ne2 = config.get @shape_mul4d_ne2 : index
+  %ne3 = config.get @shape_mul4d_ne3 : index
+  %workgroup_size = config.get @tuning_mul4d_workgroup_size : index
+  %ne01 = index.mul %ne0, %ne1 : index
+  %ne012 = index.mul %ne01, %ne2 : index
+  %total = index.mul %ne012, %ne3 : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %flat_workgroups = index.div %rounded, %workgroup_size : index
+  %y_rounding = index.add %flat_workgroups, %minus_one : index
+  %y_rounded = index.add %y_rounding, %max_workgroups_x : index
+  %workgroups_y = index.div %y_rounded, %max_workgroups_x : index
+  %x_rounding = index.add %workgroups_y, %minus_one : index
+  %x_rounded = index.add %flat_workgroups, %x_rounding : index
+  %workgroups_x = index.div %x_rounded, %workgroups_y : index
+  kernel.launch.config workgroups(%workgroups_x, %workgroups_y, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ne0 = config.get @shape_mul4d_ne0 : index
+  %ne1 = config.get @shape_mul4d_ne1 : index
+  %ne2 = config.get @shape_mul4d_ne2 : index
+  %ne3 = config.get @shape_mul4d_ne3 : index
+  %src0_ne0 = config.get @shape_mul4d_src0_ne0 : index
+  %src0_ne1 = config.get @shape_mul4d_src0_ne1 : index
+  %src0_ne2 = config.get @shape_mul4d_src0_ne2 : index
+  %src0_ne3 = config.get @shape_mul4d_src0_ne3 : index
+  %src1_ne0 = config.get @shape_mul4d_src1_ne0 : index
+  %src1_ne1 = config.get @shape_mul4d_src1_ne1 : index
+  %src1_ne2 = config.get @shape_mul4d_src1_ne2 : index
+  %src1_ne3 = config.get @shape_mul4d_src1_ne3 : index
+  %src0_nb0 = config.get @stride_mul4d_src0_nb0 : index
+  %src0_nb1 = config.get @stride_mul4d_src0_nb1 : index
+  %src0_nb2 = config.get @stride_mul4d_src0_nb2 : index
+  %src0_nb3 = config.get @stride_mul4d_src0_nb3 : index
+  %src1_nb0 = config.get @stride_mul4d_src1_nb0 : index
+  %src1_nb1 = config.get @stride_mul4d_src1_nb1 : index
+  %src1_nb2 = config.get @stride_mul4d_src1_nb2 : index
+  %src1_nb3 = config.get @stride_mul4d_src1_nb3 : index
+  %dst_nb0 = config.get @stride_mul4d_dst_nb0 : index
+  %dst_nb1 = config.get @stride_mul4d_dst_nb1 : index
+  %dst_nb2 = config.get @stride_mul4d_dst_nb2 : index
+  %dst_nb3 = config.get @stride_mul4d_dst_nb3 : index
+  %workgroup_size = config.get @tuning_mul4d_workgroup_size : index
+  %max_workgroups_x = index.constant 65535 : index
+  %ne0_bounded = index.assume %ne0 [range(%ne0, 1, 1073741824)] : index
+  %ne1_bounded = index.assume %ne1 [range(%ne1, 1, 1073741824)] : index
+  %ne2_bounded = index.assume %ne2 [range(%ne2, 1, 1073741824)] : index
+  %ne3_bounded = index.assume %ne3 [range(%ne3, 1, 1073741824)] : index
+  %src0_ne0_bounded = index.assume %src0_ne0 [range(%src0_ne0, 1, 1073741824)] : index
+  %src0_ne1_bounded = index.assume %src0_ne1 [range(%src0_ne1, 1, 1073741824)] : index
+  %src0_ne2_bounded = index.assume %src0_ne2 [range(%src0_ne2, 1, 1073741824)] : index
+  %src0_ne3_bounded = index.assume %src0_ne3 [range(%src0_ne3, 1, 1073741824)] : index
+  %src1_ne0_bounded = index.assume %src1_ne0 [range(%src1_ne0, 1, 1073741824)] : index
+  %src1_ne1_bounded = index.assume %src1_ne1 [range(%src1_ne1, 1, 1073741824)] : index
+  %src1_ne2_bounded = index.assume %src1_ne2 [range(%src1_ne2, 1, 1073741824)] : index
+  %src1_ne3_bounded = index.assume %src1_ne3 [range(%src1_ne3, 1, 1073741824)] : index
+  %src0_ne0_unit = index.cmp eq, %src0_ne0_bounded, %one : index
+  %src0_nb0_effective = scf.if %src0_ne0_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb0 : index
+  }
+  %src0_ne1_unit = index.cmp eq, %src0_ne1_bounded, %one : index
+  %src0_nb1_effective = scf.if %src0_ne1_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb1 : index
+  }
+  %src0_ne2_unit = index.cmp eq, %src0_ne2_bounded, %one : index
+  %src0_nb2_effective = scf.if %src0_ne2_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb2 : index
+  }
+  %src0_ne3_unit = index.cmp eq, %src0_ne3_bounded, %one : index
+  %src0_nb3_effective = scf.if %src0_ne3_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb3 : index
+  }
+  %src1_ne0_unit = index.cmp eq, %src1_ne0_bounded, %one : index
+  %src1_nb0_effective = scf.if %src1_ne0_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb0 : index
+  }
+  %src1_ne1_unit = index.cmp eq, %src1_ne1_bounded, %one : index
+  %src1_nb1_effective = scf.if %src1_ne1_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb1 : index
+  }
+  %src1_ne2_unit = index.cmp eq, %src1_ne2_bounded, %one : index
+  %src1_nb2_effective = scf.if %src1_ne2_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb2 : index
+  }
+  %src1_ne3_unit = index.cmp eq, %src1_ne3_bounded, %one : index
+  %src1_nb3_effective = scf.if %src1_ne3_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb3 : index
+  }
+  %ne0_unit = index.cmp eq, %ne0_bounded, %one : index
+  %dst_nb0_effective = scf.if %ne0_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb0 : index
+  }
+  %ne1_unit = index.cmp eq, %ne1_bounded, %one : index
+  %dst_nb1_effective = scf.if %ne1_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb1 : index
+  }
+  %ne2_unit = index.cmp eq, %ne2_bounded, %one : index
+  %dst_nb2_effective = scf.if %ne2_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb2 : index
+  }
+  %ne3_unit = index.cmp eq, %ne3_bounded, %one : index
+  %dst_nb3_effective = scf.if %ne3_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb3 : index
+  }
+  %ne01_pre = index.mul %ne0_bounded, %ne1_bounded : index
+  %ne012_pre = index.mul %ne01_pre, %ne2_bounded : index
+  %total_pre0 = index.mul %ne012_pre, %ne3_bounded : index
+  %total_pre = index.assume %total_pre0 [range(%total_pre0, 1, 1073741824)] : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total_pre, %rounding : index
+  %flat_workgroups = index.div %rounded, %workgroup_size : index
+  %y_rounding = index.add %flat_workgroups, %minus_one : index
+  %y_rounded = index.add %y_rounding, %max_workgroups_x : index
+  %workgroups_y = index.div %y_rounded, %max_workgroups_x : index
+  %x_rounding = index.add %workgroups_y, %minus_one : index
+  %x_rounded = index.add %flat_workgroups, %x_rounding : index
+  %workgroups_x = index.div %x_rounded, %workgroups_y : index
+  %workgroup_x0 = kernel.workgroup.id<x> : index
+  %workgroup_y0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup_x = index.assume %workgroup_x0 [range(%workgroup_x0, 0, 65534)] : index
+  %workgroup_y = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 64)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %workgroup_y_base0 = index.mul %workgroup_y, %workgroups_x : index
+  %workgroup_y_base = index.assume %workgroup_y_base0 [range(%workgroup_y_base0, 0, 4194240)] : index
+  %workgroup0 = index.add %workgroup_y_base, %workgroup_x : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %linear_base0 = index.mul %workgroup, %workgroup_size : index
+  %linear_base = index.assume %linear_base0 [range(%linear_base0, 0, 1073741823)] : index
+  %linear0 = index.add %linear_base, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073741823)] : index
+  %ne01 = index.mul %ne0_bounded, %ne1_bounded : index
+  %ne012 = index.mul %ne01, %ne2_bounded : index
+  %total0 = index.mul %ne012, %ne3_bounded : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %i0 = index.rem %linear, %ne0_bounded : index
+    %q0 = index.div %linear, %ne0_bounded : index
+    %i1 = index.rem %q0, %ne1_bounded : index
+    %q1 = index.div %q0, %ne1_bounded : index
+    %i2 = index.rem %q1, %ne2_bounded : index
+    %i3 = index.div %q1, %ne2_bounded : index
+
+    %src0_i0 = index.rem %i0, %src0_ne0_bounded : index
+    %src0_i1 = index.rem %i1, %src0_ne1_bounded : index
+    %src0_i2 = index.rem %i2, %src0_ne2_bounded : index
+    %src0_i3 = index.rem %i3, %src0_ne3_bounded : index
+    %src0_o0 = index.mul %src0_i0, %src0_nb0_effective : index
+    %src0_o1 = index.mul %src0_i1, %src0_nb1_effective : index
+    %src0_o2 = index.mul %src0_i2, %src0_nb2_effective : index
+    %src0_o3 = index.mul %src0_i3, %src0_nb3_effective : index
+    %src0_o01 = index.add %src0_o0, %src0_o1 : index
+    %src0_o23 = index.add %src0_o2, %src0_o3 : index
+    %src0_idx0 = index.add %src0_o01, %src0_o23 : index
+    %src0_idx = index.assume %src0_idx0 [range(%src0_idx0, 0, 1073741823)] : index
+
+    %src1_i0 = index.rem %i0, %src1_ne0_bounded : index
+    %src1_i1 = index.rem %i1, %src1_ne1_bounded : index
+    %src1_i2 = index.rem %i2, %src1_ne2_bounded : index
+    %src1_i3 = index.rem %i3, %src1_ne3_bounded : index
+    %src1_o0 = index.mul %src1_i0, %src1_nb0_effective : index
+    %src1_o1 = index.mul %src1_i1, %src1_nb1_effective : index
+    %src1_o2 = index.mul %src1_i2, %src1_nb2_effective : index
+    %src1_o3 = index.mul %src1_i3, %src1_nb3_effective : index
+    %src1_o01 = index.add %src1_o0, %src1_o1 : index
+    %src1_o23 = index.add %src1_o2, %src1_o3 : index
+    %src1_idx0 = index.add %src1_o01, %src1_o23 : index
+    %src1_idx = index.assume %src1_idx0 [range(%src1_idx0, 0, 1073741823)] : index
+
+    %dst_o0 = index.mul %i0, %dst_nb0_effective : index
+    %dst_o1 = index.mul %i1, %dst_nb1_effective : index
+    %dst_o2 = index.mul %i2, %dst_nb2_effective : index
+    %dst_o3 = index.mul %i3, %dst_nb3_effective : index
+    %dst_o01 = index.add %dst_o0, %dst_o1 : index
+    %dst_o23 = index.add %dst_o2, %dst_o3 : index
+    %dst_idx0 = index.add %dst_o01, %dst_o23 : index
+    %dst_idx = index.assume %dst_idx0 [range(%dst_idx0, 0, 1073741823)] : index
+
+    %a = view.load %src0_view[%src0_idx] : view<1073741824xf32, #dense> -> f32
+    %b = view.load %src1_view[%src1_idx] : view<1073741824xf32, #dense> -> f32
+    %result = scalar.mulf<nnan|ninf|nsz> %a, %b : f32
+    view.store %result, %dst_view[%dst_idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("mul_f16_non_contiguous") @mul_f16_non_contiguous() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %max_workgroups_x = index.constant 65535 : index
+  %ne0 = config.get @shape_mul4d_ne0 : index
+  %ne1 = config.get @shape_mul4d_ne1 : index
+  %ne2 = config.get @shape_mul4d_ne2 : index
+  %ne3 = config.get @shape_mul4d_ne3 : index
+  %workgroup_size = config.get @tuning_mul4d_workgroup_size : index
+  %ne01 = index.mul %ne0, %ne1 : index
+  %ne012 = index.mul %ne01, %ne2 : index
+  %total = index.mul %ne012, %ne3 : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %flat_workgroups = index.div %rounded, %workgroup_size : index
+  %y_rounding = index.add %flat_workgroups, %minus_one : index
+  %y_rounded = index.add %y_rounding, %max_workgroups_x : index
+  %workgroups_y = index.div %y_rounded, %max_workgroups_x : index
+  %x_rounding = index.add %workgroups_y, %minus_one : index
+  %x_rounded = index.add %flat_workgroups, %x_rounding : index
+  %workgroups_x = index.div %x_rounded, %workgroups_y : index
+  kernel.launch.config workgroups(%workgroups_x, %workgroups_y, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ne0 = config.get @shape_mul4d_ne0 : index
+  %ne1 = config.get @shape_mul4d_ne1 : index
+  %ne2 = config.get @shape_mul4d_ne2 : index
+  %ne3 = config.get @shape_mul4d_ne3 : index
+  %src0_ne0 = config.get @shape_mul4d_src0_ne0 : index
+  %src0_ne1 = config.get @shape_mul4d_src0_ne1 : index
+  %src0_ne2 = config.get @shape_mul4d_src0_ne2 : index
+  %src0_ne3 = config.get @shape_mul4d_src0_ne3 : index
+  %src1_ne0 = config.get @shape_mul4d_src1_ne0 : index
+  %src1_ne1 = config.get @shape_mul4d_src1_ne1 : index
+  %src1_ne2 = config.get @shape_mul4d_src1_ne2 : index
+  %src1_ne3 = config.get @shape_mul4d_src1_ne3 : index
+  %src0_nb0 = config.get @stride_mul4d_src0_nb0 : index
+  %src0_nb1 = config.get @stride_mul4d_src0_nb1 : index
+  %src0_nb2 = config.get @stride_mul4d_src0_nb2 : index
+  %src0_nb3 = config.get @stride_mul4d_src0_nb3 : index
+  %src1_nb0 = config.get @stride_mul4d_src1_nb0 : index
+  %src1_nb1 = config.get @stride_mul4d_src1_nb1 : index
+  %src1_nb2 = config.get @stride_mul4d_src1_nb2 : index
+  %src1_nb3 = config.get @stride_mul4d_src1_nb3 : index
+  %dst_nb0 = config.get @stride_mul4d_dst_nb0 : index
+  %dst_nb1 = config.get @stride_mul4d_dst_nb1 : index
+  %dst_nb2 = config.get @stride_mul4d_dst_nb2 : index
+  %dst_nb3 = config.get @stride_mul4d_dst_nb3 : index
+  %workgroup_size = config.get @tuning_mul4d_workgroup_size : index
+  %max_workgroups_x = index.constant 65535 : index
+  %ne0_bounded = index.assume %ne0 [range(%ne0, 1, 1073741824)] : index
+  %ne1_bounded = index.assume %ne1 [range(%ne1, 1, 1073741824)] : index
+  %ne2_bounded = index.assume %ne2 [range(%ne2, 1, 1073741824)] : index
+  %ne3_bounded = index.assume %ne3 [range(%ne3, 1, 1073741824)] : index
+  %src0_ne0_bounded = index.assume %src0_ne0 [range(%src0_ne0, 1, 1073741824)] : index
+  %src0_ne1_bounded = index.assume %src0_ne1 [range(%src0_ne1, 1, 1073741824)] : index
+  %src0_ne2_bounded = index.assume %src0_ne2 [range(%src0_ne2, 1, 1073741824)] : index
+  %src0_ne3_bounded = index.assume %src0_ne3 [range(%src0_ne3, 1, 1073741824)] : index
+  %src1_ne0_bounded = index.assume %src1_ne0 [range(%src1_ne0, 1, 1073741824)] : index
+  %src1_ne1_bounded = index.assume %src1_ne1 [range(%src1_ne1, 1, 1073741824)] : index
+  %src1_ne2_bounded = index.assume %src1_ne2 [range(%src1_ne2, 1, 1073741824)] : index
+  %src1_ne3_bounded = index.assume %src1_ne3 [range(%src1_ne3, 1, 1073741824)] : index
+  %src0_ne0_unit = index.cmp eq, %src0_ne0_bounded, %one : index
+  %src0_nb0_effective = scf.if %src0_ne0_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb0 : index
+  }
+  %src0_ne1_unit = index.cmp eq, %src0_ne1_bounded, %one : index
+  %src0_nb1_effective = scf.if %src0_ne1_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb1 : index
+  }
+  %src0_ne2_unit = index.cmp eq, %src0_ne2_bounded, %one : index
+  %src0_nb2_effective = scf.if %src0_ne2_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb2 : index
+  }
+  %src0_ne3_unit = index.cmp eq, %src0_ne3_bounded, %one : index
+  %src0_nb3_effective = scf.if %src0_ne3_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src0_nb3 : index
+  }
+  %src1_ne0_unit = index.cmp eq, %src1_ne0_bounded, %one : index
+  %src1_nb0_effective = scf.if %src1_ne0_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb0 : index
+  }
+  %src1_ne1_unit = index.cmp eq, %src1_ne1_bounded, %one : index
+  %src1_nb1_effective = scf.if %src1_ne1_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb1 : index
+  }
+  %src1_ne2_unit = index.cmp eq, %src1_ne2_bounded, %one : index
+  %src1_nb2_effective = scf.if %src1_ne2_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb2 : index
+  }
+  %src1_ne3_unit = index.cmp eq, %src1_ne3_bounded, %one : index
+  %src1_nb3_effective = scf.if %src1_ne3_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %src1_nb3 : index
+  }
+  %ne0_unit = index.cmp eq, %ne0_bounded, %one : index
+  %dst_nb0_effective = scf.if %ne0_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb0 : index
+  }
+  %ne1_unit = index.cmp eq, %ne1_bounded, %one : index
+  %dst_nb1_effective = scf.if %ne1_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb1 : index
+  }
+  %ne2_unit = index.cmp eq, %ne2_bounded, %one : index
+  %dst_nb2_effective = scf.if %ne2_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb2 : index
+  }
+  %ne3_unit = index.cmp eq, %ne3_bounded, %one : index
+  %dst_nb3_effective = scf.if %ne3_unit -> (index) {
+    scf.yield %zero : index
+  } else {
+    scf.yield %dst_nb3 : index
+  }
+  %ne01_pre = index.mul %ne0_bounded, %ne1_bounded : index
+  %ne012_pre = index.mul %ne01_pre, %ne2_bounded : index
+  %total_pre0 = index.mul %ne012_pre, %ne3_bounded : index
+  %total_pre = index.assume %total_pre0 [range(%total_pre0, 1, 1073741824)] : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total_pre, %rounding : index
+  %flat_workgroups = index.div %rounded, %workgroup_size : index
+  %y_rounding = index.add %flat_workgroups, %minus_one : index
+  %y_rounded = index.add %y_rounding, %max_workgroups_x : index
+  %workgroups_y = index.div %y_rounded, %max_workgroups_x : index
+  %x_rounding = index.add %workgroups_y, %minus_one : index
+  %x_rounded = index.add %flat_workgroups, %x_rounding : index
+  %workgroups_x = index.div %x_rounded, %workgroups_y : index
+  %workgroup_x0 = kernel.workgroup.id<x> : index
+  %workgroup_y0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup_x = index.assume %workgroup_x0 [range(%workgroup_x0, 0, 65534)] : index
+  %workgroup_y = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 64)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %workgroup_y_base0 = index.mul %workgroup_y, %workgroups_x : index
+  %workgroup_y_base = index.assume %workgroup_y_base0 [range(%workgroup_y_base0, 0, 4194240)] : index
+  %workgroup0 = index.add %workgroup_y_base, %workgroup_x : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %linear_base0 = index.mul %workgroup, %workgroup_size : index
+  %linear_base = index.assume %linear_base0 [range(%linear_base0, 0, 1073741823)] : index
+  %linear0 = index.add %linear_base, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073741823)] : index
+  %ne01 = index.mul %ne0_bounded, %ne1_bounded : index
+  %ne012 = index.mul %ne01, %ne2_bounded : index
+  %total0 = index.mul %ne012, %ne3_bounded : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf16, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf16, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf16, #dense>
+
+  scf.if %in_bounds {
+    %i0 = index.rem %linear, %ne0_bounded : index
+    %q0 = index.div %linear, %ne0_bounded : index
+    %i1 = index.rem %q0, %ne1_bounded : index
+    %q1 = index.div %q0, %ne1_bounded : index
+    %i2 = index.rem %q1, %ne2_bounded : index
+    %i3 = index.div %q1, %ne2_bounded : index
+
+    %src0_i0 = index.rem %i0, %src0_ne0_bounded : index
+    %src0_i1 = index.rem %i1, %src0_ne1_bounded : index
+    %src0_i2 = index.rem %i2, %src0_ne2_bounded : index
+    %src0_i3 = index.rem %i3, %src0_ne3_bounded : index
+    %src0_o0 = index.mul %src0_i0, %src0_nb0_effective : index
+    %src0_o1 = index.mul %src0_i1, %src0_nb1_effective : index
+    %src0_o2 = index.mul %src0_i2, %src0_nb2_effective : index
+    %src0_o3 = index.mul %src0_i3, %src0_nb3_effective : index
+    %src0_o01 = index.add %src0_o0, %src0_o1 : index
+    %src0_o23 = index.add %src0_o2, %src0_o3 : index
+    %src0_idx0 = index.add %src0_o01, %src0_o23 : index
+    %src0_idx = index.assume %src0_idx0 [range(%src0_idx0, 0, 1073741823)] : index
+
+    %src1_i0 = index.rem %i0, %src1_ne0_bounded : index
+    %src1_i1 = index.rem %i1, %src1_ne1_bounded : index
+    %src1_i2 = index.rem %i2, %src1_ne2_bounded : index
+    %src1_i3 = index.rem %i3, %src1_ne3_bounded : index
+    %src1_o0 = index.mul %src1_i0, %src1_nb0_effective : index
+    %src1_o1 = index.mul %src1_i1, %src1_nb1_effective : index
+    %src1_o2 = index.mul %src1_i2, %src1_nb2_effective : index
+    %src1_o3 = index.mul %src1_i3, %src1_nb3_effective : index
+    %src1_o01 = index.add %src1_o0, %src1_o1 : index
+    %src1_o23 = index.add %src1_o2, %src1_o3 : index
+    %src1_idx0 = index.add %src1_o01, %src1_o23 : index
+    %src1_idx = index.assume %src1_idx0 [range(%src1_idx0, 0, 1073741823)] : index
+
+    %dst_o0 = index.mul %i0, %dst_nb0_effective : index
+    %dst_o1 = index.mul %i1, %dst_nb1_effective : index
+    %dst_o2 = index.mul %i2, %dst_nb2_effective : index
+    %dst_o3 = index.mul %i3, %dst_nb3_effective : index
+    %dst_o01 = index.add %dst_o0, %dst_o1 : index
+    %dst_o23 = index.add %dst_o2, %dst_o3 : index
+    %dst_idx0 = index.add %dst_o01, %dst_o23 : index
+    %dst_idx = index.assume %dst_idx0 [range(%dst_idx0, 0, 1073741823)] : index
+
+    %a_f16 = view.load %src0_view[%src0_idx] : view<1073741824xf16, #dense> -> f16
+    %b_f16 = view.load %src1_view[%src1_idx] : view<1073741824xf16, #dense> -> f16
+    %a = scalar.extf %a_f16 : f16 to f32
+    %b = scalar.extf %b_f16 : f16 to f32
+    %result_f32 = scalar.mulf<nnan|ninf|nsz> %a, %b : f32
+    %result = scalar.fptrunc %result_f32 : f32 to f16
+    view.store %result, %dst_view[%dst_idx] : f16, view<1073741824xf16, #dense>
+  }
+  kernel.return
+}

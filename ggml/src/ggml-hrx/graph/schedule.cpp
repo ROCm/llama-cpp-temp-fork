@@ -41,6 +41,11 @@ static RootDisposition parse_root_disposition(const std::string & value) {
     throw std::runtime_error("unknown root disposition");
 }
 
+static bool metadata_only(enum ggml_op op) {
+    return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE ||
+        op == GGML_OP_TRANSPOSE;
+}
+
 } // namespace
 
 VerificationResult verify_schedule(const Graph & graph, const Schedule & schedule) {
@@ -96,7 +101,12 @@ VerificationResult verify_schedule(const Graph & graph, const Schedule & schedul
         };
         check_bindings(invocation.inputs, "input");
         check_bindings(invocation.outputs, "output");
-        if (invocation.dispatches.empty()) {
+        const bool metadata_invocation = invocation.kernel.family == "hrx_metadata" &&
+            std::all_of(invocation.covered_operations.begin(), invocation.covered_operations.end(),
+                [&](OperationId operation) {
+                    return operation < graph.operations.size() && metadata_only(graph.operations[operation].op);
+                });
+        if (invocation.dispatches.empty() && !metadata_invocation) {
             error(result, "invocation " + std::to_string(invocation_id) + " has no concrete dispatches");
         }
         for (const Dispatch & dispatch : invocation.dispatches) {
@@ -112,6 +122,41 @@ VerificationResult verify_schedule(const Graph & graph, const Schedule & schedul
                     const size_t available = storage.size > value.access.offset ? storage.size - value.access.offset : 0;
                     if (binding.offset > available || (binding.length != 0 && binding.length > available - binding.offset)) {
                         error(result, "dispatch " + std::to_string(dispatch_ordinal) + " tensor binding range escapes storage");
+                    }
+                }
+            }
+            for (const auto & parameter : dispatch.kernel.deferred_compile_parameters) {
+                if (parameter.first.empty() || parameter.second.value >= graph.values.size() ||
+                    parameter.second.property.empty()) {
+                    error(result, "dispatch " + std::to_string(dispatch_ordinal) +
+                                  " has an invalid deferred compile parameter");
+                }
+            }
+            if (dispatch.streamed_missing_suffix && !dispatch.streamed()) {
+                error(result, "dispatch " + std::to_string(dispatch_ordinal) +
+                              " marks a streamed suffix without a streaming contract");
+            }
+            if (dispatch.streamed()) {
+                if (dispatch.streamed_expert_begin >= dispatch.streamed_expert_end) {
+                    error(result, "dispatch " + std::to_string(dispatch_ordinal) +
+                                  " has an empty streamed expert range");
+                }
+                if (invocation.layer < 0 || dispatch.streamed_weight >= graph.values.size() ||
+                    dispatch.streamed_expert_ids >= graph.values.size()) {
+                    error(result, "dispatch " + std::to_string(dispatch_ordinal) +
+                                  " has an invalid streaming contract");
+                } else {
+                    const bool binds_streamed_weight = std::any_of(
+                        dispatch.bindings.begin(), dispatch.bindings.end(), [&](const TensorBinding & binding) {
+                            return binding.value == dispatch.streamed_weight && !binding.storage_binding.empty();
+                        });
+                    if (!binds_streamed_weight) {
+                        error(result, "dispatch " + std::to_string(dispatch_ordinal) +
+                                      " does not bind its declared streamed weight");
+                    }
+                    if (graph.values[dispatch.streamed_expert_ids].type != GGML_TYPE_I32) {
+                        error(result, "dispatch " + std::to_string(dispatch_ordinal) +
+                                      " expert-ID value is not I32");
                     }
                 }
             }
@@ -241,7 +286,7 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
     try {
         const nlohmann::json root = nlohmann::json::parse(text);
         const int version = root.at("version").get<int>();
-        if (version < 1 || version > 4) {
+        if (version < 1 || version > 7) {
             errors.emplace_back("unsupported schedule manifest version");
             return schedule;
         }
@@ -279,7 +324,8 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
                 std::vector<TensorBinding> result;
                 for (const nlohmann::json & binding : bindings) {
                     result.push_back({ binding.at("role").get<std::string>(), binding.at("value").get<ValueId>(),
-                                       binding.value("offset", size_t{0}), binding.value("length", size_t{0}) });
+                                       binding.value("offset", size_t{0}), binding.value("length", size_t{0}),
+                                       binding.value("storage_binding", std::string()) });
                 }
                 return result;
             };
@@ -296,8 +342,28 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
                     dispatch.kernel.integer_parameters = dispatch_kernel.at("parameters").get<std::map<std::string, int64_t>>();
                     dispatch.kernel.compile_parameters = dispatch_kernel.value(
                         "compile_parameters", std::map<std::string, std::string>());
+                    if (version >= 5) {
+                        const nlohmann::json deferred = dispatch_kernel.value(
+                            "deferred_compile_parameters", nlohmann::json::object());
+                        for (auto parameter = deferred.begin(); parameter != deferred.end(); ++parameter) {
+                            dispatch.kernel.deferred_compile_parameters[parameter.key()] = {
+                                parameter.value().at("value").get<ValueId>(),
+                                parameter.value().at("property").get<std::string>() };
+                        }
+                    }
                     dispatch.bindings = read_bindings(dispatch_item.at("bindings"));
                     dispatch.dependencies = dispatch_item.at("dependencies").get<std::vector<uint32_t>>();
+                    if (version >= 6 && dispatch_item.contains("streamed")) {
+                        const nlohmann::json & streamed = dispatch_item.at("streamed");
+                        dispatch.streamed_weight = streamed.at("weight").get<ValueId>();
+                        dispatch.streamed_expert_ids = streamed.at("expert_ids").get<ValueId>();
+                        dispatch.streamed_missing_suffix = streamed.value("missing_suffix", false);
+                        if (version >= 7) {
+                            dispatch.streamed_expert_begin = streamed.value("expert_begin", uint32_t { 0 });
+                            dispatch.streamed_expert_end = streamed.value("expert_end", uint32_t { 0xffffffffu });
+                            dispatch.streamed_load_chunk_size = streamed.value("load_chunk_size", uint32_t { 0 });
+                        }
+                    }
                     invocation.dispatches.push_back(std::move(dispatch));
                 }
             } else {
@@ -317,7 +383,7 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
 
 std::string serialize_schedule_json(const Schedule & schedule) {
     std::ostringstream out;
-    out << "{\"version\":4,\"graph_fingerprint\":\"" << escape_json(schedule.graph_fingerprint)
+    out << "{\"version\":7,\"graph_fingerprint\":\"" << escape_json(schedule.graph_fingerprint)
         << "\",\"workload\":\"" << escape_json(schedule.workload) << "\",\"oracle_revision\":\""
         << escape_json(schedule.oracle_revision) << "\",\"expected_dispatch_count\":" << schedule.expected_dispatch_count
         << ",\"roots\":[";
@@ -355,7 +421,9 @@ std::string serialize_schedule_json(const Schedule & schedule) {
             out << "],\"" << name << "\":[";
             for (size_t j = 0; j < bindings.size(); ++j) {
                 if (j != 0) out << ',';
-                out << "{\"role\":\"" << escape_json(bindings[j].role) << "\",\"value\":" << bindings[j].value << '}';
+                out << "{\"role\":\"" << escape_json(bindings[j].role) << "\",\"value\":" << bindings[j].value
+                    << ",\"offset\":" << bindings[j].offset << ",\"length\":" << bindings[j].length
+                    << ",\"storage_binding\":\"" << escape_json(bindings[j].storage_binding) << "\"}";
             }
         };
         write_bindings("inputs", invocation.inputs);
@@ -379,18 +447,37 @@ std::string serialize_schedule_json(const Schedule & schedule) {
                 if (compile_parameter_index++ != 0) out << ',';
                 out << '\"' << escape_json(parameter.first) << "\":\"" << escape_json(parameter.second) << '\"';
             }
+            out << "},\"deferred_compile_parameters\":{";
+            size_t deferred_parameter_index = 0;
+            for (const auto & parameter : dispatch.kernel.deferred_compile_parameters) {
+                if (deferred_parameter_index++ != 0) out << ',';
+                out << '\"' << escape_json(parameter.first) << "\":{\"value\":"
+                    << parameter.second.value << ",\"property\":\""
+                    << escape_json(parameter.second.property) << "\"}";
+            }
             out << "}},\"bindings\":[";
             for (size_t k = 0; k < dispatch.bindings.size(); ++k) {
                 if (k != 0) out << ',';
                 out << "{\"role\":\"" << escape_json(dispatch.bindings[k].role) << "\",\"value\":" << dispatch.bindings[k].value
-                    << ",\"offset\":" << dispatch.bindings[k].offset << ",\"length\":" << dispatch.bindings[k].length << '}';
+                    << ",\"offset\":" << dispatch.bindings[k].offset << ",\"length\":" << dispatch.bindings[k].length
+                    << ",\"storage_binding\":\"" << escape_json(dispatch.bindings[k].storage_binding) << "\"}";
             }
             out << "],\"dependencies\":[";
             for (size_t k = 0; k < dispatch.dependencies.size(); ++k) {
                 if (k != 0) out << ',';
                 out << dispatch.dependencies[k];
             }
-            out << "]}";
+            out << ']';
+            if (dispatch.streamed()) {
+                out << ",\"streamed\":{\"weight\":" << dispatch.streamed_weight
+                    << ",\"expert_ids\":" << dispatch.streamed_expert_ids
+                    << ",\"missing_suffix\":"
+                    << (dispatch.streamed_missing_suffix ? "true" : "false")
+                    << ",\"expert_begin\":" << dispatch.streamed_expert_begin
+                    << ",\"expert_end\":" << dispatch.streamed_expert_end
+                    << ",\"load_chunk_size\":" << dispatch.streamed_load_chunk_size << '}';
+            }
+            out << '}';
         }
         out << "]}";
     }

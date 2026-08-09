@@ -1,0 +1,298 @@
+// Exact PP512 Stage00 prefix. RMS materializes its graph-visible output and
+// also publishes one scale per token. Projection reuses normalized source
+// vectors across four rows while materializing all 24 projection rows.
+
+kernel.def export("dsv4_stage00_rms_scale_k16384_c512_wg256")
+    @dsv4_stage00_rms_scale_k16384_c512_wg256() {
+  %one = index.constant 1 : index
+  %tokens = index.constant 512 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%tokens, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%eps: f32, %src: buffer, %normalized: buffer, %scales: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %c256 = index.constant 256 : index
+  %c16384 = index.constant 16384 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %token0 = kernel.workgroup.id<x> : index
+  %token = index.assume %token0 [range(%token0, 0, 511)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %src_g = buffer.assume.memory_space<global> %src : buffer
+  %normalized_g = buffer.assume.memory_space<global> %normalized : buffer
+  %scales_g = buffer.assume.memory_space<global> %scales : buffer
+  %src_na, %normalized_na, %scales_na = buffer.assume.noalias
+      %src_g, %normalized_g, %scales_g : buffer, buffer, buffer
+  %src_v = buffer.view %src_na[%base] : buffer -> view<8388608xf32, #dense>
+  %normalized_v = buffer.view %normalized_na[%base] : buffer -> view<8388608xf32, #dense>
+  %scales_v = buffer.view %scales_na[%base] : buffer -> view<512xf32, #dense>
+  %token_base0 = index.mul %token, %c16384 : index
+  %token_base = index.assume %token_base0 [range(%token_base0, 0, 8372224)] : index
+  %sum = scf.for %col = [%lane to %c16384 step %c256]
+      (%acc = %zero_f32 : f32) -> (f32) {
+    %src_index0 = index.add %token_base, %col : index
+    %src_index = index.assume %src_index0 [range(%src_index0, 0, 8388607)] : index
+    %value = view.load %src_v[%src_index] : view<8388608xf32, #dense> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %square : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %ncols_i32 = scalar.constant 16384 : i32
+  %ncols_f32 = scalar.sitofp %ncols_i32 : i32 to f32
+  %mean = scalar.divf<reassoc|nnan|ninf|nsz> %row_sum, %ncols_f32 : f32
+  %biased = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased : f32
+  scf.for %col = [%lane to %c16384 step %c256] {
+    %src_index0 = index.add %token_base, %col : index
+    %src_index = index.assume %src_index0 [range(%src_index0, 0, 8388607)] : index
+    %value = view.load %src_v[%src_index] : view<8388608xf32, #dense> -> f32
+    %result = scalar.mulf<nnan|ninf|nsz> %value, %scale : f32
+    view.store %result, %normalized_v[%src_index] : f32, view<8388608xf32, #dense>
+  }
+  %is_lane0 = index.cmp eq, %lane, %zero : index
+  scf.if %is_lane0 {
+    view.store %scale, %scales_v[%token] : f32, view<512xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("dsv4_stage00_projection24_raw_scale_rows8_wg256")
+    @dsv4_stage00_projection24_raw_scale_rows8_wg256() {
+  %one = index.constant 1 : index
+  %groups = index.constant 48 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%groups, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%weights: buffer, %src: buffer, %scales: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c24 = index.constant 24 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c512 = index.constant 512 : index
+  %c768 = index.constant 768 : index
+  %c16384 = index.constant 16384 : index
+  %iterations = index.constant 64 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %zero_v4 = vector.constant 0.0 : vector<4xf32>
+
+  %group0 = kernel.workgroup.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 47)] : index
+  %tile0 = index.rem %group, %c16 : index
+  %tile = index.assume %tile0 [range(%tile0, 0, 15)] : index
+  %row_block0 = index.div %group, %c16 : index
+  %row_block = index.assume %row_block0 [range(%row_block0, 0, 2)] : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %wave0 = index.div %tid, %c32 : index
+  %wave = index.assume %wave0 [range(%wave0, 0, 7)] : index
+  %lane0 = index.rem %tid, %c32 : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %row_local0 = index.rem %wave, %two : index
+  %row_local = index.assume %row_local0 [range(%row_local0, 0, 1)] : index
+  %k_slice0 = index.div %wave, %two : index
+  %k_slice = index.assume %k_slice0 [range(%k_slice0, 0, 3)] : index
+
+  %row_block_base0 = index.mul %row_block, %c8 : index
+  %row_block_base = index.assume %row_block_base0 [range(%row_block_base0, 0, 16)] : index
+  %row0_0 = index.add %row_block_base, %row_local : index
+  %row0 = index.assume %row0_0 [range(%row0_0, 0, 17)] : index
+  %row1_0 = index.add %row0, %two : index
+  %row1 = index.assume %row1_0 [range(%row1_0, 2, 19)] : index
+  %row2_0 = index.add %row1, %two : index
+  %row2 = index.assume %row2_0 [range(%row2_0, 4, 21)] : index
+  %row3_0 = index.add %row2, %two : index
+  %row3 = index.assume %row3_0 [range(%row3_0, 6, 23)] : index
+  %tile_base0 = index.mul %tile, %c32 : index
+  %tile_base = index.assume %tile_base0 [range(%tile_base0, 0, 480)] : index
+  %token0 = index.add %tile_base, %lane : index
+  %token = index.assume %token0 [range(%token0, 0, 511)] : index
+
+  %weights_g = buffer.assume.memory_space<global> %weights : buffer
+  %src_g = buffer.assume.memory_space<global> %src : buffer
+  %scales_g = buffer.assume.memory_space<global> %scales : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %weights_na, %src_na, %scales_na, %dst_na = buffer.assume.noalias
+      %weights_g, %src_g, %scales_g, %dst_g : buffer, buffer, buffer, buffer
+  %weights_v = buffer.view %weights_na[%base] : buffer -> view<393216xf32, #dense>
+  %src_v = buffer.view %src_na[%base] : buffer -> view<8388608xf32, #dense>
+  %scales_v = buffer.view %scales_na[%base] : buffer -> view<512xf32, #dense>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<12288xf32, #dense>
+
+  %scale = view.load %scales_v[%token] : view<512xf32, #dense> -> f32
+  %scale_v4 = vector.splat %scale : vector<4xf32>
+  %weight_base0_0 = index.mul %row0, %c16384 : index
+  %weight_base0 = index.assume %weight_base0_0 [range(%weight_base0_0, 0, 278528)] : index
+  %weight_base1_0 = index.mul %row1, %c16384 : index
+  %weight_base1 = index.assume %weight_base1_0 [range(%weight_base1_0, 32768, 311296)] : index
+  %weight_base2_0 = index.mul %row2, %c16384 : index
+  %weight_base2 = index.assume %weight_base2_0 [range(%weight_base2_0, 65536, 344064)] : index
+  %weight_base3_0 = index.mul %row3, %c16384 : index
+  %weight_base3 = index.assume %weight_base3_0 [range(%weight_base3_0, 98304, 376832)] : index
+  %src_token_base0 = index.mul %token, %c16384 : index
+  %src_token_base = index.assume %src_token_base0 [range(%src_token_base0, 0, 8372224)] : index
+
+  %partial0, %partial1, %partial2, %partial3 = scf.for %iter = [%zero to %iterations step %one]
+      (%acc0 = %zero_v4, %acc1 = %zero_v4, %acc2 = %zero_v4, %acc3 = %zero_v4 :
+       vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) ->
+      (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+    %iter4 = index.mul %iter, %c4 : index
+    %chunk0 = index.add %iter4, %k_slice : index
+    %chunk = index.assume %chunk0 [range(%chunk0, 0, 255)] : index
+    %chunk_k0 = index.mul %chunk, %c64 : index
+    %chunk_k = index.assume %chunk_k0 [range(%chunk_k0, 0, 16320)] : index
+    %next0, %next1, %next2, %next3 = scf.for %q = [%zero to %c16 step %one]
+        (%a0 = %acc0, %a1 = %acc1, %a2 = %acc2, %a3 = %acc3 :
+         vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) ->
+        (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+      %qk0 = index.mul %q, %c4 : index
+      %qk = index.assume %qk0 [range(%qk0, 0, 60)] : index
+      %kcoord0 = index.add %chunk_k, %qk : index
+      %kcoord = index.assume %kcoord0 [range(%kcoord0, 0, 16380)] : index
+      %src_index0 = index.add %src_token_base, %kcoord : index
+      %src_index = index.assume %src_index0 [range(%src_index0, 0, 8388604)] : index
+      %raw4 = vector.load %src_v[%src_index] : view<8388608xf32, #dense> -> vector<4xf32>
+      %normalized4 = vector.mulf %raw4, %scale_v4 : vector<4xf32>
+      %weight_index0_0 = index.add %weight_base0, %kcoord : index
+      %weight_index0 = index.assume %weight_index0_0 [range(%weight_index0_0, 0, 294908)] : index
+      %weight_index1_0 = index.add %weight_base1, %kcoord : index
+      %weight_index1 = index.assume %weight_index1_0 [range(%weight_index1_0, 32768, 327676)] : index
+      %weight_index2_0 = index.add %weight_base2, %kcoord : index
+      %weight_index2 = index.assume %weight_index2_0 [range(%weight_index2_0, 65536, 360444)] : index
+      %weight_index3_0 = index.add %weight_base3, %kcoord : index
+      %weight_index3 = index.assume %weight_index3_0 [range(%weight_index3_0, 98304, 393212)] : index
+      %weight0 = vector.load %weights_v[%weight_index0] : view<393216xf32, #dense> -> vector<4xf32>
+      %weight1 = vector.load %weights_v[%weight_index1] : view<393216xf32, #dense> -> vector<4xf32>
+      %weight2 = vector.load %weights_v[%weight_index2] : view<393216xf32, #dense> -> vector<4xf32>
+      %weight3 = vector.load %weights_v[%weight_index3] : view<393216xf32, #dense> -> vector<4xf32>
+      %fma0 = vector.fmaf %weight0, %normalized4, %a0 : vector<4xf32>
+      %fma1 = vector.fmaf %weight1, %normalized4, %a1 : vector<4xf32>
+      %fma2 = vector.fmaf %weight2, %normalized4, %a2 : vector<4xf32>
+      %fma3 = vector.fmaf %weight3, %normalized4, %a3 : vector<4xf32>
+      scf.yield %fma0, %fma1, %fma2, %fma3 :
+          vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    }
+    scf.yield %next0, %next1, %next2, %next3 :
+        vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  }
+
+  %partial_scalar0 = vector.reduce<addf, reassoc|nnan|nsz>
+      %partial0, %zero_f32 : vector<4xf32>, f32
+  %partial_scalar1 = vector.reduce<addf, reassoc|nnan|nsz>
+      %partial1, %zero_f32 : vector<4xf32>, f32
+  %partial_scalar2 = vector.reduce<addf, reassoc|nnan|nsz>
+      %partial2, %zero_f32 : vector<4xf32>, f32
+  %partial_scalar3 = vector.reduce<addf, reassoc|nnan|nsz>
+      %partial3, %zero_f32 : vector<4xf32>, f32
+  %lds_bytes = index.constant 4096 : offset
+  %scratch = buffer.alloca %lds_bytes
+      {base_alignment = 16, memory_space = workgroup} : buffer
+  %partials = buffer.view %scratch[%base] : buffer -> view<1024xf32, #dense>
+  %slice_base0 = index.mul %k_slice, %c64 : index
+  %slice_base = index.assume %slice_base0 [range(%slice_base0, 0, 192)] : index
+  %row_base0 = index.mul %row_local, %c32 : index
+  %row_base = index.assume %row_base0 [range(%row_base0, 0, 32)] : index
+  %partial_index0_0 = index.add %slice_base, %row_base : index
+  %partial_index0_1 = index.add %partial_index0_0, %lane : index
+  %partial_index0 = index.assume %partial_index0_1 [range(%partial_index0_1, 0, 255)] : index
+  %partial_index1_0 = index.add %partial_index0, %c256 : index
+  %partial_index1 = index.assume %partial_index1_0 [range(%partial_index1_0, 256, 511)] : index
+  %partial_index2_0 = index.add %partial_index0, %c512 : index
+  %partial_index2 = index.assume %partial_index2_0 [range(%partial_index2_0, 512, 767)] : index
+  %partial_index3_0 = index.add %partial_index0, %c768 : index
+  %partial_index3 = index.assume %partial_index3_0 [range(%partial_index3_0, 768, 1023)] : index
+  view.store %partial_scalar0, %partials[%partial_index0] : f32, view<1024xf32, #dense>
+  view.store %partial_scalar1, %partials[%partial_index1] : f32, view<1024xf32, #dense>
+  view.store %partial_scalar2, %partials[%partial_index2] : f32, view<1024xf32, #dense>
+  view.store %partial_scalar3, %partials[%partial_index3] : f32, view<1024xf32, #dense>
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+  %is_slice0 = index.cmp eq, %k_slice, %zero : index
+  scf.if %is_slice0 {
+    %p00_index0 = index.add %row_base, %lane : index
+    %p00_index = index.assume %p00_index0 [range(%p00_index0, 0, 63)] : index
+    %p01_index0 = index.add %p00_index, %c64 : index
+    %p01_index = index.assume %p01_index0 [range(%p01_index0, 64, 127)] : index
+    %p02_index0 = index.add %p00_index, %c128 : index
+    %p02_index = index.assume %p02_index0 [range(%p02_index0, 128, 191)] : index
+    %p03_index0 = index.add %p02_index, %c64 : index
+    %p03_index = index.assume %p03_index0 [range(%p03_index0, 192, 255)] : index
+    %p10_index0 = index.add %p00_index, %c256 : index
+    %p10_index = index.assume %p10_index0 [range(%p10_index0, 256, 319)] : index
+    %p11_index0 = index.add %p10_index, %c64 : index
+    %p11_index = index.assume %p11_index0 [range(%p11_index0, 320, 383)] : index
+    %p12_index0 = index.add %p10_index, %c128 : index
+    %p12_index = index.assume %p12_index0 [range(%p12_index0, 384, 447)] : index
+    %p13_index0 = index.add %p12_index, %c64 : index
+    %p13_index = index.assume %p13_index0 [range(%p13_index0, 448, 511)] : index
+    %p20_index0 = index.add %p00_index, %c512 : index
+    %p20_index = index.assume %p20_index0 [range(%p20_index0, 512, 575)] : index
+    %p21_index0 = index.add %p20_index, %c64 : index
+    %p21_index = index.assume %p21_index0 [range(%p21_index0, 576, 639)] : index
+    %p22_index0 = index.add %p20_index, %c128 : index
+    %p22_index = index.assume %p22_index0 [range(%p22_index0, 640, 703)] : index
+    %p23_index0 = index.add %p22_index, %c64 : index
+    %p23_index = index.assume %p23_index0 [range(%p23_index0, 704, 767)] : index
+    %p30_index0 = index.add %p00_index, %c768 : index
+    %p30_index = index.assume %p30_index0 [range(%p30_index0, 768, 831)] : index
+    %p31_index0 = index.add %p30_index, %c64 : index
+    %p31_index = index.assume %p31_index0 [range(%p31_index0, 832, 895)] : index
+    %p32_index0 = index.add %p30_index, %c128 : index
+    %p32_index = index.assume %p32_index0 [range(%p32_index0, 896, 959)] : index
+    %p33_index0 = index.add %p32_index, %c64 : index
+    %p33_index = index.assume %p33_index0 [range(%p33_index0, 960, 1023)] : index
+
+    %p00 = view.load %partials[%p00_index] : view<1024xf32, #dense> -> f32
+    %p01 = view.load %partials[%p01_index] : view<1024xf32, #dense> -> f32
+    %p02 = view.load %partials[%p02_index] : view<1024xf32, #dense> -> f32
+    %p03 = view.load %partials[%p03_index] : view<1024xf32, #dense> -> f32
+    %p10 = view.load %partials[%p10_index] : view<1024xf32, #dense> -> f32
+    %p11 = view.load %partials[%p11_index] : view<1024xf32, #dense> -> f32
+    %p12 = view.load %partials[%p12_index] : view<1024xf32, #dense> -> f32
+    %p13 = view.load %partials[%p13_index] : view<1024xf32, #dense> -> f32
+    %p20 = view.load %partials[%p20_index] : view<1024xf32, #dense> -> f32
+    %p21 = view.load %partials[%p21_index] : view<1024xf32, #dense> -> f32
+    %p22 = view.load %partials[%p22_index] : view<1024xf32, #dense> -> f32
+    %p23 = view.load %partials[%p23_index] : view<1024xf32, #dense> -> f32
+    %p30 = view.load %partials[%p30_index] : view<1024xf32, #dense> -> f32
+    %p31 = view.load %partials[%p31_index] : view<1024xf32, #dense> -> f32
+    %p32 = view.load %partials[%p32_index] : view<1024xf32, #dense> -> f32
+    %p33 = view.load %partials[%p33_index] : view<1024xf32, #dense> -> f32
+    %s00 = scalar.addf<nnan|nsz> %p00, %p01 : f32
+    %s01 = scalar.addf<nnan|nsz> %s00, %p02 : f32
+    %s0 = scalar.addf<nnan|nsz> %s01, %p03 : f32
+    %s10 = scalar.addf<nnan|nsz> %p10, %p11 : f32
+    %s11 = scalar.addf<nnan|nsz> %s10, %p12 : f32
+    %s1 = scalar.addf<nnan|nsz> %s11, %p13 : f32
+    %s20 = scalar.addf<nnan|nsz> %p20, %p21 : f32
+    %s21 = scalar.addf<nnan|nsz> %s20, %p22 : f32
+    %s2 = scalar.addf<nnan|nsz> %s21, %p23 : f32
+    %s30 = scalar.addf<nnan|nsz> %p30, %p31 : f32
+    %s31 = scalar.addf<nnan|nsz> %s30, %p32 : f32
+    %s3 = scalar.addf<nnan|nsz> %s31, %p33 : f32
+    %dst_token_base0 = index.mul %token, %c24 : index
+    %dst_token_base = index.assume %dst_token_base0 [range(%dst_token_base0, 0, 12264)] : index
+    %dst_index0_0 = index.add %dst_token_base, %row0 : index
+    %dst_index0 = index.assume %dst_index0_0 [range(%dst_index0_0, 0, 12281)] : index
+    %dst_index1_0 = index.add %dst_token_base, %row1 : index
+    %dst_index1 = index.assume %dst_index1_0 [range(%dst_index1_0, 2, 12283)] : index
+    %dst_index2_0 = index.add %dst_token_base, %row2 : index
+    %dst_index2 = index.assume %dst_index2_0 [range(%dst_index2_0, 4, 12285)] : index
+    %dst_index3_0 = index.add %dst_token_base, %row3 : index
+    %dst_index3 = index.assume %dst_index3_0 [range(%dst_index3_0, 6, 12287)] : index
+    view.store %s0, %dst_v[%dst_index0] : f32, view<12288xf32, #dense>
+    view.store %s1, %dst_v[%dst_index1] : f32, view<12288xf32, #dense>
+    view.store %s2, %dst_v[%dst_index2] : f32, view<12288xf32, #dense>
+    view.store %s3, %dst_v[%dst_index3] : f32, view<12288xf32, #dense>
+  }
+  kernel.return
+}

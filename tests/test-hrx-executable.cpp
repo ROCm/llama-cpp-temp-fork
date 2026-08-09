@@ -69,7 +69,7 @@ ggml::hrx::kernel_definition unsupported_definition() {
     workload_parameters[0].name = "rows";
     workload_parameters[0].type = "index";
     launch_parameters[0].name   = "rows";
-    launch_parameters[0].type   = "i64";
+    launch_parameters[0].type   = "unsupported";
     launch_parameters[1].name   = "columns";
     launch_parameters[1].type   = "index";
 
@@ -163,7 +163,8 @@ void test_binding_diagnostics_are_explicit() {
 }
 
 void test_kernel_source_lookup() {
-    const ggml::hrx::kernel_source * source = ggml::hrx::get_kernel_source("ggml/linear_q6k_f32.loom");
+    const ggml::hrx::kernel_source * source =
+        ggml::hrx::get_kernel_source("qwen_moe/ggml/linear_q6k_f32.loom");
     REQUIRE(source != nullptr);
     REQUIRE(source->source.data != nullptr);
     REQUIRE(source->source.length != 0);
@@ -174,7 +175,8 @@ void test_kernel_source_lookup() {
     REQUIRE(source->dependencies[0].length != 0);
     REQUIRE(source->dependencies[0].format == ggml::hrx::KERNEL_SOURCE_FORMAT_TEXT);
 
-    const ggml::hrx::kernel_source * dependency_only = ggml::hrx::get_kernel_source("qwen3_moe/model_config.loom");
+    const ggml::hrx::kernel_source * dependency_only =
+        ggml::hrx::get_kernel_source("qwen_moe/qwen3_moe/model_config.loom");
     REQUIRE(dependency_only != nullptr);
     REQUIRE(dependency_only->dependency_count == 0);
     REQUIRE(ggml::hrx::get_kernel_source("missing.loom") == nullptr);

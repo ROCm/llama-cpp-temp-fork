@@ -71,6 +71,90 @@ void append_u32(std::vector<uint8_t> & bytes, uint32_t value) {
     std::memcpy(bytes.data() + offset, &value, sizeof(value));
 }
 
+void append_u64(std::vector<uint8_t> & bytes, uint64_t value) {
+    const size_t offset = bytes.size();
+    bytes.resize(offset + sizeof(value));
+    std::memcpy(bytes.data() + offset, &value, sizeof(value));
+}
+
+bool same_segment_contract(const StreamedExpertCommand & lhs, const StreamedExpertCommand & rhs) {
+    if (lhs.valid() != rhs.valid()) return false;
+    if (!lhs.valid()) return true;
+    return lhs.layer == rhs.layer && lhs.weight == rhs.weight && lhs.expert_ids == rhs.expert_ids &&
+           lhs.missing_suffix == rhs.missing_suffix && lhs.expert_begin == rhs.expert_begin &&
+           lhs.expert_end == rhs.expert_end && lhs.load_chunk_size == rhs.load_chunk_size;
+}
+
+std::vector<prepared_execution_segment> build_execution_segments(const CommandProgram & commands,
+                                                                 size_t command_count) {
+    std::vector<prepared_execution_segment> result;
+    for (size_t ordinal = 0; ordinal < command_count; ++ordinal) {
+        const Command & command = commands.commands[ordinal];
+        if (result.empty() || !same_segment_contract(result.back().streamed, command.streamed)) {
+            prepared_execution_segment segment;
+            segment.command_begin = static_cast<uint32_t>(ordinal);
+            segment.command_end   = static_cast<uint32_t>(ordinal + 1);
+            segment.streamed      = command.streamed;
+            result.push_back(std::move(segment));
+        } else {
+            result.back().command_end = static_cast<uint32_t>(ordinal + 1);
+        }
+    }
+    return result;
+}
+
+std::vector<prepared_graph_segment> build_graph_segments(const CommandProgram & commands, size_t command_count) {
+    std::vector<prepared_graph_segment> result;
+    size_t command_begin = 0;
+    for (size_t ordinal = 0; ordinal < command_count; ++ordinal) {
+        const StreamedExpertCommand & streamed = commands.commands[ordinal].streamed;
+        const bool begins_missing_suffix = streamed.valid() && streamed.missing_suffix &&
+                                           (ordinal == 0 || !same_segment_contract(
+                                                               commands.commands[ordinal - 1].streamed, streamed));
+        if (!begins_missing_suffix) continue;
+        if (command_begin < ordinal) {
+            prepared_graph_segment segment;
+            segment.command_begin = static_cast<uint32_t>(command_begin);
+            segment.command_end   = static_cast<uint32_t>(ordinal);
+            segment.wait_after    = streamed;
+            result.push_back(std::move(segment));
+        }
+        command_begin = ordinal;
+    }
+    if (command_begin < command_count) {
+        prepared_graph_segment segment;
+        segment.command_begin = static_cast<uint32_t>(command_begin);
+        segment.command_end   = static_cast<uint32_t>(command_count);
+        result.push_back(std::move(segment));
+    }
+    return result;
+}
+
+bool value_layout_size(const Value & value, size_t & element_count, size_t & compact_byte_length,
+                       size_t & span_byte_length) {
+    const size_t element_size = ggml_type_size(value.type);
+    if (element_size == 0) return false;
+    element_count     = 1;
+    span_byte_length  = element_size;
+    for (size_t dimension = 0; dimension < value.access.shape.size(); ++dimension) {
+        const int64_t extent = value.access.shape[dimension];
+        if (extent <= 0 || static_cast<uint64_t>(extent) > std::numeric_limits<size_t>::max() / element_count) {
+            return false;
+        }
+        element_count *= static_cast<size_t>(extent);
+        const size_t extent_minus_one = static_cast<size_t>(extent - 1);
+        if (extent_minus_one != 0 &&
+            value.access.strides[dimension] >
+                (std::numeric_limits<size_t>::max() - span_byte_length) / extent_minus_one) {
+            return false;
+        }
+        span_byte_length += extent_minus_one * value.access.strides[dimension];
+    }
+    if (element_count > std::numeric_limits<size_t>::max() / element_size) return false;
+    compact_byte_length = element_count * element_size;
+    return true;
+}
+
 std::string join_key(const std::map<std::string, std::string> & values) {
     std::ostringstream out;
     for (const auto & value : values) {
@@ -90,18 +174,38 @@ packed_kernel_constants pack_kernel_constants(const kernel_definition & definiti
                                     std::string(parameter.name != nullptr ? parameter.name : ""));
             continue;
         }
-        if (std::strcmp(parameter.type != nullptr ? parameter.type : "", "index") != 0) {
-            result.errors.push_back("unsupported launch scalar type " +
-                                    std::string(parameter.type != nullptr ? parameter.type : "") + " for " +
+        const std::string type = parameter.type != nullptr ? parameter.type : "";
+        if (type == "index") {
+            if (value->second < 0 || static_cast<uint64_t>(value->second) > std::numeric_limits<uint32_t>::max()) {
+                result.errors.push_back("launch scalar " +
+                                        std::string(parameter.name != nullptr ? parameter.name : "") +
+                                        " does not fit the index ABI");
+                continue;
+            }
+            append_u32(result.bytes, static_cast<uint32_t>(value->second));
+        } else if (type == "i32") {
+            if (value->second < std::numeric_limits<int32_t>::min() ||
+                value->second > std::numeric_limits<int32_t>::max()) {
+                result.errors.push_back("launch scalar " +
+                                        std::string(parameter.name != nullptr ? parameter.name : "") +
+                                        " does not fit the i32 ABI");
+                continue;
+            }
+            append_u32(result.bytes, static_cast<uint32_t>(static_cast<int32_t>(value->second)));
+        } else if (type == "i64") {
+            append_u64(result.bytes, static_cast<uint64_t>(value->second));
+        } else if (type == "f32") {
+            if (value->second < 0 || static_cast<uint64_t>(value->second) > std::numeric_limits<uint32_t>::max()) {
+                result.errors.push_back("launch scalar " +
+                                        std::string(parameter.name != nullptr ? parameter.name : "") +
+                                        " does not contain an f32 bit pattern");
+                continue;
+            }
+            append_u32(result.bytes, static_cast<uint32_t>(value->second));
+        } else {
+            result.errors.push_back("unsupported launch scalar type " + type + " for " +
                                     std::string(parameter.name != nullptr ? parameter.name : ""));
-            continue;
         }
-        if (value->second < 0 || static_cast<uint64_t>(value->second) > std::numeric_limits<uint32_t>::max()) {
-            result.errors.push_back("launch scalar " + std::string(parameter.name != nullptr ? parameter.name : "") +
-                                    " does not fit the index ABI");
-            continue;
-        }
-        append_u32(result.bytes, static_cast<uint32_t>(value->second));
     }
     if (!result.errors.empty()) {
         result.bytes.clear();
@@ -156,7 +260,96 @@ static const char * binding_class_name(const executable_buffer_binding & binding
     return "host";
 }
 
+struct streamed_graph_runtime {
+    streamed_execution_controller * controller      = nullptr;
+    hrx_buffer_t                    readback_buffer  = nullptr;
+    size_t                          readback_capacity = 0;
+    std::vector<uint32_t>           compact_ids;
+    std::string                     error;
+    bool                            finished = false;
+};
+
+struct streamed_graph_callback {
+    enum class kind {
+        acquire,
+        wait,
+        finish,
+    };
+
+    kind                       operation = kind::finish;
+    streamed_graph_runtime *   runtime   = nullptr;
+    prepared_execution_segment segment;
+};
+
+static hrx_status_t run_streamed_graph_callback(void * user_data) {
+    auto * callback = static_cast<streamed_graph_callback *>(user_data);
+    if (callback == nullptr || callback->runtime == nullptr || callback->runtime->controller == nullptr) {
+        return hrx_make_status(HRX_STATUS_FAILED_PRECONDITION, "streamed graph callback has no active controller");
+    }
+    streamed_graph_runtime & runtime = *callback->runtime;
+    error_result error;
+    if (callback->operation == streamed_graph_callback::kind::acquire) {
+        const prepared_execution_segment & segment = callback->segment;
+        if (runtime.readback_buffer == nullptr || segment.expert_id_count == 0 ||
+            segment.expert_id_span_bytes > runtime.readback_capacity) {
+            error = "streamed graph readback contract exceeds its mapped staging buffer";
+        } else {
+            void * mapped = nullptr;
+            error = take_status(hrx_buffer_map(runtime.readback_buffer, HRX_MAP_READ, 0, segment.expert_id_span_bytes,
+                                               &mapped));
+            if (!error) {
+                const auto * readback = static_cast<const uint8_t *>(mapped);
+                runtime.compact_ids.resize(segment.expert_id_count);
+                size_t output_index = 0;
+                for (int64_t i3 = 0; i3 < segment.expert_id_shape[3]; ++i3) {
+                    for (int64_t i2 = 0; i2 < segment.expert_id_shape[2]; ++i2) {
+                        for (int64_t i1 = 0; i1 < segment.expert_id_shape[1]; ++i1) {
+                            for (int64_t i0 = 0; i0 < segment.expert_id_shape[0]; ++i0) {
+                                const size_t offset = static_cast<size_t>(i0) * segment.expert_id_strides[0] +
+                                                      static_cast<size_t>(i1) * segment.expert_id_strides[1] +
+                                                      static_cast<size_t>(i2) * segment.expert_id_strides[2] +
+                                                      static_cast<size_t>(i3) * segment.expert_id_strides[3];
+                                if (output_index >= runtime.compact_ids.size() ||
+                                    offset > segment.expert_id_span_bytes ||
+                                    sizeof(uint32_t) > segment.expert_id_span_bytes - offset) {
+                                    error = "streamed graph expert-ID view exceeds its readback span";
+                                    break;
+                                }
+                                std::memcpy(&runtime.compact_ids[output_index++], readback + offset, sizeof(uint32_t));
+                            }
+                            if (error) break;
+                        }
+                        if (error) break;
+                    }
+                    if (error) break;
+                }
+                if (!error && output_index != runtime.compact_ids.size()) {
+                    error = "streamed graph expert-ID view did not compact every element";
+                }
+                const error_result unmap_error = take_status(hrx_buffer_unmap(runtime.readback_buffer));
+                if (!error && unmap_error) error = unmap_error;
+                if (!error) {
+                    error = runtime.controller->acquire(segment.streamed, runtime.compact_ids.data(),
+                                                        runtime.compact_ids.size());
+                }
+            }
+        }
+    } else if (callback->operation == streamed_graph_callback::kind::wait) {
+        error = runtime.controller->wait(callback->segment.streamed);
+    } else {
+        error = runtime.controller->finish();
+        if (!error) runtime.finished = true;
+    }
+    if (!error) return hrx_ok_status();
+    if (runtime.error.empty()) runtime.error = *error;
+    return hrx_make_status(HRX_STATUS_INTERNAL, runtime.error.c_str());
+}
+
 struct prepared_executable_program::impl {
+    struct graph_segment {
+        hrx_graph_t      graph      = nullptr;
+        hrx_graph_exec_t executable = nullptr;
+    };
     struct host_staging_binding {
         StorageId    storage    = kInvalidId;
         hrx_buffer_t buffer     = nullptr;
@@ -174,6 +367,11 @@ struct prepared_executable_program::impl {
     };
 
     ~impl() {
+        for (graph_segment & segment : graph_segments) {
+            if (segment.executable != nullptr) hrx_graph_exec_release(segment.executable);
+            if (segment.graph != nullptr) hrx_graph_release(segment.graph);
+        }
+        if (streamed_readback_buffer != nullptr) hrx_buffer_release(streamed_readback_buffer);
         if (graph_exec != nullptr) {
             hrx_graph_exec_release(graph_exec);
         }
@@ -207,6 +405,11 @@ struct prepared_executable_program::impl {
     std::vector<hrx_buffer_t>                     retained_buffers;
     std::vector<std::shared_ptr<artifact_record>> retained_artifacts;
     std::vector<debug_binding>                    last_command_outputs;
+    std::vector<graph_segment>                    graph_segments;
+    std::unordered_map<ValueId, hrx_buffer_ref_t> value_refs;
+    hrx_buffer_t                                  streamed_readback_buffer = nullptr;
+    std::unique_ptr<streamed_graph_runtime>        streamed_runtime;
+    std::vector<std::unique_ptr<streamed_graph_callback>> streamed_callbacks;
     bool                                          launch_in_flight = false;
 };
 
@@ -238,7 +441,7 @@ error_result prepared_executable_program::rebind(const executable_bindings & bin
     return {};
 }
 
-error_result prepared_executable_program::launch(hrx_stream_t stream) {
+error_result prepared_executable_program::begin_launch(hrx_stream_t stream) {
     if (!valid() || stream == nullptr) {
         return "cannot launch an invalid prepared executable";
     }
@@ -266,11 +469,88 @@ error_result prepared_executable_program::launch(hrx_stream_t stream) {
     if (!error.empty()) {
         return "join executable uploads: " + error;
     }
-    if (error_result launch_error = take_status(hrx_graph_exec_launch(impl_->graph_exec, stream))) {
-        return launch_error;
-    }
     impl_->launch_in_flight = true;
     return {};
+}
+
+error_result prepared_executable_program::launch_segment(size_t segment, hrx_stream_t stream) {
+    if (!valid() || stream == nullptr || segment >= graph_segments_.size()) {
+        return "cannot launch an invalid executable segment";
+    }
+    if (!impl_->launch_in_flight) return "executable launch has not begun";
+    hrx_graph_exec_t executable = impl_->graph_segments.empty() ? (segment == 0 ? impl_->graph_exec : nullptr) :
+                                                                  impl_->graph_segments[segment].executable;
+    if (executable == nullptr) return "executable segment has no frozen graph";
+    return take_status(hrx_graph_exec_launch(executable, stream));
+}
+
+error_result prepared_executable_program::readback_value(hrx_stream_t producer, ValueId value, void * destination,
+                                                         size_t size) {
+    if (!valid() || impl_->transfers == nullptr || producer == nullptr || destination == nullptr || size == 0) {
+        return "invalid executable value readback";
+    }
+    const auto found = impl_->value_refs.find(value);
+    if (found == impl_->value_refs.end() || size > found->second.length) {
+        return "executable value has no valid readback range";
+    }
+    const std::string error =
+        impl_->transfers->download(producer, found->second.buffer, found->second.offset, destination, size);
+    if (!error.empty()) return "read back executable value: " + error;
+    return {};
+}
+
+error_result prepared_executable_program::launch(hrx_stream_t stream) {
+    if (has_streamed_execution_) return "streamed executable requires route-driven segmented launch";
+    if (error_result error = begin_launch(stream)) return error;
+    for (size_t segment = 0; segment < segment_count(); ++segment) {
+        if (error_result error = launch_segment(segment, stream)) return error;
+    }
+    return {};
+}
+
+error_result prepared_executable_program::launch_streamed(hrx_stream_t stream,
+                                                          streamed_execution_controller & controller) {
+    if (!valid() || !has_streamed_execution_ || stream == nullptr || impl_->streamed_runtime == nullptr ||
+        impl_->graph_segments.size() != graph_segments_.size()) {
+        return "cannot launch an invalid streamed executable";
+    }
+    if (error_result error = begin_launch(stream)) return error;
+    streamed_graph_runtime & runtime = *impl_->streamed_runtime;
+    runtime.controller = &controller;
+    runtime.error.clear();
+    runtime.finished = false;
+    error_result launch_error;
+    for (size_t segment_index = 0; segment_index < graph_segments_.size(); ++segment_index) {
+        const prepared_graph_segment & segment  = graph_segments_[segment_index];
+        const impl::graph_segment &    recorded = impl_->graph_segments[segment_index];
+        if (recorded.executable == nullptr) {
+            launch_error = "streamed executable segment has no frozen graph";
+            break;
+        }
+        launch_error = take_status(hrx_graph_exec_launch(recorded.executable, stream));
+        if (launch_error) break;
+        const StreamedExpertCommand & wait_after = segment.wait_after;
+        if (!wait_after.valid()) continue;
+        launch_error = take_status(hrx_stream_flush(stream));
+        if (launch_error) break;
+        launch_error = controller.wait(wait_after);
+        if (launch_error) break;
+        if (!runtime.error.empty()) {
+            launch_error = runtime.error;
+            break;
+        }
+    }
+    const error_result synchronize_error = take_status(hrx_stream_synchronize(stream));
+    if (!launch_error && synchronize_error) launch_error = synchronize_error;
+    error_result cleanup_error = controller.finish();
+    runtime.controller          = nullptr;
+    if (!runtime.error.empty()) launch_error = runtime.error;
+    if (!launch_error && cleanup_error) launch_error = cleanup_error;
+    if (launch_error) {
+        impl_->launch_in_flight = false;
+        return launch_error;
+    }
+    return complete_after_synchronize();
 }
 
 error_result prepared_executable_program::complete_after_synchronize() {
@@ -386,11 +666,15 @@ class executable_program_preparer {
 
   private:
     bool validate_and_initialize();
+    bool resolve_deferred_compile_parameters();
     bool allocate_program_buffers();
     bool compile_artifacts();
     bool bind_storage();
+    bool bind_streamed_values();
     bool record_graph();
+    bool record_segmented_graph();
     bool resolve_binding(const CommandBinding & binding, hrx_buffer_ref_t & result_ref);
+    bool resolve_value(ValueId value, size_t length, hrx_buffer_ref_t & result_ref);
 
     prepared_executable_program                     result;
     prepared_executable_program::impl &             impl;
@@ -401,7 +685,7 @@ class executable_program_preparer {
     executable_artifact_repository &                artifact_repository;
     const ProgramPlan &                             plan;
     const kernel_corpus &                           corpus;
-    const CommandProgram &                          commands;
+    CommandProgram                                  commands;
     const executable_bindings &                     bindings;
     const executable_preparation_options &          options;
     size_t                                          record_command_count;
@@ -409,7 +693,36 @@ class executable_program_preparer {
     std::vector<std::shared_ptr<artifact_record>>   command_artifacts;
     std::vector<std::vector<uint8_t>>               command_constants;
     std::unordered_map<StorageId, hrx_buffer_ref_t> storage_refs;
+    std::map<std::pair<StorageId, std::string>, hrx_buffer_ref_t> storage_view_refs;
 };
+
+bool executable_program_preparer::resolve_deferred_compile_parameters() {
+    for (Command & command : commands.commands) {
+        for (const auto & parameter : command.kernel.deferred_compile_parameters) {
+            if (parameter.second.value >= plan.graph.values.size()) {
+                result.errors_.push_back("deferred compile parameter references an invalid graph value");
+                continue;
+            }
+            const StorageId storage = plan.graph.values[parameter.second.value].access.storage;
+            const auto binding =
+                std::find_if(bindings.storages.begin(), bindings.storages.end(),
+                             [&](const executable_buffer_binding & item) { return item.storage == storage; });
+            if (binding == bindings.storages.end()) {
+                result.errors_.push_back("deferred compile parameter has no concrete storage binding");
+                continue;
+            }
+            const auto property = binding->integer_properties.find(parameter.second.property);
+            if (property == binding->integer_properties.end()) {
+                result.errors_.push_back("storage " + std::to_string(storage) + " has no property " +
+                                         parameter.second.property);
+                continue;
+            }
+            command.kernel.compile_parameters[parameter.first] = std::to_string(property->second);
+        }
+        command.kernel.deferred_compile_parameters.clear();
+    }
+    return result.errors_.empty();
+}
 
 bool executable_program_preparer::validate_and_initialize() {
     if (device == nullptr || stream == nullptr) {
@@ -434,6 +747,7 @@ bool executable_program_preparer::validate_and_initialize() {
     if (bindings.storages.size() != bindings.snapshot.bindings.size()) {
         result.errors_.push_back("executable binding table does not match binding snapshot");
     }
+    if (result.errors_.empty()) resolve_deferred_compile_parameters();
     if (!result.errors_.empty()) {
         return false;
     }
@@ -445,6 +759,15 @@ bool executable_program_preparer::validate_and_initialize() {
     result.split_commands_         = options.split_commands;
     result.serialized_commands_    = options.serialize_commands || options.split_commands;
     result.allocation_fingerprint_ = fingerprint_bindings(bindings.snapshot);
+    result.segments_                = build_execution_segments(commands, record_command_count);
+    result.graph_segments_          = build_graph_segments(commands, record_command_count);
+    result.has_streamed_execution_  = std::any_of(
+        result.segments_.begin(), result.segments_.end(),
+        [](const prepared_execution_segment & segment) { return segment.streamed.valid(); });
+    if (record_command_count != 0 && (result.segments_.empty() || result.graph_segments_.empty())) {
+        result.errors_.push_back("command program produced no executable segments");
+        return false;
+    }
     return true;
 }
 
@@ -777,6 +1100,20 @@ bool executable_program_preparer::bind_storage() {
             result.borrowed_device_weight_bytes_ += binding.length;
         }
         storage_refs[binding.storage] = { concrete_buffer, concrete_offset, binding.length };
+        for (const executable_buffer_view & view : binding.views) {
+            if (view.name.empty() || view.buffer == nullptr || view.length == 0 ||
+                !storage_view_refs
+                     .emplace(std::make_pair(binding.storage, view.name),
+                              hrx_buffer_ref_t{ view.buffer, view.offset, view.length })
+                     .second) {
+                result.errors_.push_back("invalid physical view for storage " + std::to_string(binding.storage));
+                return false;
+            }
+            if (retained.insert(view.buffer).second) {
+                hrx_buffer_retain(view.buffer);
+                impl.retained_buffers.push_back(view.buffer);
+            }
+        }
     }
     result.retained_bytes_ += commands.transients.arena_size + commands.persistent_constants.arena_size;
     for (const prepared_executable_program::impl::host_staging_binding & staging : impl.host_staging) {
@@ -816,6 +1153,16 @@ bool executable_program_preparer::resolve_binding(const CommandBinding & binding
         }
         result_ref = { impl.persistent_constant_buffer, allocation->arena_offset + binding.offset, binding.length };
     } else {
+        if (!binding.storage_binding.empty()) {
+            const auto view = storage_view_refs.find({ binding.storage, binding.storage_binding });
+            if (view == storage_view_refs.end()) {
+                result.errors_.push_back("graph storage " + std::to_string(binding.storage) +
+                                         " has no physical view " + binding.storage_binding);
+                return false;
+            }
+            result_ref = view->second;
+            return true;
+        }
         const auto concrete = storage_refs.find(binding.storage);
         if (concrete == storage_refs.end() || binding.offset > concrete->second.length ||
             binding.length > concrete->second.length - binding.offset) {
@@ -828,7 +1175,103 @@ bool executable_program_preparer::resolve_binding(const CommandBinding & binding
     return true;
 }
 
+bool executable_program_preparer::resolve_value(ValueId value_id, size_t length, hrx_buffer_ref_t & result_ref) {
+    if (value_id >= plan.graph.values.size() || length == 0) {
+        result.errors_.push_back("invalid graph value readback contract");
+        return false;
+    }
+    const Value & value = plan.graph.values[value_id];
+    CommandBinding binding;
+    binding.value   = value_id;
+    binding.storage = value.access.storage;
+    binding.offset  = value.access.offset;
+    binding.length  = length;
+    const auto persistent =
+        std::find_if(commands.persistent_constants.allocations.begin(), commands.persistent_constants.allocations.end(),
+                     [&](const PersistentConstantAllocation & allocation) {
+                         return allocation.storage == binding.storage;
+                     });
+    if (persistent != commands.persistent_constants.allocations.end()) {
+        binding.origin              = BindingOrigin::PersistentConstant;
+        binding.persistent_constant = persistent->id;
+    } else {
+        const auto transient =
+            std::find_if(commands.transients.allocations.begin(), commands.transients.allocations.end(),
+                         [&](const TransientAllocation & allocation) {
+                             return allocation.storage == binding.storage;
+                         });
+        if (transient != commands.transients.allocations.end()) {
+            binding.origin    = BindingOrigin::Transient;
+            binding.transient = transient->id;
+        }
+    }
+    return resolve_binding(binding, result_ref);
+}
+
+bool executable_program_preparer::bind_streamed_values() {
+    size_t maximum_span_bytes   = 0;
+    size_t maximum_expert_count = 0;
+    for (prepared_execution_segment & segment : result.segments_) {
+        if (!segment.streamed.valid()) {
+            continue;
+        }
+        if (segment.streamed.expert_ids >= plan.graph.values.size()) {
+            result.errors_.push_back("streamed segment references an invalid expert-ID value");
+            return false;
+        }
+        const Value & ids = plan.graph.values[segment.streamed.expert_ids];
+        size_t element_count       = 0;
+        size_t compact_byte_length = 0;
+        size_t span_byte_length    = 0;
+        if (ids.type != GGML_TYPE_I32 ||
+            !value_layout_size(ids, element_count, compact_byte_length, span_byte_length) ||
+            compact_byte_length == 0 || span_byte_length == 0) {
+            result.errors_.push_back("streamed expert IDs must use a nonempty I32 value");
+            return false;
+        }
+        segment.expert_id_count      = element_count;
+        segment.expert_id_bytes      = compact_byte_length;
+        segment.expert_id_span_bytes = span_byte_length;
+        segment.expert_id_shape      = ids.access.shape;
+        segment.expert_id_strides    = ids.access.strides;
+        maximum_span_bytes           = std::max(maximum_span_bytes, span_byte_length);
+        maximum_expert_count         = std::max(maximum_expert_count, element_count);
+        if (impl.value_refs.count(segment.streamed.expert_ids) == 0) {
+            hrx_buffer_ref_t ref = {};
+            if (!resolve_value(segment.streamed.expert_ids, span_byte_length, ref)) {
+                return false;
+            }
+            impl.value_refs.emplace(segment.streamed.expert_ids, ref);
+        }
+    }
+    if (maximum_span_bytes != 0) {
+        hrx_buffer_params_t params = {
+            HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+            HRX_MEMORY_ACCESS_ALL,
+            HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED,
+            0,
+        };
+        error = take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, maximum_span_bytes,
+                                                          &impl.streamed_readback_buffer));
+        if (error) {
+            result.errors_.push_back("allocate streamed route readback: " + *error);
+            return false;
+        }
+        impl.streamed_runtime                    = std::make_unique<streamed_graph_runtime>();
+        impl.streamed_runtime->readback_buffer   = impl.streamed_readback_buffer;
+        impl.streamed_runtime->readback_capacity = maximum_span_bytes;
+        impl.streamed_runtime->compact_ids.reserve(maximum_expert_count);
+        result.host_staging_bytes_ += maximum_span_bytes;
+        result.retained_bytes_ += maximum_span_bytes;
+    }
+    return true;
+}
+
 bool executable_program_preparer::record_graph() {
+    if (result.has_streamed_execution_) {
+        return record_segmented_graph();
+    }
+
     error = take_status(hrx_graph_create(device, 0, &impl.graph));
     if (error) {
         result.errors_.push_back("create HRX graph: " + *error);
@@ -955,6 +1398,221 @@ bool executable_program_preparer::record_graph() {
     return result.prepared_;
 }
 
+bool executable_program_preparer::record_segmented_graph() {
+    std::vector<const prepared_execution_segment *> execution_segment_starts(record_command_count, nullptr);
+    for (const prepared_execution_segment & segment : result.segments_) {
+        if (segment.command_begin < execution_segment_starts.size()) {
+            execution_segment_starts[segment.command_begin] = &segment;
+        }
+    }
+
+    std::set<std::pair<int32_t, ValueId>> acquired_scopes;
+    impl.graph_segments.resize(result.graph_segments_.size());
+    for (size_t segment_index = 0; segment_index < result.graph_segments_.size(); ++segment_index) {
+        const prepared_graph_segment &                   segment  = result.graph_segments_[segment_index];
+        prepared_executable_program::impl::graph_segment & recorded = impl.graph_segments[segment_index];
+        error = take_status(hrx_graph_create(device, 0, &recorded.graph));
+        if (error) {
+            result.errors_.push_back("create HRX graph segment: " + *error);
+            return false;
+        }
+
+        std::vector<hrx_graph_node_t>         nodes(segment.command_end - segment.command_begin, nullptr);
+        std::unordered_map<StorageId, uint32_t> last_writer;
+        hrx_graph_node_t                       previous_acquire    = nullptr;
+        size_t                                 expected_node_count = 0;
+        for (uint32_t ordinal = segment.command_begin; ordinal < segment.command_end; ++ordinal) {
+            const Command & command       = commands.commands[ordinal];
+            const size_t    local_ordinal = ordinal - segment.command_begin;
+            std::vector<hrx_graph_node_t> deps;
+            for (uint32_t dependency : command.dependencies) {
+                // The compute stream supplies every cross-segment dependency.
+                if (dependency < segment.command_begin) {
+                    continue;
+                }
+                if (dependency >= ordinal || dependency >= segment.command_end ||
+                    nodes[dependency - segment.command_begin] == nullptr) {
+                    result.errors_.push_back("command dependency was not recorded in its segment");
+                    return false;
+                }
+                deps.push_back(nodes[dependency - segment.command_begin]);
+            }
+            if ((options.serialize_commands || options.split_commands) && ordinal != segment.command_begin) {
+                const hrx_graph_node_t predecessor = nodes[local_ordinal - 1];
+                if (std::find(deps.begin(), deps.end(), predecessor) == deps.end()) {
+                    deps.push_back(predecessor);
+                }
+            }
+            const prepared_execution_segment * execution_segment = execution_segment_starts[ordinal];
+            if (execution_segment != nullptr && execution_segment->streamed.valid() &&
+                !execution_segment->streamed.missing_suffix &&
+                acquired_scopes
+                    .emplace(execution_segment->streamed.layer, execution_segment->streamed.expert_ids)
+                    .second) {
+                if (impl.streamed_runtime == nullptr || impl.streamed_readback_buffer == nullptr) {
+                    result.errors_.push_back("streamed graph has no mapped route readback");
+                    return false;
+                }
+                const auto source = impl.value_refs.find(execution_segment->streamed.expert_ids);
+                if (source == impl.value_refs.end() || execution_segment->expert_id_span_bytes > source->second.length) {
+                    result.errors_.push_back("streamed graph has no valid route readback source");
+                    return false;
+                }
+                std::vector<hrx_graph_node_t> copy_deps;
+                const StorageId expert_ids_storage =
+                    plan.graph.values[execution_segment->streamed.expert_ids].access.storage;
+                const auto writer = last_writer.find(expert_ids_storage);
+                if (writer != last_writer.end()) {
+                    copy_deps.push_back(nodes[writer->second - segment.command_begin]);
+                }
+                if (previous_acquire != nullptr &&
+                    std::find(copy_deps.begin(), copy_deps.end(), previous_acquire) == copy_deps.end()) {
+                    copy_deps.push_back(previous_acquire);
+                }
+                const hrx_graph_copy_buffer_node_attrs_t copy = {
+                    { source->second.buffer, source->second.offset, execution_segment->expert_id_span_bytes },
+                    { impl.streamed_readback_buffer, 0, execution_segment->expert_id_span_bytes },
+                };
+                hrx_graph_node_t copy_node = nullptr;
+                error = take_status(hrx_graph_add_copy_buffer_node(recorded.graph, copy_deps.data(), copy_deps.size(),
+                                                                   &copy, &copy_node));
+                if (error) {
+                    result.errors_.push_back("record streamed route readback: " + *error);
+                    return false;
+                }
+                auto callback       = std::make_unique<streamed_graph_callback>();
+                callback->operation = streamed_graph_callback::kind::acquire;
+                callback->runtime   = impl.streamed_runtime.get();
+                callback->segment   = *execution_segment;
+                const hrx_graph_host_call_node_attrs_t callback_attrs = {
+                    run_streamed_graph_callback,
+                    callback.get(),
+                };
+                hrx_graph_node_t callback_node = nullptr;
+                error = take_status(
+                    hrx_graph_add_host_call_node(recorded.graph, &copy_node, 1, &callback_attrs, &callback_node));
+                if (error) {
+                    result.errors_.push_back("record streamed route callback: " + *error);
+                    return false;
+                }
+                impl.streamed_callbacks.push_back(std::move(callback));
+                previous_acquire = callback_node;
+                deps.push_back(callback_node);
+                expected_node_count += 2;
+            }
+
+            prepared_command_diagnostic diagnostic;
+            diagnostic.ordinal       = command.ordinal;
+            diagnostic.kind          = command.kind;
+            diagnostic.label         = command.label;
+            diagnostic.binding_count = command.bindings.size();
+            if (command.kind == CommandKind::Kernel) {
+                const std::shared_ptr<artifact_record> & compiled_artifact = command_artifacts[command.ordinal];
+                std::vector<hrx_buffer_ref_t>            concrete_bindings;
+                for (const CommandBinding & binding : command.bindings) {
+                    hrx_buffer_ref_t concrete = {};
+                    if (!resolve_binding(binding, concrete)) {
+                        return false;
+                    }
+                    concrete_bindings.push_back(concrete);
+                    if (command.ordinal + 1 == record_command_count && binding.access != ResourceAccess::Read) {
+                        impl.last_command_outputs.push_back({ binding.name, binding.access, concrete });
+                    }
+                }
+                const auto & constants = command_constants[command.ordinal];
+                const hrx_graph_kernel_node_attrs_t attrs = {
+                    compiled_artifact->executable,
+                    compiled_artifact->export_ordinal,
+                    { { compiled_artifact->launch.workgroup_count[0], compiled_artifact->launch.workgroup_count[1],
+                        compiled_artifact->launch.workgroup_count[2] },
+                      {},
+                      compiled_artifact->launch.subgroup_size },
+                    constants.data(),
+                    constants.size(),
+                    concrete_bindings.data(),
+                    concrete_bindings.size(),
+                    0,
+                };
+                error = take_status(hrx_graph_add_kernel_node(recorded.graph, deps.data(), deps.size(), &attrs,
+                                                              &nodes[local_ordinal]));
+                diagnostic.artifact_key   = compiled_artifact->diagnostic.key;
+                diagnostic.constant_bytes = constants.size();
+            } else if (command.kind == CommandKind::Copy) {
+                hrx_graph_copy_buffer_node_attrs_t attrs = {};
+                if (!resolve_binding(command.bindings[0], attrs.src) ||
+                    !resolve_binding(command.bindings[1], attrs.dst)) {
+                    return false;
+                }
+                if (command.ordinal + 1 == record_command_count) {
+                    impl.last_command_outputs.push_back(
+                        { command.bindings[1].name, command.bindings[1].access, attrs.dst });
+                }
+                error = take_status(hrx_graph_add_copy_buffer_node(recorded.graph, deps.data(), deps.size(), &attrs,
+                                                                   &nodes[local_ordinal]));
+            } else if (command.kind == CommandKind::Fill) {
+                const uint32_t fill_byte =
+                    static_cast<uint32_t>(command.kernel.integer_parameters.at("fill_byte")) & 0xffu;
+                hrx_graph_fill_buffer_node_attrs_t attrs = {};
+                if (!resolve_binding(command.bindings[0], attrs.dst)) {
+                    return false;
+                }
+                if (command.ordinal + 1 == record_command_count) {
+                    impl.last_command_outputs.push_back(
+                        { command.bindings[0].name, command.bindings[0].access, attrs.dst });
+                }
+                attrs.pattern      = fill_byte;
+                attrs.pattern_size = 1;
+                error = take_status(hrx_graph_add_fill_buffer_node(recorded.graph, deps.data(), deps.size(), &attrs,
+                                                                   &nodes[local_ordinal]));
+            } else {
+                error = take_status(
+                    hrx_graph_add_empty_node(recorded.graph, deps.data(), deps.size(), &nodes[local_ordinal]));
+            }
+            if (error) {
+                result.errors_.push_back("record command " + std::to_string(command.ordinal) + ": " + *error);
+                return false;
+            }
+            ++expected_node_count;
+            if (options.split_commands) {
+                const hrx_graph_node_t command_node = nodes[local_ordinal];
+                error = take_status(
+                    hrx_graph_add_empty_node(recorded.graph, &command_node, 1, &nodes[local_ordinal]));
+                if (error) {
+                    result.errors_.push_back("record split after command " + std::to_string(command.ordinal) + ": " +
+                                             *error);
+                    return false;
+                }
+                ++expected_node_count;
+            }
+            for (const CommandBinding & binding : command.bindings) {
+                if (binding.storage != kInvalidId && binding.access != ResourceAccess::Read) {
+                    last_writer[binding.storage] = command.ordinal;
+                }
+            }
+            result.commands_.push_back(std::move(diagnostic));
+        }
+
+        size_t actual_node_count = 0;
+        error = take_status(hrx_graph_size(recorded.graph, &actual_node_count));
+        if (error) {
+            result.errors_.push_back("query HRX graph segment size: " + *error);
+            return false;
+        }
+        if (actual_node_count != expected_node_count) {
+            result.errors_.push_back("recorded HRX graph segment node count does not match command program");
+            return false;
+        }
+        result.node_count_ += actual_node_count;
+        error = take_status(hrx_graph_instantiate(recorded.graph, 0, &recorded.executable));
+        if (error) {
+            result.errors_.push_back("instantiate HRX graph segment: " + *error);
+            return false;
+        }
+    }
+    result.prepared_ = result.errors_.empty() && impl.graph_segments.size() == result.graph_segments_.size();
+    return result.prepared_;
+}
+
 prepared_executable_program executable_program_preparer::run() {
     if (!validate_and_initialize()) {
         return std::move(result);
@@ -966,6 +1624,9 @@ prepared_executable_program executable_program_preparer::run() {
         return std::move(result);
     }
     if (!bind_storage()) {
+        return std::move(result);
+    }
+    if (!bind_streamed_values()) {
         return std::move(result);
     }
     record_graph();

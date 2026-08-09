@@ -1,0 +1,2408 @@
+{
+  "exports": [
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/add/f16_f32/non_contiguous.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "add_f16_non_contiguous_4d",
+      "source": "legacy/sources/generic/add/f16_f32/non_contiguous.loom",
+      "symbol": "add_f16_non_contiguous",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/add/f16_f32/non_contiguous.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "add_f32_non_contiguous_4d",
+      "source": "legacy/sources/generic/add/f16_f32/non_contiguous.loom",
+      "symbol": "add_f32_non_contiguous",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "add_f32_rhs_row_broadcast_2d_r64_1048576_wg256",
+      "source": "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom",
+      "symbol": "hrx2_add_f32_rhs_row_broadcast_2d",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/argsort/f32_i32/contiguous_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "argsort_f32_i32_contiguous_wg256",
+      "source": "legacy/sources/generic/argsort/f32_i32/contiguous_wg256.loom",
+      "symbol": "hrx2_argsort_f32_i32",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/clamp/f32/contiguous_4d.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "min",
+          "type": "f32"
+        },
+        {
+          "name": "max",
+          "type": "f32"
+        }
+      ],
+      "name": "clamp_f32_contiguous_4d",
+      "source": "legacy/sources/generic/clamp/f32/contiguous_4d.loom",
+      "symbol": "clamp_f32",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/concat/f16/contiguous_chunks_vec4_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "concat_f16_contiguous_chunks_vec4_wg256",
+      "source": "legacy/sources/gfx1151/concat/f16/contiguous_chunks_vec4_wg256.loom",
+      "symbol": "hrx2_concat_f16_contiguous_chunks_vec4",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/concat/f32/contiguous_chunks_vec4_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "concat_f32_contiguous_chunks_vec4_wg256",
+      "source": "legacy/sources/gfx1151/concat/f32/contiguous_chunks_vec4_wg256.loom",
+      "symbol": "hrx2_concat_f32_contiguous_chunks_vec4",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/concat/f32/dim0_direct_vec16_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "concat_f32_dim0_direct_vec16_wg256",
+      "source": "legacy/sources/gfx1151/concat/f32/dim0_direct_vec16_wg256.loom",
+      "symbol": "hrx2_concat_f32_dim0_direct_vec16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/cont/i32/contiguous_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "cont_i32_contiguous_wg256",
+      "source": "legacy/sources/gfx1151/cont/i32/contiguous_wg256.loom",
+      "symbol": "hrx2_cont_i32_contiguous",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/cont/f32/strided_wide_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "cont_strided_f32_wide_wg256",
+      "source": "legacy/sources/gfx1151/cont/f32/strided_wide_wg256.loom",
+      "symbol": "hrx2_cont_strided_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/div/f16_f32/non_contiguous.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "div_f32_non_contiguous_4d",
+      "source": "legacy/sources/generic/div/f16_f32/non_contiguous.loom",
+      "symbol": "div_f32_non_contiguous",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "host_cache",
+        "device_cache",
+        "src1",
+        "dst",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/moe/dsv4_bf16_n64_role_split_gate_up_swiglu_two_tier.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "order_base_bytes",
+          "type": "i64"
+        }
+      ],
+      "name": "dsv4_bf16_n64_role_split_gate_up_swiglu_two_tier",
+      "source": "legacy/sources/gfx1151/deepseek4/moe/dsv4_bf16_n64_role_split_gate_up_swiglu_two_tier.loom",
+      "symbol": "dsv4_bf16_n64_role_split_gate_up_swiglu_two_tier",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "multiplier",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/cont_softmax_mul_sum_rows_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_cont_softmax_mul_sum_rows_f32",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/cont_softmax_mul_sum_rows_f32.loom",
+      "symbol": "hrx2_dsv4_cont_softmax_mul_sum_rows_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "projection",
+        "projection_mul",
+        "projection_bias",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/control_chain_f32_token1.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "out_scale",
+          "type": "f32"
+        },
+        {
+          "name": "out_bias",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_control_chain_f32_token1",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/control_chain_f32_token1.loom",
+      "symbol": "hrx2_dsv4_control_chain_f32_token1",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "weight",
+        "pos",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/csa_stage6_rms_rope_concat_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        },
+        {
+          "name": "attn_factor",
+          "type": "f32"
+        },
+        {
+          "name": "beta_fast",
+          "type": "f32"
+        },
+        {
+          "name": "beta_slow",
+          "type": "f32"
+        },
+        {
+          "name": "ext_factor",
+          "type": "f32"
+        },
+        {
+          "name": "freq_base",
+          "type": "f32"
+        },
+        {
+          "name": "freq_scale",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_csa_stage6_rms_rope_concat_f32",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/csa_stage6_rms_rope_concat_f32.loom",
+      "symbol": "hrx2_dsv4_csa_stage6_rms_rope_concat_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "projection",
+        "cache_indices",
+        "cache_dst",
+        "state0",
+        "select_indices",
+        "update_indices",
+        "state_dst0",
+        "state1",
+        "state_dst1"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/csa_stage6_state_fused.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "scale0",
+          "type": "f32"
+        },
+        {
+          "name": "bias0",
+          "type": "f32"
+        },
+        {
+          "name": "scale1",
+          "type": "f32"
+        },
+        {
+          "name": "bias1",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_csa_stage6_state_publish_f32_f16",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/csa_stage6_state_fused.loom",
+      "symbol": "hrx2_dsv4_csa_stage6_state_publish_f32_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src0_secondary",
+        "src1",
+        "dst",
+        "dst_secondary",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/dual_mul_mat_q8_0_f32_wmmai8.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "dsv4_dual_mul_mat_q8_0_f32_wmmai8",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/dual_mul_mat_q8_0_f32_wmmai8.loom",
+      "symbol": "hrx2_dual_mul_mat_q8_0_f32_wmmai8_64x64x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "mixes",
+        "scale",
+        "base_values",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/dsv4_hc_comb/f32/contiguous.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        },
+        {
+          "name": "n_iter",
+          "type": "i32"
+        }
+      ],
+      "name": "dsv4_hc_comb_f32_contiguous",
+      "source": "legacy/sources/generic/dsv4_hc_comb/f32/contiguous.loom",
+      "symbol": "hrx2_dsv4_hc_comb_f32",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "x",
+        "residual",
+        "post",
+        "comb",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/dsv4_hc_post/f32/contiguous.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "dsv4_hc_post_f32_contiguous",
+      "source": "legacy/sources/generic/dsv4_hc_post/f32/contiguous.loom",
+      "symbol": "hrx2_dsv4_hc_post_f32",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "x",
+        "residual",
+        "post",
+        "comb",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/hc_post/f32/hc4_paircoop.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "dsv4_hc_post_f32_hc4_paircoop_gfx1151",
+      "source": "legacy/sources/gfx1151/deepseek4/hc_post/f32/hc4_paircoop.loom",
+      "symbol": "hrx2_dsv4_hc_post_f32_hc4_paircoop",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "x",
+        "weights",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/dsv4_hc_pre/f32/contiguous.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "dsv4_hc_pre_f32_contiguous",
+      "source": "legacy/sources/generic/dsv4_hc_pre/f32/contiguous.loom",
+      "symbol": "hrx2_dsv4_hc_pre_f32",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "weight",
+        "pos",
+        "set_indices",
+        "cache_k",
+        "sum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/hca_stage03_front_fused.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_hca_stage03_front_f32_f16",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/hca_stage03_front_fused.loom",
+      "symbol": "hrx2_dsv4_hca_stage03_front_f32_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "sum",
+        "state_kv",
+        "state_score",
+        "get_indices",
+        "set_indices",
+        "cache_kv",
+        "cache_score"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/hca_stage03_state_fused.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "dsv4_hca_stage03_state_update_f32",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/hca_stage03_state_fused.loom",
+      "symbol": "hrx2_dsv4_hca_stage03_state_update_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "projection",
+        "projection_mul",
+        "projection_bias",
+        "hc_src",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/hca_stage0_control_hc_pre_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "out_scale",
+          "type": "f32"
+        },
+        {
+          "name": "out_bias",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_hca_stage0_control_hc_pre_f32",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/hca_stage0_control_hc_pre_f32.loom",
+      "symbol": "hrx2_dsv4_hca_stage0_control_hc_pre_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "history",
+        "projection",
+        "indices",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/stage0_gather_tails_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "dsv4_hca_stage0_gather_f32",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/stage0_gather_tails_f32.loom",
+      "symbol": "hrx2_dsv4_hca_stage0_gather_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read_write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "primary",
+        "secondary",
+        "secondary_weight",
+        "pos",
+        "cache_indices",
+        "cache_dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/hca_stage4_native_fused.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        },
+        {
+          "name": "attn_factor",
+          "type": "f32"
+        },
+        {
+          "name": "beta_fast",
+          "type": "f32"
+        },
+        {
+          "name": "beta_slow",
+          "type": "f32"
+        },
+        {
+          "name": "ext_factor",
+          "type": "f32"
+        },
+        {
+          "name": "freq_base",
+          "type": "f32"
+        },
+        {
+          "name": "freq_scale",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_hca_stage4_terminal_f32_f16",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/hca_stage4_native_fused.loom",
+      "symbol": "hrx2_dsv4_hca_stage4_terminal_f32_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "weight",
+        "qs",
+        "ds"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/hca_stage4_native_fused.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_rms_mul_qact_q8_k1024",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/hca_stage4_native_fused.loom",
+      "symbol": "hrx2_dsv4_rms_mul_qact_q8_k1024",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "weights",
+        "src",
+        "scales",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/stage00_rms_scale_projection24_rows8.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "dsv4_stage00_projection24_raw_scale_rows8_wg256",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/stage00_rms_scale_projection24_rows8.loom",
+      "symbol": "dsv4_stage00_projection24_raw_scale_rows8_wg256",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "normalized",
+        "scales"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/attention/stage00_rms_scale_projection24_rows8.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "dsv4_stage00_rms_scale_k16384_c512_wg256",
+      "source": "legacy/sources/gfx1151/deepseek4/attention/stage00_rms_scale_projection24_rows8.loom",
+      "symbol": "dsv4_stage00_rms_scale_k16384_c512_wg256",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "write"
+      ],
+      "bindings": [
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/fill/f16/contiguous_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "value",
+          "type": "f32"
+        }
+      ],
+      "name": "fill_f16_contiguous_wg256",
+      "source": "legacy/sources/gfx1151/fill/f16/contiguous_wg256.loom",
+      "symbol": "hrx2_fill_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "mask",
+        "sinks",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/flash_attn_ext/f32_f16/wave_token1_d512_sinks_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "flash_attn_ext_f32_f16_wave_token1_d512_sinks",
+      "source": "legacy/sources/gfx1151/flash_attn_ext/f32_f16/wave_token1_d512_sinks_f32.loom",
+      "symbol": "hrx2_flash_attn_ext_f32_f16_wave_token1_d512_sinks",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "mask",
+        "sinks",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/flash_attn_ext/f32_f16/wmma_d512_sinks_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "flash_attn_ext_f32_f16_wmma_d512_sinks",
+      "source": "legacy/sources/gfx1151/flash_attn_ext/f32_f16/wmma_d512_sinks_f32.loom",
+      "symbol": "hrx2_flash_attn_ext_f32_f16_wmma_d512_sinks",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/get_rows/i32/contiguous_rows_2d.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "get_rows_i32_contiguous_rows_4d",
+      "source": "legacy/sources/generic/get_rows/i32/contiguous_rows_2d.loom",
+      "symbol": "hrx2_get_rows_i32",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/get_rows/q8_0_f32/n2048_rany.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "get_rows_q8_0_n2048_rany",
+      "source": "legacy/sources/gfx1151/get_rows/q8_0_f32/n2048_rany.loom",
+      "symbol": "hrx2_get_rows_q8_0_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/get_rows/f32/wide_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "get_rows_wide_f32_wg256",
+      "source": "legacy/sources/gfx1151/get_rows/f32/wide_wg256.loom",
+      "symbol": "hrx2_get_rows_wide_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "host_cache",
+        "device_cache",
+        "aq",
+        "as",
+        "dst",
+        "table"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "hrx2_mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop",
+      "source": "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop.loom",
+      "symbol": "hrx2_mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "host_cache",
+        "device_cache",
+        "aq",
+        "as",
+        "dst",
+        "table"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop_window64_resident.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "hrx2_mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop_window64_resident",
+      "source": "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop_window64_resident.loom",
+      "symbol": "hrx2_mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_dynamic_two_tier_rowcoop_window64_resident",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "host_cache",
+        "device_cache",
+        "aq",
+        "as",
+        "out_qs",
+        "out_scales",
+        "router",
+        "table"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/deepseek4/moe/mxfp4_adaptive_w4_gate_up_swiglu_q8_two_tier.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "hrx2_mxfp4_adaptive_w4_canonical_gate_up_swiglu_q8_two_tier",
+      "source": "legacy/sources/gfx1151/deepseek4/moe/mxfp4_adaptive_w4_gate_up_swiglu_q8_two_tier.loom",
+      "symbol": "hrx2_mxfp4_adaptive_w4_canonical_gate_up_swiglu_q8_two_tier",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "selected",
+        "router",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/ordered_weighted_reduce_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "hrx2_ordered_weighted_reduce_f32",
+      "source": "legacy/sources/gfx1151/graph/ordered_weighted_reduce_f32.loom",
+      "symbol": "hrx2_ordered_weighted_reduce_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "selected",
+        "router",
+        "idx",
+        "cache",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/ordered_weighted_reduce_f32_cohort_masked.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "hrx2_ordered_weighted_reduce_f32_cohort_masked",
+      "source": "legacy/sources/gfx1151/graph/ordered_weighted_reduce_f32_cohort_masked.loom",
+      "symbol": "hrx2_ordered_weighted_reduce_f32_cohort_masked",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "qa_src",
+        "qa_qs",
+        "qa_meta",
+        "mm_idx",
+        "prepass_mmid"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/qact_mmid_table.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "hrx2_qact_mmid_table",
+      "source": "legacy/sources/gfx1151/prepass/qact_mmid_table.loom",
+      "symbol": "hrx2_qact_mmid_table",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "weights",
+        "mask",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/lightning_indexer/f16/c8_pp512.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "lightning_indexer_f16_c8_pp512_gfx1151",
+      "source": "legacy/sources/gfx1151/lightning_indexer/f16/c8_pp512.loom",
+      "symbol": "dsv4_csa_lightning_f16_c8_wg64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "weights",
+        "mask",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/lightning_indexer/f16/lds_k_wg64.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "lightning_indexer_f16_lds_k_wg64",
+      "source": "legacy/sources/gfx1151/lightning_indexer/f16/lds_k_wg64.loom",
+      "symbol": "hrx2_lightning_indexer_f16_lds_k_wg64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "bindings": [
+        "cache",
+        "table"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/mmid_expert_order.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mmid_expert_order",
+      "source": "legacy/sources/gfx1151/prepass/mmid_expert_order.loom",
+      "symbol": "hrx2_mmid_expert_order",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "idx",
+        "table"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/mmid_table.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mmid_table",
+      "source": "legacy/sources/gfx1151/prepass/mmid_table.loom",
+      "symbol": "hrx2_mmid_table",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/mul/f16_f32/non_contiguous.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_f32_non_contiguous_4d",
+      "source": "legacy/sources/generic/mul/f16_f32/non_contiguous.loom",
+      "symbol": "mul_f32_non_contiguous",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_f32_rhs_row_broadcast_2d_r64_1048576_wg256",
+      "source": "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom",
+      "symbol": "hrx2_mul_f32_rhs_row_broadcast_2d",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/bf16_f32/mul_mat_bf16_f32_decode_vec8_token1_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_bf16_f32_decode_vec8_token1_wg256",
+      "source": "legacy/sources/gfx1151/mul_mat/bf16_f32/mul_mat_bf16_f32_decode_vec8_token1_wg256.loom",
+      "symbol": "hrx2_mul_mat_bf16_f32_decode_vec8_token1_wg256",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/bf16_f32/mul_mat_bf16_f32_tiled.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_bf16_f32_tiled",
+      "source": "legacy/sources/gfx1151/mul_mat/bf16_f32/mul_mat_bf16_f32_tiled.loom",
+      "symbol": "hrx2_mul_mat_bf16_f32_tiled32x32x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/mul_mat/f32_f32/skinny.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_f32_f32_skinny_4d",
+      "source": "legacy/sources/generic/mul_mat/f32_f32/skinny.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_skinny",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_tiled.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_f32_f32_tiled",
+      "source": "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_tiled.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_tiled32x32x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "host_cache",
+        "device_cache",
+        "aq",
+        "as",
+        "dst",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_decode_wave8_high_capacity_selected_k2048_r4096_s6_two_tier.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "order_base_bytes",
+          "type": "i64"
+        }
+      ],
+      "name": "mul_mat_id_mxfp4_q8_decode_wave8_high_capacity_selected_k2048_r4096_s6_two_tier",
+      "source": "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_decode_wave8_high_capacity_selected_k2048_r4096_s6_two_tier.loom",
+      "symbol": "hrx2_mul_mat_id_mxfp4_q8_decode_wave8_high_capacity_selected_k2048_r4096_s6_two_tier",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "host_cache",
+        "device_cache",
+        "aq",
+        "as",
+        "dst",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_k2048_r4096_s6_two_tier.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "order_base_bytes",
+          "type": "i64"
+        }
+      ],
+      "name": "mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_k2048_r4096_s6_two_tier",
+      "source": "legacy/sources/gfx1151/mul_mat_id/mxfp4_f32/mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_k2048_r4096_s6_two_tier.loom",
+      "symbol": "hrx2_mul_mat_id_mxfp4_q8_wmmai8_high_capacity_selected_k2048_r4096_s6_two_tier",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_batched_token_major.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_decode_batched_token_major",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_batched_token_major.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_packed_decode_batched_token_major",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "src1_hi",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_static_packed_2trip",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_decode_k4096_wg256_scfunroll4",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_static_packed_scf_unroll",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_loop_wg64.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_loop_wg64.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_static_packed",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_128c_column_cooperative.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_128c_column_cooperative",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_128c_column_cooperative.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_128x64x64_column_cooperative",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "qs",
+        "ds",
+        "sums"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/quant_act_q8.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "quant_act_q8",
+      "source": "legacy/sources/gfx1151/prepass/quant_act_q8.loom",
+      "symbol": "hrx2_quant_act_q8",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/repeat/f32/contiguous_4d_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "repeat_f32_contiguous_4d_wg256",
+      "source": "legacy/sources/gfx1151/repeat/f32/contiguous_4d_wg256.loom",
+      "symbol": "hrx2_repeat_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/rms_norm/f32/strided_wide_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "rms_norm_strided_f32_wide_wg256",
+      "source": "legacy/sources/gfx1151/rms_norm/f32/strided_wide_wg256.loom",
+      "symbol": "hrx2_rms_norm_strided_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "pos",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/rope/f32/neox.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "rope_back_f32_normal_wg256",
+      "source": "legacy/sources/generic/rope/f32/neox.loom",
+      "symbol": "hrx2_rope_neox_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "pos",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/rope/f32/neox.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "rope_f32_normal_wg256",
+      "source": "legacy/sources/generic/rope/f32/neox.loom",
+      "symbol": "hrx2_rope_neox_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        },
+        {
+          "name": "bias",
+          "type": "f32"
+        }
+      ],
+      "name": "scale_f32_generic_wg256",
+      "source": "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom",
+      "symbol": "hrx2_scale_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "set_rows_f16_f16_generic",
+      "source": "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom",
+      "symbol": "hrx2_set_rows_f16_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "set_rows_f32_f16_generic",
+      "source": "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom",
+      "symbol": "hrx2_set_rows_f32_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "set_rows_f32_f32_generic",
+      "source": "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom",
+      "symbol": "hrx2_set_rows_f32_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/unary/f32/production_pp512.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "sigmoid_f32_wide_wg256",
+      "source": "legacy/sources/gfx1151/unary/f32/production_pp512.loom",
+      "symbol": "hrx2_sigmoid_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/soft_max/f32/nomask_wide_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "soft_max_f32_nomask_wide_wg256",
+      "source": "legacy/sources/gfx1151/soft_max/f32/nomask_wide_wg256.loom",
+      "symbol": "hrx2_soft_max_f32_nomask",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/unary/f32/production_pp512.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "softplus_f32_wide_wg256",
+      "source": "legacy/sources/gfx1151/unary/f32/production_pp512.loom",
+      "symbol": "hrx2_softplus_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/unary/f32/production_pp512.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "sqrt_f32_wide_wg256",
+      "source": "legacy/sources/gfx1151/unary/f32/production_pp512.loom",
+      "symbol": "hrx2_sqrt_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/sum/f32/contiguous_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "sum_f32_contiguous_wg256",
+      "source": "legacy/sources/gfx1151/sum/f32/contiguous_wg256.loom",
+      "symbol": "hrx2_sum_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/sum_rows/f32/contiguous_4d.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "sum_rows_f32_contiguous_4d",
+      "source": "legacy/sources/generic/sum_rows/f32/contiguous_4d.loom",
+      "symbol": "hrx2_sum_rows_f32",
+      "target_selector": "",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/top_k/f32_i32/contiguous_lds_wg32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "top_k_f32_i32_contiguous_lds_wg32",
+      "source": "legacy/sources/gfx1151/top_k/f32_i32/contiguous_lds_wg32.loom",
+      "symbol": "hrx2_top_k_f32_i32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/top_k/f32_i32/rank_all256_rows512_wg256.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "top_k_f32_i32_rank_all256_rows512_gfx1151",
+      "source": "legacy/sources/gfx1151/top_k/f32_i32/rank_all256_rows512_wg256.loom",
+      "symbol": "dsv4_csa_top_k_256_rank_wg256",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/swiglu/f32/wide_split.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "wide_glu_swiglu_split",
+      "source": "legacy/sources/gfx1151/swiglu/f32/wide_split.loom",
+      "symbol": "hrx2_swiglu_f32_split",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/f32_f32/wide_mul_mat_f32_f32.loom"
+        ]
+      },
+      "family": "deepseek4",
+      "launch_parameters": [],
+      "name": "wide_mul_mat_f32_f32",
+      "source": "legacy/sources/gfx1151/mul_mat/f32_f32/wide_mul_mat_f32_f32.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    }
+  ],
+  "plan_cases": [],
+  "resources": [
+    "native-recipes.json"
+  ],
+  "schema": "ggml-hrx-deepseek4-kernel-corpus-v1",
+  "source_subdirectory": "ggml/src/ggml-hrx/loom-catalog",
+  "upstream_repository": "https://github.com/ROCm/llama-cpp-temp-fork.git",
+  "upstream_revision": "local-qualified-dsv4-route-corpus"
+}

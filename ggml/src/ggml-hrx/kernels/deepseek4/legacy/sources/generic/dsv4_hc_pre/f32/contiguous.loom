@@ -1,0 +1,63 @@
+config.decl @shape_dsv4_hc_pre_n_embd : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_dsv4_hc_pre_hc : %value: index where [range(%value, 1, 64)]
+config.decl @shape_dsv4_hc_pre_n_tokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @tuning_dsv4_hc_pre_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_dsv4_hc_pre_f32") @hrx2_dsv4_hc_pre_f32() {
+  %unit = index.constant 1 : index
+  %n_tokens = config.get @shape_dsv4_hc_pre_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_pre_workgroup_size : index
+  kernel.launch.config workgroups(%n_tokens, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%x: buffer, %weights: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %n_embd = config.get @shape_dsv4_hc_pre_n_embd : index
+  %hc = config.get @shape_dsv4_hc_pre_hc : index
+  %n_tokens = config.get @shape_dsv4_hc_pre_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_pre_workgroup_size : index
+  %n_embd_bounded = index.assume %n_embd [range(%n_embd, 1, 1048576)] : index
+  %hc_bounded = index.assume %hc [range(%hc, 1, 64)] : index
+  %n_tokens_bounded = index.assume %n_tokens [range(%n_tokens, 1, 1048576)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %token = index.assume %token0 [range(%token0, 0, 1048575), lt(%token0, %n_tokens_bounded)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %x_global = buffer.assume.memory_space<global> %x : buffer
+  %weights_global = buffer.assume.memory_space<global> %weights : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %x_noalias, %weights_noalias, %dst_noalias = buffer.assume.noalias %x_global, %weights_global, %dst_global : buffer, buffer, buffer
+  %x_view = buffer.view %x_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %weights_view = buffer.view %weights_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %token_x_plane0 = index.mul %token, %hc_bounded : index
+  %token_x_plane1 = index.mul %token_x_plane0, %n_embd_bounded : index
+  %token_x_plane = index.assume %token_x_plane1 [range(%token_x_plane1, 0, 1073741823)] : index
+  %token_weights0 = index.mul %token, %hc_bounded : index
+  %token_weights = index.assume %token_weights0 [range(%token_weights0, 0, 1073741823)] : index
+  %token_dst0 = index.mul %token, %n_embd_bounded : index
+  %token_dst = index.assume %token_dst0 [range(%token_dst0, 0, 1073741823)] : index
+
+  scf.for %i0 = [%lane to %n_embd_bounded step %workgroup_size] {
+    %sum = scf.for %ih = [%zero to %hc_bounded step %one](%acc = %zero_f32 : f32) -> (f32) {
+      %ih_plane0 = index.mul %ih, %n_embd_bounded : index
+      %x_idx0 = index.add %token_x_plane, %ih_plane0 : index
+      %x_idx1 = index.add %x_idx0, %i0 : index
+      %x_idx = index.assume %x_idx1 [range(%x_idx1, 0, 1073741823)] : index
+      %weight_idx0 = index.add %token_weights, %ih : index
+      %weight_idx = index.assume %weight_idx0 [range(%weight_idx0, 0, 1073741823)] : index
+      %xv = view.load %x_view[%x_idx] : view<1073741824xf32, #dense> -> f32
+      %wv = view.load %weights_view[%weight_idx] : view<1073741824xf32, #dense> -> f32
+      %product = scalar.mulf %xv, %wv : f32
+      %next = scalar.addf %acc, %product : f32
+      scf.yield %next : f32
+    }
+    %dst_idx0 = index.add %token_dst, %i0 : index
+    %dst_idx = index.assume %dst_idx0 [range(%dst_idx0, 0, 1073741823)] : index
+    view.store %sum, %dst_view[%dst_idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}

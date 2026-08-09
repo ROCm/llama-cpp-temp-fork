@@ -1,0 +1,40 @@
+kernel.def export("hrx2_dsv4_control_chain_f32_token1") @hrx2_dsv4_control_chain_f32_token1() {
+  %one = index.constant 1 : index
+  %threads = index.constant 32 : index
+  kernel.launch.config workgroups(%one, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%out_scale: f32, %out_bias: f32,
+         %projection: buffer, %projection_mul: buffer,
+         %projection_bias: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %four = index.constant 4 : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %active = index.cmp ult, %lane, %four : index
+
+  %projection_g = buffer.assume.memory_space<global> %projection : buffer
+  %projection_mul_g = buffer.assume.memory_space<global> %projection_mul : buffer
+  %projection_bias_g = buffer.assume.memory_space<global> %projection_bias : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %projection_na, %projection_mul_na, %projection_bias_na, %dst_na =
+      buffer.assume.noalias %projection_g, %projection_mul_g,
+      %projection_bias_g, %dst_g : buffer, buffer, buffer, buffer
+  %projection_v = buffer.view %projection_na[%base] : buffer -> view<4xf32, #dense>
+  %projection_mul_v = buffer.view %projection_mul_na[%base] : buffer -> view<1xf32, #dense>
+  %projection_bias_v = buffer.view %projection_bias_na[%base] : buffer -> view<4xf32, #dense>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<4xf32, #dense>
+
+  scf.if %active {
+    %projected = view.load %projection_v[%lane] : view<4xf32, #dense> -> f32
+    %projection_mul_value = view.load %projection_mul_v[%zero] : view<1xf32, #dense> -> f32
+    %projection_bias_value = view.load %projection_bias_v[%lane] : view<4xf32, #dense> -> f32
+    %mul_value = scalar.mulf<nnan|ninf|nsz> %projected, %projection_mul_value : f32
+    %add_value = scalar.addf<nnan|ninf|nsz> %mul_value, %projection_bias_value : f32
+    %sigmoid_value = scalar.logisticf<afn> %add_value : f32
+    %scaled_value = scalar.mulf<nnan|ninf|nsz> %sigmoid_value, %out_scale : f32
+    %value = scalar.addf<nnan|ninf|nsz> %scaled_value, %out_bias : f32
+    view.store %value, %dst_v[%lane] : f32, view<4xf32, #dense>
+  }
+  kernel.return
+}

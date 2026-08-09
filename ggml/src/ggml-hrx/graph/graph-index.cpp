@@ -248,11 +248,16 @@ Decision GraphIndex::validate_region(const std::vector<OperationId> & operations
 
     // Contracting a non-convex set can introduce A->outside->A cycles. Detect
     // this directly by searching from every region successor through outside
-    // operations for a path back into the region.
+    // operations for a path back into the region. Normalized operation IDs are
+    // topological, so successors after the final covered operation cannot
+    // possibly reach the region and need not be traversed.
+    const OperationId last_covered = *covered.rbegin();
     std::set<OperationId> outside_frontier;
     for (OperationId operation : covered) {
         for (OperationId successor : successors(operation)) {
-            if (covered.count(successor) == 0) outside_frontier.insert(successor);
+            if (successor <= last_covered && covered.count(successor) == 0) {
+                outside_frontier.insert(successor);
+            }
         }
     }
     std::queue<OperationId> outside_worklist;
@@ -270,7 +275,9 @@ Decision GraphIndex::validate_region(const std::vector<OperationId> & operations
                                         "contracting candidate operations creates a region cycle",
                                         { current, successor });
             }
-            if (outside_reached.insert(successor).second) outside_worklist.push(successor);
+            if (successor <= last_covered && outside_reached.insert(successor).second) {
+                outside_worklist.push(successor);
+            }
         }
     }
 

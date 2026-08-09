@@ -209,6 +209,46 @@ extern "C" {
 
     // Split buffer type for tensor parallelism (old)
     typedef ggml_backend_buffer_type_t   (*ggml_backend_split_buffer_type_t)(int main_device, const float * tensor_split);
+
+    // GGUF remains canonical [row][block][block_bytes]. ROW_TILE_BLOCK caches [row_tile][block][row_in_tile][block_bytes].
+    enum ggml_backend_streamed_weight_layout {
+        GGML_BACKEND_STREAMED_WEIGHT_LAYOUT_NONE = 0,
+        GGML_BACKEND_STREAMED_WEIGHT_LAYOUT_ROW_TILE_BLOCK = 1,
+    };
+
+    // Describes the file range for a weight managed by backend residency. The descriptor and fd match the tensor-buffer lifetime.
+    struct ggml_backend_streamed_weight_source {
+        int      fd;
+        size_t   file_size;
+        size_t   read_alignment;
+        size_t   offset;
+        size_t   length;
+
+        // Opaque model-lifetime grouping for one cross-layer residency policy.
+        // Each plane contributes record i to one destination record.
+        const void * group_identity;
+        uint32_t layer_index;
+        uint32_t record_count;
+        uint16_t plane_index;
+        uint16_t plane_count;
+        size_t   record_stride;
+        size_t   destination_offset;
+        size_t   record_size;
+
+        enum ggml_backend_streamed_weight_layout cache_layout;
+        uint32_t cache_layout_row_count;
+        uint32_t cache_layout_block_count;
+        uint32_t cache_layout_block_bytes;
+        uint32_t cache_layout_tile_rows;
+    };
+
+    // Reports support for file-backed residency. The model loader calls this before the ordinary supports_op probe.
+    typedef bool (*ggml_backend_dev_supports_streamed_weight_t)(ggml_backend_dev_t device, const struct ggml_tensor * tensor);
+    // Attaches a zero-payload buffer. On success tensor->data is a non-NULL identity token, not payload storage.
+    typedef ggml_backend_buffer_t (*ggml_backend_dev_attach_streamed_weight_t)(
+            ggml_backend_dev_t device,
+            struct ggml_tensor * tensor,
+            const struct ggml_backend_streamed_weight_source * source);
     // Set the number of threads for the backend
     typedef void                         (*ggml_backend_set_n_threads_t)(ggml_backend_t backend, int n_threads);
     // Get additional buffer types provided by the device (returns a NULL-terminated array)

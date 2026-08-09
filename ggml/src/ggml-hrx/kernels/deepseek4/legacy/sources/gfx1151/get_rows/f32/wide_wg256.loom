@@ -1,0 +1,133 @@
+// f32 embedding gather. Differs from the shipped hrx2_get_rows_f32 in two ways:
+// ncols is declared up to 2^24 instead of 65536, and it handles the batch dims.
+//
+// The recurrent-state gather in the Qwen3.6 graph is a single row of 524288 f32
+// (128 x 128 x 32 of SSM state), which the shipped decl rejects even though the
+// kernel is scalar and shape-generic -- one lane per element over a flat grid,
+// no vectorisation to a pinned width. Widening the bound is all that is needed.
+//
+// ggml indexes get_rows as dst[:, i10, i11, i12] = src0[:, idx[i10,i11,i12],
+// i11, i12], so dims 2 and 3 select a slice of *both* src0 and the index
+// tensor. A flat ncols x nrows grid only ever computes the i11 = i12 = 0 slice
+// and leaves the rest of dst untouched.
+//
+// Both tensors are contiguous, so a slice is just a block of whole rows: the
+// batch pair collapses into a row offset and the views stay two-dimensional.
+// Keeping them shaped matters -- the extents become the buffer descriptor's
+// num_records, so a stray index is clamped by the hardware instead of walking
+// off into a fault. When nbatch2 and nbatch3 are 1 this is the original kernel
+// with the extra index math folded away at compile time.
+
+config.decl @hrx2_shape_get_rows_ncols : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_get_rows_nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_get_rows_src0_nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_get_rows_nbatch2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_get_rows_nbatch3 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_get_rows_idx_s0 : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2_shape_get_rows_idx_s1 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @hrx2_shape_get_rows_idx_s2 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @hrx2_tuning_get_rows_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_get_rows_wide_f32") @hrx2_get_rows_wide_f32() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2_shape_get_rows_ncols : index
+  %nrows = config.get @hrx2_shape_get_rows_nrows : index
+  %nbatch2 = config.get @hrx2_shape_get_rows_nbatch2 : index
+  %nbatch3 = config.get @hrx2_shape_get_rows_nbatch3 : index
+  %workgroup_size = config.get @hrx2_tuning_get_rows_workgroup_size : index
+  %batches = index.mul %nbatch2, %nbatch3 : index
+  %dst_rows = index.mul %nrows, %batches : index
+  %total = index.mul %ncols, %dst_rows : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %idx: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_i32 = scalar.constant 0 : i32
+  %ncols = config.get @hrx2_shape_get_rows_ncols : index
+  %nrows = config.get @hrx2_shape_get_rows_nrows : index
+  %src0_nrows = config.get @hrx2_shape_get_rows_src0_nrows : index
+  %nbatch2 = config.get @hrx2_shape_get_rows_nbatch2 : index
+  %nbatch3 = config.get @hrx2_shape_get_rows_nbatch3 : index
+  %idx_s0 = config.get @hrx2_shape_get_rows_idx_s0 : index
+  %idx_s1 = config.get @hrx2_shape_get_rows_idx_s1 : index
+  %idx_s2 = config.get @hrx2_shape_get_rows_idx_s2 : index
+  %workgroup_size = config.get @hrx2_tuning_get_rows_workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 16777216)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %src0_nrows_bounded = index.assume %src0_nrows [range(%src0_nrows, 1, 1048576)] : index
+  %nbatch2_bounded = index.assume %nbatch2 [range(%nbatch2, 1, 1048576)] : index
+  %nbatch3_bounded = index.assume %nbatch3 [range(%nbatch3, 1, 1048576)] : index
+  %idx_s0_bounded = index.assume %idx_s0 [range(%idx_s0, 1, 1024)] : index
+  %idx_s1_bounded = index.assume %idx_s1 [range(%idx_s1, 0, 1073741823)] : index
+  %idx_s2_bounded = index.assume %idx_s2 [range(%idx_s2, 0, 1073741823)] : index
+
+  %batches0 = index.mul %nbatch2_bounded, %nbatch3_bounded : index
+  %batches = index.assume %batches0 [range(%batches0, 1, 1048576)] : index
+  %dst_rows0 = index.mul %nrows_bounded, %batches : index
+  %dst_rows = index.assume %dst_rows0 [range(%dst_rows0, 1, 1073741823)] : index
+  %src0_rows0 = index.mul %src0_nrows_bounded, %batches : index
+  %src0_rows = index.assume %src0_rows0 [range(%src0_rows0, 1, 1073741823)] : index
+  %total0 = index.mul %ncols_bounded, %dst_rows : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %idx_global = buffer.assume.memory_space<global> %idx : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %idx_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %idx_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_rows]x[%ncols_bounded]xf32, #dense>
+  %idx_view = buffer.view %idx_noalias[%base] : buffer -> view<1073741824xi32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_rows]x[%ncols_bounded]xf32, #dense>
+
+  scf.if %in_bounds {
+    %col = index.rem %linear, %ncols_bounded : index
+    %rowid0 = index.div %linear, %ncols_bounded : index
+    %rowid = index.assume %rowid0 [range(%rowid0, 0, 1073741823)] : index
+    %i10 = index.rem %rowid, %nrows_bounded : index
+    %batch0 = index.div %rowid, %nrows_bounded : index
+    %batch = index.assume %batch0 [range(%batch0, 0, 1048575)] : index
+    %i11 = index.rem %batch, %nbatch2_bounded : index
+    %i12_0 = index.div %batch, %nbatch2_bounded : index
+    %i12 = index.assume %i12_0 [range(%i12_0, 0, 1048575)] : index
+
+    %idx_a0 = index.mul %i10, %idx_s0_bounded : index
+    %idx_a = index.assume %idx_a0 [range(%idx_a0, 0, 1073741823)] : index
+    %idx_b0 = index.mul %i11, %idx_s1_bounded : index
+    %idx_b = index.assume %idx_b0 [range(%idx_b0, 0, 1073741823)] : index
+    %idx_c0 = index.mul %i12, %idx_s2_bounded : index
+    %idx_c = index.assume %idx_c0 [range(%idx_c0, 0, 1073741823)] : index
+    %idx_ab0 = index.add %idx_a, %idx_b : index
+    %idx_ab = index.assume %idx_ab0 [range(%idx_ab0, 0, 1073741823)] : index
+    %idx_off0 = index.add %idx_ab, %idx_c : index
+    %idx_off = index.assume %idx_off0 [range(%idx_off0, 0, 1073741823)] : index
+
+    %row_i32 = view.load %idx_view[%idx_off] : view<1073741824xi32, #dense> -> i32
+    %row_nonnegative = scalar.cmpi sge, %row_i32, %zero_i32 : i32
+    scf.if %row_nonnegative {
+      %src_local0 = index.cast %row_i32 : i32 to index
+      %src_local = index.assume %src_local0 [range(%src_local0, 0, 1073741823)] : index
+      %src_row_valid = index.cmp ult, %src_local, %src0_nrows_bounded : index
+      scf.if %src_row_valid {
+        %slice0 = index.mul %batch, %src0_nrows_bounded : index
+        %slice = index.assume %slice0 [range(%slice0, 0, 1073741823)] : index
+        %src_row0 = index.add %src_local, %slice : index
+        %src_row = index.assume %src_row0 [range(%src_row0, 0, 1073741823)] : index
+        %value = view.load %src0_view[%src_row, %col] : view<[%src0_rows]x[%ncols_bounded]xf32, #dense> -> f32
+        view.store %value, %dst_view[%rowid, %col] : f32, view<[%dst_rows]x[%ncols_bounded]xf32, #dense>
+      }
+    }
+  }
+  kernel.return
+}

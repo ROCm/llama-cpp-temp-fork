@@ -1,0 +1,188 @@
+// GENERATED from the shared exact Yarn helper.
+
+func.def inline @dsv4_yarn_normal_pair_f32(
+    %x0: f32, %x1: f32, %pair: index, %pos_i32: i32,
+    %attn_factor: f32, %beta_fast: f32, %beta_slow: f32,
+    %ext_factor: f32, %freq_base: f32, %freq_scale: f32,
+    %n_ctx_orig: index) -> (f32, f32) {
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  %two_f32 = scalar.constant 2.0 : f32
+  %minus_two_f32 = scalar.constant -2.0 : f32
+  %point_one_f32 = scalar.constant 0.1 : f32
+  %point_001_f32 = scalar.constant 0.001 : f32
+  %two_pi_f32 = scalar.constant 6.283185307179586 : f32
+  %ln2_f32 = scalar.constant 0.6931471805599453 : f32
+  %n_dims_i32 = scalar.constant 64 : i32
+  %n_dims_f32 = scalar.sitofp %n_dims_i32 : i32 to f32
+  %theta_exponent = scalar.divf<nnan|ninf|nsz> %minus_two_f32, %n_dims_f32 : f32
+  %theta_scale = scalar.powf<afn> %freq_base, %theta_exponent : f32
+  %pos_f32 = scalar.sitofp %pos_i32 : i32 to f32
+  %pair_i32 = index.cast %pair : index to i32
+  %pair_f32 = scalar.sitofp %pair_i32 : i32 to f32
+  %theta_pow = scalar.powf<afn> %theta_scale, %pair_f32 : f32
+  %theta_extrap = scalar.mulf<nnan|ninf|nsz> %pos_f32, %theta_pow : f32
+  %theta_interp = scalar.mulf<nnan|ninf|nsz> %theta_extrap, %freq_scale : f32
+  %n_ctx_orig_i32 = index.cast %n_ctx_orig : index to i32
+  %n_ctx_orig_f32 = scalar.sitofp %n_ctx_orig_i32 : i32 to f32
+  %freq_base_log2 = scalar.log2f<afn> %freq_base : f32
+  %corr_den = scalar.mulf<nnan|ninf|nsz> %two_f32, %freq_base_log2 : f32
+  %fast_two_pi = scalar.mulf<nnan|ninf|nsz> %beta_fast, %two_pi_f32 : f32
+  %slow_two_pi = scalar.mulf<nnan|ninf|nsz> %beta_slow, %two_pi_f32 : f32
+  %fast_arg = scalar.divf<nnan|ninf|nsz> %n_ctx_orig_f32, %fast_two_pi : f32
+  %slow_arg = scalar.divf<nnan|ninf|nsz> %n_ctx_orig_f32, %slow_two_pi : f32
+  %fast_log2 = scalar.log2f<afn> %fast_arg : f32
+  %slow_log2 = scalar.log2f<afn> %slow_arg : f32
+  %corr_start_num = scalar.mulf<nnan|ninf|nsz> %n_dims_f32, %fast_log2 : f32
+  %corr_end_num = scalar.mulf<nnan|ninf|nsz> %n_dims_f32, %slow_log2 : f32
+  %corr_start_raw = scalar.divf<nnan|ninf|nsz> %corr_start_num, %corr_den : f32
+  %corr_end_raw = scalar.divf<nnan|ninf|nsz> %corr_end_num, %corr_den : f32
+  %corr_start_floor = scalar.floorf %corr_start_raw : f32
+  %corr_end_ceil = scalar.ceilf %corr_end_raw : f32
+  %corr_start_lt_zero = scalar.cmpf olt, %corr_start_floor, %zero_f32 : f32
+  %corr_start = scf.if %corr_start_lt_zero -> (f32) {
+    scf.yield %zero_f32 : f32
+  } else {
+    scf.yield %corr_start_floor : f32
+  }
+  %n_dims_minus_one = scalar.subf<nnan|ninf|nsz> %n_dims_f32, %one_f32 : f32
+  %corr_end_gt_max = scalar.cmpf ogt, %corr_end_ceil, %n_dims_minus_one : f32
+  %corr_end = scf.if %corr_end_gt_max -> (f32) {
+    scf.yield %n_dims_minus_one : f32
+  } else {
+    scf.yield %corr_end_ceil : f32
+  }
+  %corr_span = scalar.subf<nnan|ninf|nsz> %corr_end, %corr_start : f32
+  %corr_span_small = scalar.cmpf olt, %corr_span, %point_001_f32 : f32
+  %corr_den_safe = scf.if %corr_span_small -> (f32) {
+    scf.yield %point_001_f32 : f32
+  } else {
+    scf.yield %corr_span : f32
+  }
+  %pair_minus_start = scalar.subf<nnan|ninf|nsz> %pair_f32, %corr_start : f32
+  %ramp_unclamped = scalar.divf<nnan|ninf|nsz> %pair_minus_start, %corr_den_safe : f32
+  %ramp_lt_zero = scalar.cmpf olt, %ramp_unclamped, %zero_f32 : f32
+  %ramp_nonnegative = scf.if %ramp_lt_zero -> (f32) {
+    scf.yield %zero_f32 : f32
+  } else {
+    scf.yield %ramp_unclamped : f32
+  }
+  %ramp_gt_one = scalar.cmpf ogt, %ramp_nonnegative, %one_f32 : f32
+  %ramp_clamped = scf.if %ramp_gt_one -> (f32) {
+    scf.yield %one_f32 : f32
+  } else {
+    scf.yield %ramp_nonnegative : f32
+  }
+  %ramp = scalar.subf<nnan|ninf|nsz> %one_f32, %ramp_clamped : f32
+  %ramp_mix = scalar.mulf<nnan|ninf|nsz> %ramp, %ext_factor : f32
+  %one_minus_mix = scalar.subf<nnan|ninf|nsz> %one_f32, %ramp_mix : f32
+  %interp_part = scalar.mulf<nnan|ninf|nsz> %theta_interp, %one_minus_mix : f32
+  %extrap_part = scalar.mulf<nnan|ninf|nsz> %theta_extrap, %ramp_mix : f32
+  %theta = scalar.addf<nnan|ninf|nsz> %interp_part, %extrap_part : f32
+  %freq_scale_inv = scalar.divf<nnan|ninf|nsz> %one_f32, %freq_scale : f32
+  %freq_scale_inv_log2 = scalar.log2f<afn> %freq_scale_inv : f32
+  %freq_scale_inv_log = scalar.mulf<nnan|ninf|nsz> %freq_scale_inv_log2, %ln2_f32 : f32
+  %mscale_delta0 = scalar.mulf<nnan|ninf|nsz> %point_one_f32, %freq_scale_inv_log : f32
+  %mscale_delta = scalar.addf<nnan|ninf|nsz> %one_f32, %mscale_delta0 : f32
+  %mscale = scalar.mulf<nnan|ninf|nsz> %attn_factor, %mscale_delta : f32
+  %cos0 = scalar.cosf<afn> %theta : f32
+  %sin0 = scalar.sinf<afn> %theta : f32
+  %cos_theta = scalar.mulf<nnan|ninf|nsz> %cos0, %mscale : f32
+  %sin_theta = scalar.mulf<nnan|ninf|nsz> %sin0, %mscale : f32
+  %x0_cos = scalar.mulf<nnan|ninf|nsz> %x0, %cos_theta : f32
+  %x1_sin = scalar.mulf<nnan|ninf|nsz> %x1, %sin_theta : f32
+  %out0 = scalar.subf<nnan|ninf|nsz> %x0_cos, %x1_sin : f32
+  %x0_sin = scalar.mulf<nnan|ninf|nsz> %x0, %sin_theta : f32
+  %x1_cos = scalar.mulf<nnan|ninf|nsz> %x1, %cos_theta : f32
+  %out1 = scalar.addf<nnan|ninf|nsz> %x0_sin, %x1_cos : f32
+  func.return %out0, %out1 : f32, f32
+}
+
+kernel.def export("hrx2_dsv4_csa_stage6_rms_rope_concat_f32") @hrx2_dsv4_csa_stage6_rms_rope_concat_f32() {
+  %one = index.constant 1 : index
+  %rows = index.constant 128 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%rows, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%eps: f32, %attn_factor: f32, %beta_fast: f32, %beta_slow: f32,
+         %ext_factor: f32, %freq_base: f32, %freq_scale: f32,
+         %src: buffer, %weight: buffer, %pos: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %n_ctx_orig = index.constant 65536 : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 127)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %src_g = buffer.assume.memory_space<global> %src : buffer
+  %weight_g = buffer.assume.memory_space<global> %weight : buffer
+  %pos_g = buffer.assume.memory_space<global> %pos : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %src_na, %weight_na, %pos_na, %dst_na = buffer.assume.noalias %src_g, %weight_g, %pos_g, %dst_g : buffer, buffer, buffer, buffer
+  %src_v = buffer.view %src_na[%base] : buffer -> view<16384xf32, #dense>
+  %weight_v = buffer.view %weight_na[%base] : buffer -> view<128xf32, #dense>
+  %pos_v = buffer.view %pos_na[%base] : buffer -> view<128xi32, #dense>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<16384xf32, #dense>
+  %row_base0 = index.mul %row, %c128 : index
+  %row_base = index.assume %row_base0 [range(%row_base0, 0, 16256)] : index
+  %sum = scf.for %vcol = [%lane to %c8 step %c256](%acc = %zero_f32 : f32) -> (f32) {
+    %col0 = index.mul %vcol, %c16 : index
+    %index0 = index.add %row_base, %col0 : index
+    %index = index.assume %index0 [range(%index0, 0, 16368)] : index
+    %values = vector.load %src_v[%index] : view<16384xf32, #dense> -> vector<16xf32>
+    %squares = vector.mulf<reassoc|nnan|ninf|nsz> %values, %values : vector<16xf32>
+    %next = vector.reduce<addf, reassoc|nnan|ninf|nsz> %squares, %acc : vector<16xf32>, f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %c128_i32 = scalar.constant 128 : i32
+  %c128_f32 = scalar.sitofp %c128_i32 : i32 to f32
+  %mean = scalar.divf<nnan|ninf|nsz|arcp> %row_sum, %c128_f32 : f32
+  %biased = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %rms_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased : f32
+  %scale_v16 = vector.splat %rms_scale : vector<16xf32>
+  scf.for %vcol = [%lane to %c8 step %c256] {
+    %col0 = index.mul %vcol, %c16 : index
+    %index = index.add %row_base, %col0 : index
+    %values = vector.load %src_v[%index] : view<16384xf32, #dense> -> vector<16xf32>
+    %weights = vector.load %weight_v[%col0] : view<128xf32, #dense> -> vector<16xf32>
+    %normed = vector.mulf<nnan|ninf|nsz> %values, %scale_v16 : vector<16xf32>
+    %result = vector.mulf<nnan|ninf|nsz> %normed, %weights : vector<16xf32>
+    %is_prefix = index.cmp ult, %col0, %c64 : index
+    scf.if %is_prefix {
+      vector.store %result, %dst_v[%index] : vector<16xf32>, view<16384xf32, #dense>
+    }
+  }
+  %is_pair_lane = index.cmp ult, %lane, %c32 : index
+  scf.if %is_pair_lane {
+    %pair2 = index.mul %lane, %two : index
+    %col0 = index.add %c64, %pair2 : index
+    %col1 = index.add %col0, %one : index
+    %index0 = index.add %row_base, %col0 : index
+    %index1 = index.add %row_base, %col1 : index
+    %raw0 = view.load %src_v[%index0] : view<16384xf32, #dense> -> f32
+    %raw1 = view.load %src_v[%index1] : view<16384xf32, #dense> -> f32
+    %w0 = view.load %weight_v[%col0] : view<128xf32, #dense> -> f32
+    %w1 = view.load %weight_v[%col1] : view<128xf32, #dense> -> f32
+    %norm0 = scalar.mulf<nnan|ninf|nsz> %raw0, %rms_scale : f32
+    %norm1 = scalar.mulf<nnan|ninf|nsz> %raw1, %rms_scale : f32
+    %x0 = scalar.mulf<nnan|ninf|nsz> %norm0, %w0 : f32
+    %x1 = scalar.mulf<nnan|ninf|nsz> %norm1, %w1 : f32
+    %pos_i32 = view.load %pos_v[%row] : view<128xi32, #dense> -> i32
+    %out0, %out1 = func.call inline @dsv4_yarn_normal_pair_f32(
+        %x0, %x1, %lane, %pos_i32, %attn_factor, %beta_fast, %beta_slow,
+        %ext_factor, %freq_base, %freq_scale, %n_ctx_orig)
+        : (f32, f32, index, i32, f32, f32, f32, f32, f32, f32, index) -> (f32, f32)
+    view.store %out0, %dst_v[%index0] : f32, view<16384xf32, #dense>
+    view.store %out1, %dst_v[%index1] : f32, view<16384xf32, #dense>
+  }
+  kernel.return
+}

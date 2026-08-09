@@ -1,0 +1,83 @@
+// Direct dim-0 CONCAT for row-contiguous inputs with optional row padding.
+//
+// Every workitem copies one aligned vector<16xf32>. The route contract proves
+// that both source chunks, both source row strides, and the destination row
+// length are multiples of 16, so no vector crosses the source boundary.
+
+config.decl @hrx2_shape_concat_direct_total : %value: index where [range(%value, 16, 536870912), mul(%value, 16)]
+config.decl @hrx2_shape_concat_direct_src0_chunk : %value: index where [range(%value, 16, 536870912), mul(%value, 16)]
+config.decl @hrx2_shape_concat_direct_src1_chunk : %value: index where [range(%value, 16, 536870912), mul(%value, 16)]
+config.decl @hrx2_shape_concat_direct_src0_row_stride : %value: index where [range(%value, 16, 536870912), mul(%value, 16)]
+config.decl @hrx2_shape_concat_direct_src1_row_stride : %value: index where [range(%value, 16, 536870912), mul(%value, 16)]
+
+kernel.def export("hrx2_concat_f32_dim0_direct_vec16") @hrx2_concat_f32_dim0_direct_vec16() {
+  %one = index.constant 1 : index
+  %wg_minus_one = index.constant 255 : index
+  %sixteen = index.constant 16 : index
+  %wg_size = index.constant 256 : index
+  %total = config.get @hrx2_shape_concat_direct_total : index
+  %vectors = index.div %total, %sixteen : index
+  %rounded = index.add %vectors, %wg_minus_one : index
+  %workgroups = index.div %rounded, %wg_size : index
+  kernel.launch.config workgroups(%workgroups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %sixteen = index.constant 16 : index
+  %wg_size = index.constant 256 : index
+
+  %total0 = config.get @hrx2_shape_concat_direct_total : index
+  %src0_chunk0 = config.get @hrx2_shape_concat_direct_src0_chunk : index
+  %src1_chunk0 = config.get @hrx2_shape_concat_direct_src1_chunk : index
+  %src0_stride0 = config.get @hrx2_shape_concat_direct_src0_row_stride : index
+  %src1_stride0 = config.get @hrx2_shape_concat_direct_src1_row_stride : index
+  %total = index.assume %total0 [range(%total0, 16, 536870912), mul(%total0, 16)] : index
+  %src0_chunk = index.assume %src0_chunk0 [range(%src0_chunk0, 16, 536870912), mul(%src0_chunk0, 16)] : index
+  %src1_chunk = index.assume %src1_chunk0 [range(%src1_chunk0, 16, 536870912), mul(%src1_chunk0, 16)] : index
+  %src0_stride = index.assume %src0_stride0 [range(%src0_stride0, 16, 536870912), mul(%src0_stride0, 16)] : index
+  %src1_stride = index.assume %src1_stride0 [range(%src1_stride0, 16, 536870912), mul(%src1_stride0, 16)] : index
+  %dst_chunk0 = index.add %src0_chunk, %src1_chunk : index
+  %dst_chunk = index.assume %dst_chunk0 [range(%dst_chunk0, 32, 536870912), mul(%dst_chunk0, 16)] : index
+  %vectors0 = index.div %total, %sixteen : index
+  %vectors = index.assume %vectors0 [range(%vectors0, 1, 33554432)] : index
+
+  %wg0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %wg = index.assume %wg0 [range(%wg0, 0, 131071)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %vector_base = index.mul %wg, %wg_size : index
+  %vector_index0 = index.add %vector_base, %lane : index
+  %vector_index = index.assume %vector_index0 [range(%vector_index0, 0, 33554431)] : index
+  %in_bounds = index.cmp ult, %vector_index, %vectors : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_na, %src1_na, %dst_na = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_na[%base] : buffer -> view<536870912xf32, #dense>
+  %src1_view = buffer.view %src1_na[%base] : buffer -> view<536870912xf32, #dense>
+  %dst_view = buffer.view %dst_na[%base] : buffer -> view<536870912xf32, #dense>
+
+  scf.if %in_bounds {
+    %dst_index0 = index.mul %vector_index, %sixteen : index
+    %dst_index = index.assume %dst_index0 [range(%dst_index0, 0, 536870896), mul(%dst_index0, 16)] : index
+    %row = index.div %dst_index, %dst_chunk : index
+    %within = index.rem %dst_index, %dst_chunk : index
+    %from_src0 = index.cmp ult, %within, %src0_chunk : index
+    scf.if %from_src0 {
+      %row_base0 = index.mul %row, %src0_stride : index
+      %src_index0 = index.add %row_base0, %within : index
+      %src_index = index.assume %src_index0 [range(%src_index0, 0, 536870896), mul(%src_index0, 16)] : index
+      %value = vector.load %src0_view[%src_index] : view<536870912xf32, #dense> -> vector<16xf32>
+      vector.store %value, %dst_view[%dst_index] : vector<16xf32>, view<536870912xf32, #dense>
+    } else {
+      %row_base0 = index.mul %row, %src1_stride : index
+      %src_within0 = index.sub %within, %src0_chunk : index
+      %src_within = index.assume %src_within0 [range(%src_within0, 0, 536870896), mul(%src_within0, 16)] : index
+      %src_index0 = index.add %row_base0, %src_within : index
+      %src_index = index.assume %src_index0 [range(%src_index0, 0, 536870896), mul(%src_index0, 16)] : index
+      %value = vector.load %src1_view[%src_index] : view<536870912xf32, #dense> -> vector<16xf32>
+      vector.store %value, %dst_view[%dst_index] : vector<16xf32>, view<536870912xf32, #dense>
+    }
+  }
+  kernel.return
+}

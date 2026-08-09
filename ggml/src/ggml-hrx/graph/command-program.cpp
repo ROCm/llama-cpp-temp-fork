@@ -22,7 +22,8 @@ static size_t align_up(size_t value, size_t alignment) {
 static size_t value_span(const Value & value) {
     const size_t blocks = (static_cast<size_t>(value.access.shape[0]) + ggml_blck_size(value.type) - 1) /
         ggml_blck_size(value.type);
-    size_t result = blocks * value.access.strides[0];
+    if (blocks == 0) return 0;
+    size_t result = ggml_type_size(value.type) + (blocks - 1) * value.access.strides[0];
     for (int i = 1; i < GGML_MAX_DIMS; ++i) {
         if (value.access.shape[i] > 0) result += static_cast<size_t>(value.access.shape[i] - 1) * value.access.strides[i];
     }
@@ -316,6 +317,7 @@ static nlohmann::ordered_json binding_json(const CommandBinding & binding) {
         { "storage", binding.storage },
         { "offset", binding.offset },
         { "length", binding.length },
+        { "storage_binding", binding.storage_binding },
         { "access", resource_access_name(binding.access) },
     };
 }
@@ -360,6 +362,15 @@ CommandProgram build_command_program(const ProgramPlan & plan, const kernel_corp
             command.label = invocation.stage + (invocation.layer >= 0 ? "." + std::to_string(invocation.layer) : "");
             command.kernel = dispatch.kernel;
             command.dependencies = dispatch.dependencies;
+            if (dispatch.streamed()) {
+                command.streamed.layer = invocation.layer;
+                command.streamed.weight = dispatch.streamed_weight;
+                command.streamed.expert_ids = dispatch.streamed_expert_ids;
+                command.streamed.missing_suffix = dispatch.streamed_missing_suffix;
+                command.streamed.expert_begin = dispatch.streamed_expert_begin;
+                command.streamed.expert_end = dispatch.streamed_expert_end;
+                command.streamed.load_chunk_size = dispatch.streamed_load_chunk_size;
+            }
             const kernel_resolve_result resolved = resolve_kernel_definition(corpus, plan.target, command.kernel);
             const kernel_definition * definition = resolved.definition;
             if (!resolved.found()) {
@@ -377,6 +388,7 @@ CommandProgram build_command_program(const ProgramPlan & plan, const kernel_corp
                 const size_t span = value_span(value);
                 const size_t available = tensor_binding.offset < span ? span - tensor_binding.offset : 0;
                 binding.length = tensor_binding.length == 0 ? available : tensor_binding.length;
+                binding.storage_binding = tensor_binding.storage_binding;
                 binding.access = definition != nullptr && binding_index < definition->bindings.size()
                     ? definition->bindings[binding_index].access : ResourceAccess::ReadWrite;
                 command.bindings.push_back(std::move(binding));
@@ -508,6 +520,25 @@ VerificationResult verify_command_program(const ProgramPlan & plan, const kernel
         }
         for (uint32_t dependency : command.dependencies) {
             if (dependency >= command.ordinal) result.errors.push_back("command has a forward dependency");
+        }
+        if ((command.streamed.weight != kInvalidId || command.streamed.expert_ids != kInvalidId ||
+             command.streamed.missing_suffix) &&
+            !command.streamed.valid()) {
+            result.errors.push_back("command has an incomplete streamed-expert contract");
+        }
+        if (command.streamed.valid()) {
+            if (command.streamed.weight >= plan.graph.values.size() ||
+                command.streamed.expert_ids >= plan.graph.values.size() ||
+                plan.graph.values[command.streamed.expert_ids].type != GGML_TYPE_I32) {
+                result.errors.push_back("command has an invalid streamed-expert value");
+            }
+            const bool binds_weight_view = std::any_of(
+                command.bindings.begin(), command.bindings.end(), [&](const CommandBinding & binding) {
+                    return binding.value == command.streamed.weight && !binding.storage_binding.empty();
+                });
+            if (!binds_weight_view) {
+                result.errors.push_back("streamed-expert command does not bind its physical cache view");
+            }
         }
         for (const CommandBinding & binding : command.bindings) {
             if (binding.storage >= plan.graph.storages.size() || binding.length == 0 ||
@@ -665,7 +696,13 @@ std::string format_command_program(const CommandProgram & program) {
         out << "} configs={";
         size_t config_index = 0;
         for (const auto & config : command.kernel.compile_parameters) out << (config_index++ ? "," : "") << config.first << '=' << config.second;
-        out << "}\n";
+        out << '}';
+        if (command.streamed.valid()) {
+            out << " streamed={layer=" << command.streamed.layer << ",weight=" << command.streamed.weight
+                << ",expert_ids=" << command.streamed.expert_ids
+                << ",missing_suffix=" << (command.streamed.missing_suffix ? "true" : "false") << '}';
+        }
+        out << '\n';
         for (size_t i = 0; i < command.bindings.size(); ++i) {
             const CommandBinding & binding = command.bindings[i];
             out << "    binding[" << i << "] " << binding.name << ' ' << resource_access_name(binding.access)
@@ -674,6 +711,7 @@ std::string format_command_program(const CommandProgram & program) {
             if (binding.origin == BindingOrigin::PersistentConstant) {
                 out << " persistent_constant=" << binding.persistent_constant;
             }
+            if (!binding.storage_binding.empty()) out << " storage_binding=" << binding.storage_binding;
             out << '\n';
         }
     }
@@ -754,10 +792,26 @@ std::string serialize_command_program_json(const CommandProgram & program) {
             { "family", command.kernel.family }, { "kernel", command.kernel.variant }, { "scalars", command.kernel.integer_parameters },
             { "execution", execution_kind_name(command.kernel.execution_kind) },
             { "compile_parameters", command.kernel.compile_parameters },
+            { "deferred_compile_parameters", nlohmann::ordered_json::object() },
             { "workgroup_count", command.workgroup_count }, { "workgroup_size", command.workgroup_size },
             { "subgroup_size", command.subgroup_size }, { "dependencies", command.dependencies },
             { "bindings", nlohmann::ordered_json::array() },
         };
+        for (const auto & parameter : command.kernel.deferred_compile_parameters) {
+            item["deferred_compile_parameters"][parameter.first] = {
+                { "value", parameter.second.value }, { "property", parameter.second.property },
+            };
+        }
+        if (command.streamed.valid()) {
+            item["streamed"] = {
+                { "layer", command.streamed.layer }, { "weight", command.streamed.weight },
+                { "expert_ids", command.streamed.expert_ids },
+                { "missing_suffix", command.streamed.missing_suffix },
+                { "expert_begin", command.streamed.expert_begin },
+                { "expert_end", command.streamed.expert_end },
+                { "load_chunk_size", command.streamed.load_chunk_size },
+            };
+        }
         for (const CommandBinding & binding : command.bindings) item["bindings"].push_back(binding_json(binding));
         root["commands"].push_back(std::move(item));
     }

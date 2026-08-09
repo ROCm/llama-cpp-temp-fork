@@ -1,0 +1,77 @@
+config.decl @shape_argsort_ncols : %value: index where [range(%value, 1, 256)]
+config.decl @shape_argsort_nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_argsort_total_size : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_argsort_order : %value: index where [range(%value, 0, 1)]
+config.decl @tuning_argsort_workgroup_size : %value: index where [range(%value, 32, 256), mul(%value, 32)]
+
+kernel.def export("hrx2_argsort_f32_i32") @hrx2_argsort_f32_i32() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @shape_argsort_nrows : index
+  %workgroup_size = config.get @tuning_argsort_workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %ncols = config.get @shape_argsort_ncols : index
+  %nrows = config.get @shape_argsort_nrows : index
+  %total_size = config.get @shape_argsort_total_size : index
+  %order = config.get @shape_argsort_order : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 256)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %total_size_bounded = index.assume %total_size [range(%total_size, 1, 1073741824)] : index
+  %order_bounded = index.assume %order [range(%order, 0, 1)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [lt(%row0, %nrows_bounded)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %lane_i32 = index.cast %lane : index to i32
+  %lane_in_ncols = index.cmp ult, %lane, %ncols_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<[%total_size_bounded]xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<[%total_size_bounded]xi32, #dense>
+
+  %row_offset0 = index.mul %row, %ncols_bounded : index
+  %row_offset = index.assume %row_offset0 [range(%row_offset0, 0, 1073741823), lt(%row_offset0, %total_size_bounded)] : index
+  scf.if %lane_in_ncols {
+    %self_offset_raw = index.add %row_offset, %lane : index
+    %self_offset = index.assume %self_offset_raw [range(%self_offset_raw, 0, 1073741823), lt(%self_offset_raw, %total_size_bounded)] : index
+    %self_value = view.load %src0_view[%self_offset] : view<[%total_size_bounded]xf32, #dense> -> f32
+    %rank = scf.for %other = [%zero to %ncols_bounded step %one](%acc = %zero_i32 : i32) -> (i32) {
+      %other_offset_raw = index.add %row_offset, %other : index
+      %other_offset = index.assume %other_offset_raw [range(%other_offset_raw, 0, 1073741823), lt(%other_offset_raw, %total_size_bounded)] : index
+      %other_value = view.load %src0_view[%other_offset] : view<[%total_size_bounded]xf32, #dense> -> f32
+      %other_i32 = index.cast %other : index to i32
+      %ascending = index.cmp eq, %order_bounded, %zero : index
+      %equal = scalar.cmpf oeq, %other_value, %self_value : f32
+      %other_before = scalar.cmpi slt, %other_i32, %lane_i32 : i32
+      %tie_before = scalar.andi %equal, %other_before : i1
+      %strict_precedes = scf.if %ascending -> (i1) {
+        %less = scalar.cmpf olt, %other_value, %self_value : f32
+        scf.yield %less : i1
+      } else {
+        %greater = scalar.cmpf ogt, %other_value, %self_value : f32
+        scf.yield %greater : i1
+      }
+      %precedes = scalar.ori %strict_precedes, %tie_before : i1
+      %next = scf.if %precedes -> (i32) {
+        %inc = scalar.addi %acc, %one_i32 : i32
+        scf.yield %inc : i32
+      } else {
+        scf.yield %acc : i32
+      }
+      scf.yield %next : i32
+    }
+    %rank_index0 = index.cast %rank : i32 to index
+    %rank_index = index.assume %rank_index0 [range(%rank_index0, 0, 255), lt(%rank_index0, %ncols_bounded)] : index
+    %dst_offset_raw = index.add %row_offset, %rank_index : index
+    %dst_offset = index.assume %dst_offset_raw [range(%dst_offset_raw, 0, 1073741823), lt(%dst_offset_raw, %total_size_bounded)] : index
+    %lane_vec = vector.splat %lane_i32 : vector<1xi32>
+    vector.store %lane_vec, %dst_view[%dst_offset] : vector<1xi32>, view<[%total_size_bounded]xi32, #dense>
+  }
+  kernel.return
+}

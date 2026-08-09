@@ -9,16 +9,83 @@
 
 #include "ggml-cpp.h"
 
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
+
+// Model implementations define record groups. The loader turns each key into an opaque model-lifetime identity.
+struct llama_streamed_tensor_group_spec {
+    uint64_t group_key;
+    uint32_t record_count;
+    uint32_t layer_index;
+    uint16_t plane_index;
+    uint16_t plane_count;
+    ggml_backend_streamed_weight_layout cache_layout = GGML_BACKEND_STREAMED_WEIGHT_LAYOUT_NONE;
+    uint32_t cache_layout_tile_rows = 0;
+};
+
+// Keeps a model split open for file-backed tensor residency.
+struct llama_streamed_source_file {
+    int      fd;
+    size_t   file_size;
+    size_t   read_alignment;
+
+    llama_streamed_source_file(const llama_file & file, uint16_t split_index);
+    ~llama_streamed_source_file();
+
+    llama_streamed_source_file(const llama_streamed_source_file &) = delete;
+    llama_streamed_source_file & operator=(const llama_streamed_source_file &) = delete;
+};
+
+struct llama_streamed_tensor_source {
+    std::shared_ptr<const llama_streamed_source_file> file;
+    std::string                                       name;
+    ggml_backend_streamed_weight_source               backend_source;
+    ggml_backend_buffer_ptr                           buffer;
+    ggml_tensor *                                     tensor;
+};
+
+// Moved into llama_model after resident tensors load, preserving descriptor and fd addresses.
+struct llama_streamed_tensor_sources {
+    explicit llama_streamed_tensor_sources(size_t max_tensors);
+
+    llama_streamed_tensor_source * add(
+            const llama_file & file,
+            uint16_t           split_index,
+            size_t             offset,
+            const ggml_tensor & metadata,
+            const llama_streamed_tensor_group_spec & group_spec);
+
+    bool contains(const char * name) const;
+    const std::vector<std::unique_ptr<llama_streamed_tensor_source>> & all() const;
+    void validate_groups_complete() const;
+
+private:
+    struct layer_state {
+        std::vector<llama_streamed_tensor_source *> planes;
+    };
+
+    struct group_state {
+        uint32_t record_count = 0;
+        uint16_t plane_count  = 0;
+        std::map<uint32_t, layer_state> layers;
+    };
+
+    ggml_context_ptr context;
+    std::map<uint16_t, std::shared_ptr<llama_streamed_source_file>> files;
+    std::map<uint64_t, group_state> groups;
+    std::vector<std::unique_ptr<llama_streamed_tensor_source>> sources;
+    std::unordered_set<std::string> names;
+};
 
 enum llama_fver {
     GGUF_FILE_VERSION_V1 = 1,
@@ -67,6 +134,7 @@ struct llama_model_loader {
     static const int TENSOR_DUPLICATED      = 1 << 1;
     static const int TENSOR_SKIP            = 1 << 2;
     static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
+    static const int TENSOR_STREAMABLE      = 1 << 4;
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -112,6 +180,8 @@ struct llama_model_loader {
     };
 
     std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
+
+    std::unique_ptr<llama_streamed_tensor_sources> streamed_tensor_sources;
 
     // track tensors that had to be moved for debugging:
     size_t n_tensors_moved = 0;
@@ -181,12 +251,13 @@ struct llama_model_loader {
 
     struct ggml_tensor * create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
-        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags,
+        const llama_streamed_tensor_group_spec * streamed_group = nullptr);
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
     void done_getting_tensors(bool partial = false) const;
-
+    std::unique_ptr<llama_streamed_tensor_sources> take_streamed_tensor_sources();
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;

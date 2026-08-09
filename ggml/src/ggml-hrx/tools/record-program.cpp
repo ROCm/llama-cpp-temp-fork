@@ -44,7 +44,7 @@ int main(int argc, char ** argv) {
         if (!plan.valid()) {
             throw std::runtime_error("reactive plan is invalid");
         }
-        const ggml::hrx::kernel_corpus & corpus   = ggml::hrx::get_qwen_kernel_corpus();
+        const ggml::hrx::kernel_corpus & corpus   = ggml::hrx::get_kernel_corpus();
         const ggml::hrx::CommandProgram  commands = ggml::hrx::build_command_program(plan, corpus);
         if (!commands.valid()) {
             throw std::runtime_error(commands.errors.front());

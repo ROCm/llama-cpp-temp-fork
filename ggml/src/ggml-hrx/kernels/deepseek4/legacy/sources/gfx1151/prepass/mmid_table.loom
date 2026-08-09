@@ -1,0 +1,133 @@
+// Per-expert match table for MUL_MAT_ID, built once instead of per workgroup.
+//
+// The expert GEMM finds its own (token, selected-slot) matches by scanning the
+// whole routing table twice -- once to count and rank, once to refill its match
+// window -- plus a 256-step prefix sum. That is a fixed cost per workgroup, so
+// it is invisible at a 128-row tile and ruinous at a 16-row one: it caps how
+// finely the GEMM can be split, and the GEMM is latency-bound, so how finely it
+// splits is what decides whether the machine stays fed. Measured against the
+// AMD gfx11 branch on the same op, our waves ran 312k cycles against their
+// 5.5k, with 16x fewer of them.
+//
+// One workgroup per expert writes:
+//   table[e * stride]         = number of matches for expert e
+//   table[e * stride + 1 + i] = token * 128 + selected slot, ranked
+//
+// stride is 2 * ntokens * nselected: the worst case is every (token, slot) pair
+// routing to one expert, and the factor of two keeps the element count a plain
+// product of shape values with room for the count in slot 0.
+//
+// The ranking is a pure function of the routing table -- exclusive prefix over
+// lane counts, plus position within the lane's own strided slice -- so it is
+// the same ranking the consumer would have computed for itself.
+
+config.decl @hrx2_shape_mul_mat_id_nexperts : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2_shape_mul_mat_id_nselected : %value: index where [range(%value, 1, 128)]
+config.decl @hrx2_shape_mul_mat_id_ntokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_mul_mat_id_idx_token_stride : %value: index where [range(%value, 1, 1048576)]
+
+kernel.def export("hrx2_mmid_table") @hrx2_mmid_table() {
+  %unit = index.constant 1 : index
+  %wg = index.constant 256 : index
+  %nexperts = config.get @hrx2_shape_mul_mat_id_nexperts : index
+  %ne = index.assume %nexperts [range(%nexperts, 1, 1024)] : index
+  kernel.launch.config workgroups(%ne, %unit, %unit) workgroup_size(%wg, %unit, %unit) : index
+} launch(%idx: buffer, %table: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %k_wg = index.constant 256 : index
+  %k_last = index.constant 255 : index
+  %k_pack = index.constant 128 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %one_i32 = scalar.constant 1 : i32
+
+  %nselected = config.get @hrx2_shape_mul_mat_id_nselected : index
+  %ntokens = config.get @hrx2_shape_mul_mat_id_ntokens : index
+  %idx_stride = config.get @hrx2_shape_mul_mat_id_idx_token_stride : index
+  %nsel = index.assume %nselected [range(%nselected, 1, 128)] : index
+  %ntok = index.assume %ntokens [range(%ntokens, 1, 1048576)] : index
+  %istride = index.assume %idx_stride [range(%idx_stride, 1, 1048576)] : index
+
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %expert0 = kernel.workgroup.id<x> : index
+  %expert = index.assume %expert0 [range(%expert0, 0, 1023)] : index
+  %expert_i32 = index.cast %expert : index to i32
+
+  %idx_g = buffer.assume.memory_space<global> %idx : buffer
+  %tbl_g = buffer.assume.memory_space<global> %table : buffer
+  %idx_na, %tbl_na = buffer.assume.noalias %idx_g, %tbl_g : buffer, buffer
+  %idx_view = buffer.view %idx_na[%base] : buffer -> view<1073741824xi32, #dense>
+  %tbl_view = buffer.view %tbl_na[%base] : buffer -> view<268435456xi32, #dense>
+
+  %stride0 = index.mul %ntok, %nsel : index
+  %stride = index.mul %stride0, %two : index
+  %tbl_base0 = index.mul %expert, %stride : index
+  %tbl_base = index.assume %tbl_base0 [range(%tbl_base0, 0, 268435455)] : index
+
+  // 256 lane counts, reused for the inclusive-prefix broadcast and cursors.
+  %lds_bytes = index.constant 1024 : offset
+  %scratch = buffer.alloca %lds_bytes {base_alignment = 16, memory_space = workgroup} : buffer
+  %cnt_view = buffer.view %scratch[%base] : buffer -> view<256xi32, #dense>
+
+  view.store %zero_i32, %cnt_view[%lane] : i32, view<256xi32, #dense>
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+  scf.for %tok = [%lane to %ntok step %k_wg] {
+    scf.for %sel = [%zero to %nsel step %one] {
+      %row = index.mul %tok, %istride : index
+      %at0 = index.add %row, %sel : index
+      %at = index.assume %at0 [range(%at0, 0, 1073741823)] : index
+      %e = view.load %idx_view[%at] : view<1073741824xi32, #dense> -> i32
+      %hit = scalar.cmpi eq, %e, %expert_i32 : i32
+      scf.if %hit {
+        %cur = view.load %cnt_view[%lane] : view<256xi32, #dense> -> i32
+        %nxt = scalar.addi %cur, %one_i32 : i32
+        view.store %nxt, %cnt_view[%lane] : i32, view<256xi32, #dense>
+      }
+    }
+  }
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+  %mine = view.load %cnt_view[%lane] : view<256xi32, #dense> -> i32
+  %incl = kernel.workgroup.scan<addi> %mine
+      {mode = inclusive, direction = forward} : i32
+  view.store %incl, %cnt_view[%lane] : i32, view<256xi32, #dense>
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+  %prefix = scalar.subi %incl, %mine : i32
+  %total = view.load %cnt_view[%k_last] : view<256xi32, #dense> -> i32
+  %is_zero = index.cmp eq, %lane, %zero : index
+  scf.if %is_zero {
+    view.store %total, %tbl_view[%tbl_base] : i32, view<268435456xi32, #dense>
+  }
+
+  // Scatter: the lane's cursor starts at its exclusive prefix.
+  view.store %prefix, %cnt_view[%lane] : i32, view<256xi32, #dense>
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+  scf.for %tok = [%lane to %ntok step %k_wg] {
+    scf.for %sel = [%zero to %nsel step %one] {
+      %row2 = index.mul %tok, %istride : index
+      %at2_0 = index.add %row2, %sel : index
+      %at2 = index.assume %at2_0 [range(%at2_0, 0, 1073741823)] : index
+      %e2 = view.load %idx_view[%at2] : view<1073741824xi32, #dense> -> i32
+      %hit2 = scalar.cmpi eq, %e2, %expert_i32 : i32
+      scf.if %hit2 {
+        %rk = view.load %cnt_view[%lane] : view<256xi32, #dense> -> i32
+        %rk_i = index.cast %rk : i32 to index
+        %rk_b = index.assume %rk_i [range(%rk_i, 0, 2097151)] : index
+        %slot0 = index.add %tbl_base, %one : index
+        %slot1 = index.add %slot0, %rk_b : index
+        %slot = index.assume %slot1 [range(%slot1, 0, 268435455)] : index
+        %packed0 = index.mul %tok, %k_pack : index
+        %packed1 = index.add %packed0, %sel : index
+        %packed = index.cast %packed1 : index to i32
+        view.store %packed, %tbl_view[%slot] : i32, view<268435456xi32, #dense>
+        %rk2 = scalar.addi %rk, %one_i32 : i32
+        view.store %rk2, %cnt_view[%lane] : i32, view<256xi32, #dense>
+      }
+    }
+  }
+  kernel.return
+}

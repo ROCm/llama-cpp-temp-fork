@@ -1,0 +1,123 @@
+// Fuses the DSV4 compressed-state CONT -> SOFT_MAX -> MUL -> SUM_ROWS
+// chain. The source of CONT is addressed through its original strided layout,
+// while the multiplier is already in the logical contiguous layout.
+//
+// One 256-thread workgroup owns one logical row. The softmax reduction uses the
+// same WG256 tree as the accepted standalone softmax. Its final weighted sum is
+// deliberately rebuilt by subgroup 0 with the same lane-stride-32 accumulation
+// and wave32 reduction as the accepted standalone sum-rows kernel. This retains
+// both f32 evaluation orders while removing three intermediate global tensors
+// and three dispatches.
+
+config.decl @hrx2_shape_dsv4_css_ncols : %value: index where [range(%value, 1, 256)]
+config.decl @hrx2_shape_dsv4_css_ne1 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2_shape_dsv4_css_ne2 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2_shape_dsv4_css_ne3 : %value: index where [range(%value, 1, 64)]
+config.decl @hrx2_shape_dsv4_css_nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_dsv4_css_src_s0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2_shape_dsv4_css_src_s1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2_shape_dsv4_css_src_s2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2_shape_dsv4_css_src_s3 : %value: index where [range(%value, 1, 1073741824)]
+
+kernel.def export("hrx2_dsv4_cont_softmax_mul_sum_rows_f32") @hrx2_dsv4_cont_softmax_mul_sum_rows_f32() {
+  %unit = index.constant 1 : index
+  %workgroup_size = index.constant 256 : index
+  %nrows = config.get @hrx2_shape_dsv4_css_nrows : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%scale: f32, %src: buffer, %multiplier: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %sum_workgroup_size = index.constant 32 : index
+  %minus_inf = scalar.constant -3.4028234663852886e+38 : f32
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %ncols0 = config.get @hrx2_shape_dsv4_css_ncols : index
+  %ncols = index.assume %ncols0 [range(%ncols0, 1, 256)] : index
+  %ne1_0 = config.get @hrx2_shape_dsv4_css_ne1 : index
+  %ne1 = index.assume %ne1_0 [range(%ne1_0, 1, 4096)] : index
+  %ne2_0 = config.get @hrx2_shape_dsv4_css_ne2 : index
+  %ne2 = index.assume %ne2_0 [range(%ne2_0, 1, 4096)] : index
+  %ne3_0 = config.get @hrx2_shape_dsv4_css_ne3 : index
+  %ne3 = index.assume %ne3_0 [range(%ne3_0, 1, 64)] : index
+  %nrows0 = config.get @hrx2_shape_dsv4_css_nrows : index
+  %nrows = index.assume %nrows0 [range(%nrows0, 1, 1048576)] : index
+  %s0_0 = config.get @hrx2_shape_dsv4_css_src_s0 : index
+  %s0 = index.assume %s0_0 [range(%s0_0, 1, 1073741824)] : index
+  %s1_0 = config.get @hrx2_shape_dsv4_css_src_s1 : index
+  %s1 = index.assume %s1_0 [range(%s1_0, 1, 1073741824)] : index
+  %s2_0 = config.get @hrx2_shape_dsv4_css_src_s2 : index
+  %s2 = index.assume %s2_0 [range(%s2_0, 1, 1073741824)] : index
+  %s3_0 = config.get @hrx2_shape_dsv4_css_src_s3 : index
+  %s3 = index.assume %s3_0 [range(%s3_0, 1, 1073741824)] : index
+
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+
+  %i1 = index.rem %row, %ne1 : index
+  %row_div_ne1 = index.div %row, %ne1 : index
+  %i2 = index.rem %row_div_ne1, %ne2 : index
+  %i3 = index.div %row_div_ne1, %ne2 : index
+  %src_i1 = index.mul %i1, %s1 : index
+  %src_i2 = index.mul %i2, %s2 : index
+  %src_i3 = index.mul %i3, %s3 : index
+  %src_row_01 = index.add %src_i1, %src_i2 : index
+  %src_row = index.add %src_row_01, %src_i3 : index
+  %dense_row = index.mul %row, %ncols : index
+
+  %src_global = buffer.assume.memory_space<global> %src : buffer
+  %multiplier_global = buffer.assume.memory_space<global> %multiplier : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src_view = buffer.view %src_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %multiplier_view = buffer.view %multiplier_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1048576xf32, #dense>
+
+  %in_bounds = index.cmp ult, %lane, %ncols : index
+  %input = scf.if %in_bounds -> (f32) {
+    %lane_src = index.mul %lane, %s0 : index
+    %src_idx0 = index.add %src_row, %lane_src : index
+    %src_idx = index.assume %src_idx0 [range(%src_idx0, 0, 1073741823)] : index
+    %x = view.load %src_view[%src_idx] : view<1073741824xf32, #dense> -> f32
+    %scaled = scalar.mulf<nnan|ninf|nsz> %x, %scale : f32
+    scf.yield %scaled : f32
+  } else {
+    scf.yield %minus_inf : f32
+  }
+
+  %row_max = kernel.workgroup.reduce<maxnumf> %input : f32
+  %shifted = scalar.subf<nnan|ninf|nsz> %input, %row_max : f32
+  %exp_value = scf.if %in_bounds -> (f32) {
+    %exp = scalar.expf<afn> %shifted : f32
+    scf.yield %exp : f32
+  } else {
+    scf.yield %zero_f32 : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %exp_value : f32
+  // The materialized SUM_ROWS dispatch uses WG32. Recompute each normalized
+  // value in subgroup 0 after the shared softmax reductions, then use its exact
+  // lane-stride-32 local accumulation and wave reduction. Lanes outside
+  // subgroup 0 have zero iterations and their subgroup results are ignored.
+  %lane_weighted_sum = scf.for %col = [%lane to %ncols step %sum_workgroup_size](%acc = %zero_f32 : f32) -> (f32) {
+    %col_src = index.mul %col, %s0 : index
+    %src_idx0 = index.add %src_row, %col_src : index
+    %src_idx = index.assume %src_idx0 [range(%src_idx0, 0, 1073741823)] : index
+    %x = view.load %src_view[%src_idx] : view<1073741824xf32, #dense> -> f32
+    %scaled = scalar.mulf<nnan|ninf|nsz> %x, %scale : f32
+    %shifted_col = scalar.subf<nnan|ninf|nsz> %scaled, %row_max : f32
+    %exp_col = scalar.expf<afn> %shifted_col : f32
+    %norm = scalar.divf<nnan|ninf|nsz|arcp> %exp_col, %row_sum : f32
+    %multiplier_idx0 = index.add %dense_row, %col : index
+    %multiplier_idx = index.assume %multiplier_idx0 [range(%multiplier_idx0, 0, 1073741823)] : index
+    %weight = view.load %multiplier_view[%multiplier_idx] : view<1073741824xf32, #dense> -> f32
+    %product = scalar.mulf<nnan|ninf|nsz> %weight, %norm : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %product : f32
+    scf.yield %next : f32
+  }
+  %weighted_sum = kernel.subgroup.reduce<addf> %lane_weighted_sum : f32
+  %lane_is_zero = index.cmp eq, %lane, %zero : index
+  scf.if %lane_is_zero {
+    view.store %weighted_sum, %dst_view[%row] : f32, view<1048576xf32, #dense>
+  }
+  kernel.return
+}

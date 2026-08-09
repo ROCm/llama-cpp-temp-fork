@@ -1,0 +1,165 @@
+// Stable prompt-dynamic expert ordering for streamed MUL_MAT_ID.
+//
+// The MMID table stores the exact routed-match count at the first element of
+// every expert record.  The streamed cache header independently marks experts
+// that were resident at begin_layer (cohort 1) and those admitted by the
+// missing suffix (cohort 2).  This prepass emits one permutation per cohort:
+// active experts first in descending match-count order, with expert ID as the
+// deterministic tie break, followed by every other expert in ID order.  Both
+// permutations are appended to the existing MMID table transient, avoiding a
+// new route transient or consumer binding.
+//
+// Each lane ranks its own expert(s).  This is deliberately a single small
+// dispatch after the MMID producer: it changes issue order only and leaves the
+// accepted expert GEMM grids and arithmetic unchanged.
+
+config.decl @hrx2_shape_mul_mat_id_nexperts : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2_shape_mul_mat_id_nselected : %value: index where [range(%value, 1, 128)]
+config.decl @hrx2_shape_mul_mat_id_ntokens : %value: index where [range(%value, 1, 1048576)]
+
+kernel.def export("hrx2_mmid_expert_order") @hrx2_mmid_expert_order() {
+  %one = index.constant 1 : index
+  %wg = index.constant 256 : index
+  %minus_one = index.constant -1 : index
+  %nexperts = config.get @hrx2_shape_mul_mat_id_nexperts : index
+  %rounded0 = index.add %nexperts, %wg : index
+  %rounded = index.add %rounded0, %minus_one : index
+  %groups = index.div %rounded, %wg : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg, %one, %one) : index
+} launch(%cache: buffer, %table: buffer) {
+  %base = index.constant 0 : offset
+  %cohort_offset = index.constant 4096 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %wg = index.constant 256 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %resident_i32 = scalar.constant 1 : i32
+  %missing_i32 = scalar.constant 2 : i32
+  %true_i1 = scalar.constant true : i1
+
+  %nexperts0 = config.get @hrx2_shape_mul_mat_id_nexperts : index
+  %nselected0 = config.get @hrx2_shape_mul_mat_id_nselected : index
+  %ntokens0 = config.get @hrx2_shape_mul_mat_id_ntokens : index
+  %nexperts = index.assume %nexperts0 [range(%nexperts0, 1, 1024)] : index
+  %nselected = index.assume %nselected0 [range(%nselected0, 1, 128)] : index
+  %ntokens = index.assume %ntokens0 [range(%ntokens0, 1, 1048576)] : index
+  %table_stride0 = index.mul %ntokens, %nselected : index
+  %table_stride = index.mul %table_stride0, %two : index
+  %order_payload0 = index.mul %nexperts, %ntokens : index
+  %order_payload1 = index.mul %order_payload0, %nselected : index
+  %order_payload2 = index.mul %order_payload1, %two : index
+  %order_payload = index.assume %order_payload2 [range(%order_payload2, 0, 268435456)] : index
+  %missing_base0 = index.add %order_payload, %nexperts : index
+  %missing_base = index.assume %missing_base0 [range(%missing_base0, 1, 268436480)] : index
+  %multiple_experts = index.cmp ugt, %nexperts, %one : index
+
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 3)] : index
+  %group_base = index.mul %group, %wg : index
+  %expert_start0 = index.add %group_base, %lane : index
+  %expert_start = index.assume %expert_start0 [range(%expert_start0, 0, 1023)] : index
+  %minus_one = index.constant -1 : index
+  %rounded0 = index.add %nexperts, %wg : index
+  %rounded = index.add %rounded0, %minus_one : index
+  %group_count = index.div %rounded, %wg : index
+  %global_stride = index.mul %group_count, %wg : index
+
+  %cache_global = buffer.assume.memory_space<global> %cache : buffer
+  %table_global = buffer.assume.memory_space<global> %table : buffer
+  %cache_na, %table_na = buffer.assume.noalias %cache_global, %table_global : buffer, buffer
+  %cohort_view = buffer.view %cache_na[%cohort_offset] : buffer -> view<1024xi32, #dense>
+  %table_view = buffer.view %table_na[%base] : buffer -> view<268437504xi32, #dense>
+
+  scf.for %expert0 = [%expert_start to %nexperts step %global_stride] {
+    %expert = index.assume %expert0 [range(%expert0, 0, 1023), lt(%expert0, %nexperts)] : index
+    %expert_i32 = index.cast %expert : index to i32
+    %self_table0 = index.mul %expert, %table_stride : index
+    %self_table = index.assume %self_table0 [range(%self_table0, 0, 268435455)] : index
+    %self_count = view.load %table_view[%self_table] : view<268437504xi32, #dense> -> i32
+    %self_cohort = view.load %cohort_view[%expert] : view<1024xi32, #dense> -> i32
+    %self_positive = scalar.cmpi sgt, %self_count, %zero_i32 : i32
+    %self_is_resident0 = scalar.cmpi eq, %self_cohort, %resident_i32 : i32
+    %self_is_missing0 = scalar.cmpi eq, %self_cohort, %missing_i32 : i32
+    %self_is_resident = scalar.andi %self_is_resident0, %self_positive : i1
+    %self_is_missing = scalar.andi %self_is_missing0, %self_positive : i1
+
+    // The single-expert permutation is the identity.  Keep it explicit so
+    // specialization removes the otherwise degenerate rank control flow
+    // before gfx1151 target-low lowering.
+    %resident_rank, %missing_rank = scf.if %multiple_experts -> (i32, i32) {
+      %resident_rank_scan, %missing_rank_scan = scf.for %other0 = [%zero to %nexperts step %one](%resident_acc = %zero_i32 : i32, %missing_acc = %zero_i32 : i32) -> (i32, i32) {
+      %other = index.assume %other0 [range(%other0, 0, 1023), lt(%other0, %nexperts)] : index
+      %other_i32 = index.cast %other : index to i32
+      %other_table0 = index.mul %other, %table_stride : index
+      %other_table = index.assume %other_table0 [range(%other_table0, 0, 268435455)] : index
+      %other_count = view.load %table_view[%other_table] : view<268437504xi32, #dense> -> i32
+      %other_cohort = view.load %cohort_view[%other] : view<1024xi32, #dense> -> i32
+      %other_positive = scalar.cmpi sgt, %other_count, %zero_i32 : i32
+      %other_is_resident0 = scalar.cmpi eq, %other_cohort, %resident_i32 : i32
+      %other_is_missing0 = scalar.cmpi eq, %other_cohort, %missing_i32 : i32
+      %other_is_resident = scalar.andi %other_is_resident0, %other_positive : i1
+      %other_is_missing = scalar.andi %other_is_missing0, %other_positive : i1
+      %other_not_resident_cohort = scalar.cmpi ne, %other_cohort, %resident_i32 : i32
+      %other_not_missing_cohort = scalar.cmpi ne, %other_cohort, %missing_i32 : i32
+      %other_zero = scalar.cmpi eq, %other_count, %zero_i32 : i32
+      %other_not_resident = scalar.ori %other_not_resident_cohort, %other_zero : i1
+      %other_not_missing = scalar.ori %other_not_missing_cohort, %other_zero : i1
+
+      %count_greater = scalar.cmpi sgt, %other_count, %self_count : i32
+      %count_equal = scalar.cmpi eq, %other_count, %self_count : i32
+      %id_before = scalar.cmpi slt, %other_i32, %expert_i32 : i32
+      %tie_before = scalar.andi %count_equal, %id_before : i1
+      %work_before = scalar.ori %count_greater, %tie_before : i1
+
+      %self_not_resident = scalar.xori %self_is_resident, %true_i1 : i1
+      %resident_active_before0 = scalar.andi %self_is_resident, %other_is_resident : i1
+      %resident_active_before = scalar.andi %resident_active_before0, %work_before : i1
+      %resident_inactive_id_before = scalar.andi %other_not_resident, %id_before : i1
+      %resident_inactive_before0 = scalar.ori %other_is_resident, %resident_inactive_id_before : i1
+      %resident_inactive_before = scalar.andi %self_not_resident, %resident_inactive_before0 : i1
+      %resident_precedes = scalar.ori %resident_active_before, %resident_inactive_before : i1
+
+      %self_not_missing = scalar.xori %self_is_missing, %true_i1 : i1
+      %missing_active_before0 = scalar.andi %self_is_missing, %other_is_missing : i1
+      %missing_active_before = scalar.andi %missing_active_before0, %work_before : i1
+      %missing_inactive_id_before = scalar.andi %other_not_missing, %id_before : i1
+      %missing_inactive_before0 = scalar.ori %other_is_missing, %missing_inactive_id_before : i1
+      %missing_inactive_before = scalar.andi %self_not_missing, %missing_inactive_before0 : i1
+      %missing_precedes = scalar.ori %missing_active_before, %missing_inactive_before : i1
+
+      %resident_next = scf.if %resident_precedes -> (i32) {
+        %inc = scalar.addi %resident_acc, %one_i32 : i32
+        scf.yield %inc : i32
+      } else {
+        scf.yield %resident_acc : i32
+      }
+      %missing_next = scf.if %missing_precedes -> (i32) {
+        %inc = scalar.addi %missing_acc, %one_i32 : i32
+        scf.yield %inc : i32
+      } else {
+        scf.yield %missing_acc : i32
+      }
+      scf.yield %resident_next, %missing_next : i32, i32
+      }
+      scf.yield %resident_rank_scan, %missing_rank_scan : i32, i32
+    } else {
+      scf.yield %expert_i32, %expert_i32 : i32, i32
+    }
+
+    %resident_rank0 = index.cast %resident_rank : i32 to index
+    %missing_rank0 = index.cast %missing_rank : i32 to index
+    %resident_slot = index.assume %resident_rank0 [range(%resident_rank0, 0, 1023), lt(%resident_rank0, %nexperts)] : index
+    %missing_slot = index.assume %missing_rank0 [range(%missing_rank0, 0, 1023), lt(%missing_rank0, %nexperts)] : index
+    %resident_index0 = index.add %order_payload, %resident_slot : index
+    %resident_index = index.assume %resident_index0 [range(%resident_index0, 0, 268436479)] : index
+    %missing_index0 = index.add %missing_base, %missing_slot : index
+    %missing_index = index.assume %missing_index0 [range(%missing_index0, 1, 268437503)] : index
+    view.store %expert_i32, %table_view[%resident_index] : i32, view<268437504xi32, #dense>
+    view.store %expert_i32, %table_view[%missing_index] : i32, view<268437504xi32, #dense>
+  }
+  kernel.return
+}

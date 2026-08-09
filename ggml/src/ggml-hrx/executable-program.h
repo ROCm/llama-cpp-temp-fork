@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -51,6 +52,27 @@ struct prepared_command_diagnostic {
     size_t      binding_count  = 0;
 };
 
+struct prepared_execution_segment {
+    uint32_t command_begin = 0;
+    uint32_t command_end   = 0;
+    StreamedExpertCommand streamed;
+    size_t expert_id_count      = 0;
+    size_t expert_id_bytes      = 0;
+    size_t expert_id_span_bytes = 0;
+    std::array<int64_t, GGML_MAX_DIMS> expert_id_shape   = {};
+    std::array<size_t, GGML_MAX_DIMS>  expert_id_strides = {};
+
+    bool valid() const { return command_begin < command_end; }
+};
+
+struct prepared_graph_segment {
+    uint32_t command_begin = 0;
+    uint32_t command_end   = 0;
+    StreamedExpertCommand wait_after;
+
+    bool valid() const { return command_begin < command_end; }
+};
+
 struct prepared_binding_snapshot {
     std::string          name;
     ResourceAccess       access = ResourceAccess::Read;
@@ -66,6 +88,14 @@ struct executable_preparation_options {
     bool        split_commands        = false;
     std::string sanitizer;
     std::string sanitizer_reporting;
+};
+
+struct executable_buffer_view {
+    std::string  name;
+    hrx_buffer_t buffer          = nullptr;
+    uint64_t     buffer_identity = 0;
+    size_t       offset          = 0;
+    size_t       length          = 0;
 };
 
 struct executable_buffer_binding {
@@ -84,6 +114,8 @@ struct executable_buffer_binding {
     bool         mutable_state             = false;
     bool         exported                  = false;
     std::string  layout                    = "ggml-native";
+    std::vector<executable_buffer_view> views;
+    std::map<std::string, int64_t>      integer_properties;
 };
 
 struct executable_bindings {
@@ -95,6 +127,16 @@ struct executable_bindings {
 };
 
 class prepared_executable_program;
+
+class streamed_execution_controller {
+  public:
+    virtual ~streamed_execution_controller() = default;
+
+    virtual error_result acquire(const StreamedExpertCommand & streamed, const uint32_t * expert_ids,
+                                 size_t expert_id_count) = 0;
+    virtual error_result wait(const StreamedExpertCommand & streamed) = 0;
+    virtual error_result finish() = 0;
+};
 
 class executable_artifact_repository {
   public:
@@ -148,6 +190,10 @@ class prepared_executable_program {
 
     size_t source_command_count() const { return source_command_count_; }
 
+    size_t segment_count() const { return graph_segments_.size(); }
+
+    bool has_streamed_execution() const { return has_streamed_execution_; }
+
     bool command_prefix() const { return command_prefix_; }
 
     bool split_commands() const { return split_commands_; }
@@ -157,7 +203,11 @@ class prepared_executable_program {
     const AllocationFingerprint & allocation_fingerprint() const { return allocation_fingerprint_; }
 
     error_result rebind(const executable_bindings & bindings);
+    error_result begin_launch(hrx_stream_t stream);
+    error_result launch_segment(size_t segment, hrx_stream_t stream);
+    error_result readback_value(hrx_stream_t producer, ValueId value, void * destination, size_t size);
     error_result launch(hrx_stream_t stream);
+    error_result launch_streamed(hrx_stream_t stream, streamed_execution_controller & controller);
     error_result complete_after_synchronize();
     error_result snapshot_transients(std::vector<uint8_t> & bytes);
     error_result snapshot_last_command_outputs(std::vector<prepared_binding_snapshot> & snapshots,
@@ -169,6 +219,10 @@ class prepared_executable_program {
     const std::vector<prepared_artifact_diagnostic> & artifacts() const { return artifacts_; }
 
     const std::vector<prepared_command_diagnostic> & commands() const { return commands_; }
+
+    const std::vector<prepared_execution_segment> & segments() const { return segments_; }
+
+    const std::vector<prepared_graph_segment> & graph_segments() const { return graph_segments_; }
 
     std::string format() const;
     std::string serialize_json() const;
@@ -185,12 +239,15 @@ class prepared_executable_program {
     size_t                                    transient_bytes_              = 0;
     size_t                                    persistent_constant_bytes_    = 0;
     size_t                                    source_command_count_         = 0;
+    bool                                      has_streamed_execution_       = false;
     bool                                      command_prefix_               = false;
     bool                                      split_commands_               = false;
     bool                                      serialized_commands_          = false;
     AllocationFingerprint                     allocation_fingerprint_;
     std::vector<prepared_artifact_diagnostic> artifacts_;
     std::vector<prepared_command_diagnostic>  commands_;
+    std::vector<prepared_execution_segment>   segments_;
+    std::vector<prepared_graph_segment>       graph_segments_;
     std::vector<std::string>                  errors_;
     friend class executable_program_preparer;
     friend prepared_executable_program prepare_executable_program(hrx_device_t,

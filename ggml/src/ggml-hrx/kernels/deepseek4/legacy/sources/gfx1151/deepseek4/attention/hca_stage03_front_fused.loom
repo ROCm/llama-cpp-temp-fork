@@ -1,0 +1,536 @@
+// GENERATED from the shared exact Yarn helper.
+
+// Match the accepted generic RoPE compile-time specialization.
+config.decl @hca3_rope_attn_factor : %value: f32
+config.decl @hca3_rope_beta_fast : %value: f32
+config.decl @hca3_rope_beta_slow : %value: f32
+config.decl @hca3_rope_ext_factor : %value: f32
+config.decl @hca3_rope_freq_base : %value: f32
+config.decl @hca3_rope_freq_scale : %value: f32
+
+func.def inline @dsv4_yarn_normal_pair_f32(
+    %x0: f32, %x1: f32, %pair: index, %pos_i32: i32,
+    %attn_factor: f32, %beta_fast: f32, %beta_slow: f32,
+    %ext_factor: f32, %freq_base: f32, %freq_scale: f32,
+    %n_ctx_orig: index) -> (f32, f32) {
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  %two_f32 = scalar.constant 2.0 : f32
+  %minus_two_f32 = scalar.constant -2.0 : f32
+  %point_one_f32 = scalar.constant 0.1 : f32
+  %point_001_f32 = scalar.constant 0.001 : f32
+  %two_pi_f32 = scalar.constant 6.283185307179586 : f32
+  %ln2_f32 = scalar.constant 0.6931471805599453 : f32
+  %n_dims_i32 = scalar.constant 64 : i32
+  %n_dims_f32 = scalar.sitofp %n_dims_i32 : i32 to f32
+  %theta_exponent = scalar.divf<nnan|ninf|nsz> %minus_two_f32, %n_dims_f32 : f32
+  %theta_scale = scalar.powf<afn> %freq_base, %theta_exponent : f32
+  %pos_f32 = scalar.sitofp %pos_i32 : i32 to f32
+  %pair_i32 = index.cast %pair : index to i32
+  %pair_f32 = scalar.sitofp %pair_i32 : i32 to f32
+  %theta_pow = scalar.powf<afn> %theta_scale, %pair_f32 : f32
+  %theta_extrap = scalar.mulf<nnan|ninf|nsz> %pos_f32, %theta_pow : f32
+  %theta_interp = scalar.mulf<nnan|ninf|nsz> %theta_extrap, %freq_scale : f32
+  %n_ctx_orig_i32 = index.cast %n_ctx_orig : index to i32
+  %n_ctx_orig_f32 = scalar.sitofp %n_ctx_orig_i32 : i32 to f32
+  %freq_base_log2 = scalar.log2f<afn> %freq_base : f32
+  %corr_den = scalar.mulf<nnan|ninf|nsz> %two_f32, %freq_base_log2 : f32
+  %fast_two_pi = scalar.mulf<nnan|ninf|nsz> %beta_fast, %two_pi_f32 : f32
+  %slow_two_pi = scalar.mulf<nnan|ninf|nsz> %beta_slow, %two_pi_f32 : f32
+  %fast_arg = scalar.divf<nnan|ninf|nsz> %n_ctx_orig_f32, %fast_two_pi : f32
+  %slow_arg = scalar.divf<nnan|ninf|nsz> %n_ctx_orig_f32, %slow_two_pi : f32
+  %fast_log2 = scalar.log2f<afn> %fast_arg : f32
+  %slow_log2 = scalar.log2f<afn> %slow_arg : f32
+  %corr_start_num = scalar.mulf<nnan|ninf|nsz> %n_dims_f32, %fast_log2 : f32
+  %corr_end_num = scalar.mulf<nnan|ninf|nsz> %n_dims_f32, %slow_log2 : f32
+  %corr_start_raw = scalar.divf<nnan|ninf|nsz> %corr_start_num, %corr_den : f32
+  %corr_end_raw = scalar.divf<nnan|ninf|nsz> %corr_end_num, %corr_den : f32
+  %corr_start_floor = scalar.floorf %corr_start_raw : f32
+  %corr_end_ceil = scalar.ceilf %corr_end_raw : f32
+  %corr_start_lt_zero = scalar.cmpf olt, %corr_start_floor, %zero_f32 : f32
+  %corr_start = scf.if %corr_start_lt_zero -> (f32) {
+    scf.yield %zero_f32 : f32
+  } else {
+    scf.yield %corr_start_floor : f32
+  }
+  %n_dims_minus_one = scalar.subf<nnan|ninf|nsz> %n_dims_f32, %one_f32 : f32
+  %corr_end_gt_max = scalar.cmpf ogt, %corr_end_ceil, %n_dims_minus_one : f32
+  %corr_end = scf.if %corr_end_gt_max -> (f32) {
+    scf.yield %n_dims_minus_one : f32
+  } else {
+    scf.yield %corr_end_ceil : f32
+  }
+  %corr_span = scalar.subf<nnan|ninf|nsz> %corr_end, %corr_start : f32
+  %corr_span_small = scalar.cmpf olt, %corr_span, %point_001_f32 : f32
+  %corr_den_safe = scf.if %corr_span_small -> (f32) {
+    scf.yield %point_001_f32 : f32
+  } else {
+    scf.yield %corr_span : f32
+  }
+  %pair_minus_start = scalar.subf<nnan|ninf|nsz> %pair_f32, %corr_start : f32
+  %ramp_unclamped = scalar.divf<nnan|ninf|nsz> %pair_minus_start, %corr_den_safe : f32
+  %ramp_lt_zero = scalar.cmpf olt, %ramp_unclamped, %zero_f32 : f32
+  %ramp_nonnegative = scf.if %ramp_lt_zero -> (f32) {
+    scf.yield %zero_f32 : f32
+  } else {
+    scf.yield %ramp_unclamped : f32
+  }
+  %ramp_gt_one = scalar.cmpf ogt, %ramp_nonnegative, %one_f32 : f32
+  %ramp_clamped = scf.if %ramp_gt_one -> (f32) {
+    scf.yield %one_f32 : f32
+  } else {
+    scf.yield %ramp_nonnegative : f32
+  }
+  %ramp = scalar.subf<nnan|ninf|nsz> %one_f32, %ramp_clamped : f32
+  %ramp_mix = scalar.mulf<nnan|ninf|nsz> %ramp, %ext_factor : f32
+  %one_minus_mix = scalar.subf<nnan|ninf|nsz> %one_f32, %ramp_mix : f32
+  %interp_part = scalar.mulf<nnan|ninf|nsz> %theta_interp, %one_minus_mix : f32
+  %extrap_part = scalar.mulf<nnan|ninf|nsz> %theta_extrap, %ramp_mix : f32
+  %theta = scalar.addf<nnan|ninf|nsz> %interp_part, %extrap_part : f32
+  %freq_scale_inv = scalar.divf<nnan|ninf|nsz> %one_f32, %freq_scale : f32
+  %freq_scale_inv_log2 = scalar.log2f<afn> %freq_scale_inv : f32
+  %freq_scale_inv_log = scalar.mulf<nnan|ninf|nsz> %freq_scale_inv_log2, %ln2_f32 : f32
+  %mscale_delta0 = scalar.mulf<nnan|ninf|nsz> %point_one_f32, %freq_scale_inv_log : f32
+  %mscale_delta = scalar.addf<nnan|ninf|nsz> %one_f32, %mscale_delta0 : f32
+  %mscale = scalar.mulf<nnan|ninf|nsz> %attn_factor, %mscale_delta : f32
+  %cos0 = scalar.cosf<afn> %theta : f32
+  %sin0 = scalar.sinf<afn> %theta : f32
+  %cos_theta = scalar.mulf<nnan|ninf|nsz> %cos0, %mscale : f32
+  %sin_theta = scalar.mulf<nnan|ninf|nsz> %sin0, %mscale : f32
+  %x0_cos = scalar.mulf<nnan|ninf|nsz> %x0, %cos_theta : f32
+  %x1_sin = scalar.mulf<nnan|ninf|nsz> %x1, %sin_theta : f32
+  %out0 = scalar.subf<nnan|ninf|nsz> %x0_cos, %x1_sin : f32
+  %x0_sin = scalar.mulf<nnan|ninf|nsz> %x0, %sin_theta : f32
+  %x1_cos = scalar.mulf<nnan|ninf|nsz> %x1, %cos_theta : f32
+  %out1 = scalar.addf<nnan|ninf|nsz> %x0_sin, %x1_cos : f32
+  func.return %out0, %out1 : f32, f32
+}
+
+func.def inline @dsv4_hca_stage03_value_f32(
+    %src: buffer, %weight: buffer, %pos: buffer, %row: index, %col: index,
+    %rms_scale: f32, %attn_factor: f32, %beta_fast: f32, %beta_slow: f32,
+    %ext_factor: f32, %freq_base: f32, %freq_scale: f32,
+    %n_ctx_orig: index) -> (f32) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %c448 = index.constant 448 : index
+  %c512 = index.constant 512 : index
+  %src_v = buffer.view %src[%base] : buffer -> view<2048xf32, #dense>
+  %weight_v = buffer.view %weight[%base] : buffer -> view<512xf32, #dense>
+  %pos_v = buffer.view %pos[%base] : buffer -> view<4xi32, #dense>
+  %row_base0 = index.mul %row, %c512 : index
+  %row_base = index.assume %row_base0 [range(%row_base0, 0, 1536)] : index
+  %is_prefix = index.cmp ult, %col, %c448 : index
+  %value = scf.if %is_prefix -> (f32) {
+    %src_index0 = index.add %row_base, %col : index
+    %src_index = index.assume %src_index0 [range(%src_index0, 0, 2047)] : index
+    %x = view.load %src_v[%src_index] : view<2048xf32, #dense> -> f32
+    %w = view.load %weight_v[%col] : view<512xf32, #dense> -> f32
+    %normed = scalar.mulf<nnan|ninf|nsz> %x, %rms_scale : f32
+    %weighted = scalar.mulf<nnan|ninf|nsz> %normed, %w : f32
+    scf.yield %weighted : f32
+  } else {
+    %tail_col = index.sub %col, %c448 : index
+    %pair = index.div %tail_col, %two : index
+    %pair2 = index.mul %pair, %two : index
+    %pair_col0 = index.add %c448, %pair2 : index
+    %pair_col1 = index.add %pair_col0, %one : index
+    %src_index0_0 = index.add %row_base, %pair_col0 : index
+    %src_index1_0 = index.add %row_base, %pair_col1 : index
+    %src_index0 = index.assume %src_index0_0 [range(%src_index0_0, 0, 2046)] : index
+    %src_index1 = index.assume %src_index1_0 [range(%src_index1_0, 1, 2047)] : index
+    %raw0 = view.load %src_v[%src_index0] : view<2048xf32, #dense> -> f32
+    %raw1 = view.load %src_v[%src_index1] : view<2048xf32, #dense> -> f32
+    %w0 = view.load %weight_v[%pair_col0] : view<512xf32, #dense> -> f32
+    %w1 = view.load %weight_v[%pair_col1] : view<512xf32, #dense> -> f32
+    %norm0 = scalar.mulf<nnan|ninf|nsz> %raw0, %rms_scale : f32
+    %norm1 = scalar.mulf<nnan|ninf|nsz> %raw1, %rms_scale : f32
+    %x0 = scalar.mulf<nnan|ninf|nsz> %norm0, %w0 : f32
+    %x1 = scalar.mulf<nnan|ninf|nsz> %norm1, %w1 : f32
+    %pos_i32 = view.load %pos_v[%row] : view<4xi32, #dense> -> i32
+    %out0, %out1 = func.call inline @dsv4_yarn_normal_pair_f32(
+        %x0, %x1, %pair, %pos_i32, %attn_factor, %beta_fast, %beta_slow,
+        %ext_factor, %freq_base, %freq_scale, %n_ctx_orig)
+        : (f32, f32, index, i32, f32, f32, f32, f32, f32, f32, index) -> (f32, f32)
+    %parity = index.rem %tail_col, %two : index
+    %is_even = index.cmp eq, %parity, %zero : index
+    %selected = scf.if %is_even -> (f32) {
+      scf.yield %out0 : f32
+    } else {
+      scf.yield %out1 : f32
+    }
+    scf.yield %selected : f32
+  }
+  func.return %value : f32
+}
+
+kernel.def export("hrx2_dsv4_hca_stage03_front_f32_f16") @hrx2_dsv4_hca_stage03_front_f32_f16() {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%one, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%eps: f32,
+         %src: buffer, %weight: buffer, %pos: buffer, %set_indices: buffer,
+         %cache_k: buffer, %sum: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %c256 = index.constant 256 : index
+  %c512 = index.constant 512 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %zero_i32 = scalar.constant 0 : i32
+  %ncols_i32 = scalar.constant 512 : i32
+  %ncols_f32 = scalar.sitofp %ncols_i32 : i32 to f32
+  %n_ctx_orig = index.constant 65536 : index
+  %attn_factor = config.get @hca3_rope_attn_factor : f32
+  %beta_fast = config.get @hca3_rope_beta_fast : f32
+  %beta_slow = config.get @hca3_rope_beta_slow : f32
+  %ext_factor = config.get @hca3_rope_ext_factor : f32
+  %freq_base = config.get @hca3_rope_freq_base : f32
+  %freq_scale = config.get @hca3_rope_freq_scale : f32
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %src_g = buffer.assume.memory_space<global> %src : buffer
+  %weight_g = buffer.assume.memory_space<global> %weight : buffer
+  %pos_g = buffer.assume.memory_space<global> %pos : buffer
+  %indices_g = buffer.assume.memory_space<global> %set_indices : buffer
+  %cache_g = buffer.assume.memory_space<global> %cache_k : buffer
+  %sum_g = buffer.assume.memory_space<global> %sum : buffer
+  %src_na, %weight_na, %pos_na, %indices_na, %cache_na, %sum_na =
+      buffer.assume.noalias %src_g, %weight_g, %pos_g, %indices_g, %cache_g,
+      %sum_g : buffer, buffer, buffer, buffer, buffer, buffer
+  %src_v = buffer.view %src_na[%base] : buffer -> view<2048xf32, #dense>
+  %indices_v = buffer.view %indices_na[%base] : buffer -> view<8xi32, #dense>
+  %cache_v = buffer.view %cache_na[%base] : buffer -> view<131072xi16, #dense>
+  %sum_v = buffer.view %sum_na[%base] : buffer -> view<1xf32, #dense>
+
+  %r0_base = index.constant 0 : index
+  // Preserve the accepted strided RMS kernel's reduction recurrence exactly:
+  // each of 256 lanes accumulates col=lane, then col=lane+256, before the
+  // workgroup reduction.  A 32-lane vector reduction changes association and
+  // can cross an F16 rounding boundary in the recurrent cache publication.
+  %r0_index0_0 = index.add %r0_base, %lane : index
+  %r0_index1_0 = index.add %r0_index0_0, %c256 : index
+  %r0_index0 = index.assume %r0_index0_0
+      [range(%r0_index0_0, 0, 255)] : index
+  %r0_index1 = index.assume %r0_index1_0
+      [range(%r0_index1_0, 256, 511)] : index
+  %r0_src0 = view.load %src_v[%r0_index0] :
+      view<2048xf32, #dense> -> f32
+  %r0_src1 = view.load %src_v[%r0_index1] :
+      view<2048xf32, #dense> -> f32
+  %r0_square0 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r0_src0, %r0_src0 : f32
+  %r0_square1 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r0_src1, %r0_src1 : f32
+  %r0_lane_sum0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %zero_f32, %r0_square0 : f32
+  %r0_lane_sum = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r0_lane_sum0, %r0_square1 : f32
+  %r0_sum = kernel.workgroup.reduce<addf> %r0_lane_sum : f32
+  %r0_mean = scalar.divf<reassoc|nnan|ninf|nsz>
+      %r0_sum, %ncols_f32 : f32
+  %r0_biased = scalar.addf<nnan|ninf|nsz> %r0_mean, %eps : f32
+  %r0_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %r0_biased : f32
+  %r0_row = index.constant 0 : index
+  %r0_col0_out0 = index.add %lane, %zero : index
+  %r0_col0_out = index.assume %r0_col0_out0
+      [range(%r0_col0_out0, 0, 255)] : index
+  %r0_col1_out0 = index.add %lane, %c256 : index
+  %r0_col1_out = index.assume %r0_col1_out0
+      [range(%r0_col1_out0, 256, 511)] : index
+  %r0_value0 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r0_row, %r0_col0_out,
+      %r0_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r0_value1 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r0_row, %r0_col1_out,
+      %r0_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r0_index_word0 = index.constant 0 : index
+  %r0_cache_row_i32 = view.load %indices_v[%r0_index_word0] :
+      view<8xi32, #dense> -> i32
+  %r0_cache_row_nonnegative = scalar.cmpi sge, %r0_cache_row_i32,
+      %zero_i32 : i32
+  scf.if %r0_cache_row_nonnegative {
+    %r0_cache_row = index.cast %r0_cache_row_i32 : i32 to index
+    %r0_cache_row_valid = index.cmp ult, %r0_cache_row, %c256 : index
+    scf.if %r0_cache_row_valid {
+      %r0_cache_base0 = index.mul %r0_cache_row, %c512 : index
+      %r0_cache_index0_0 = index.add %r0_cache_base0,
+          %r0_col0_out : index
+      %r0_cache_index1_0 = index.add %r0_cache_base0,
+          %r0_col1_out : index
+      %r0_cache_index0 = index.assume %r0_cache_index0_0
+          [range(%r0_cache_index0_0, 0, 131071)] : index
+      %r0_cache_index1 = index.assume %r0_cache_index1_0
+          [range(%r0_cache_index1_0, 0, 131071)] : index
+      %r0_half0 = scalar.fptrunc %r0_value0 : f32 to f16
+      %r0_half1 = scalar.fptrunc %r0_value1 : f32 to f16
+      %r0_half_bits0 = scalar.bitcast %r0_half0 : f16 to i16
+      %r0_half_bits1 = scalar.bitcast %r0_half1 : f16 to i16
+      view.store %r0_half_bits0, %cache_v[%r0_cache_index0] :
+          i16, view<131072xi16, #dense>
+      view.store %r0_half_bits1, %cache_v[%r0_cache_index1] :
+          i16, view<131072xi16, #dense>
+    }
+  }
+  %r0_acc0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %zero_f32, %r0_value0 : f32
+  %r0_acc1 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r0_acc0, %r0_value1 : f32
+
+  %r1_base = index.constant 512 : index
+  // Preserve the accepted strided RMS kernel's reduction recurrence exactly:
+  // each of 256 lanes accumulates col=lane, then col=lane+256, before the
+  // workgroup reduction.  A 32-lane vector reduction changes association and
+  // can cross an F16 rounding boundary in the recurrent cache publication.
+  %r1_index0_0 = index.add %r1_base, %lane : index
+  %r1_index1_0 = index.add %r1_index0_0, %c256 : index
+  %r1_index0 = index.assume %r1_index0_0
+      [range(%r1_index0_0, 512, 767)] : index
+  %r1_index1 = index.assume %r1_index1_0
+      [range(%r1_index1_0, 768, 1023)] : index
+  %r1_src0 = view.load %src_v[%r1_index0] :
+      view<2048xf32, #dense> -> f32
+  %r1_src1 = view.load %src_v[%r1_index1] :
+      view<2048xf32, #dense> -> f32
+  %r1_square0 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r1_src0, %r1_src0 : f32
+  %r1_square1 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r1_src1, %r1_src1 : f32
+  %r1_lane_sum0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %zero_f32, %r1_square0 : f32
+  %r1_lane_sum = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r1_lane_sum0, %r1_square1 : f32
+  %r1_sum = kernel.workgroup.reduce<addf> %r1_lane_sum : f32
+  %r1_mean = scalar.divf<reassoc|nnan|ninf|nsz>
+      %r1_sum, %ncols_f32 : f32
+  %r1_biased = scalar.addf<nnan|ninf|nsz> %r1_mean, %eps : f32
+  %r1_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %r1_biased : f32
+  %r1_row = index.constant 1 : index
+  %r1_col0_out0 = index.add %lane, %zero : index
+  %r1_col0_out = index.assume %r1_col0_out0
+      [range(%r1_col0_out0, 0, 255)] : index
+  %r1_col1_out0 = index.add %lane, %c256 : index
+  %r1_col1_out = index.assume %r1_col1_out0
+      [range(%r1_col1_out0, 256, 511)] : index
+  %r1_value0 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r1_row, %r1_col0_out,
+      %r1_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r1_value1 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r1_row, %r1_col1_out,
+      %r1_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r1_index_word0 = index.constant 2 : index
+  %r1_cache_row_i32 = view.load %indices_v[%r1_index_word0] :
+      view<8xi32, #dense> -> i32
+  %r1_cache_row_nonnegative = scalar.cmpi sge, %r1_cache_row_i32,
+      %zero_i32 : i32
+  scf.if %r1_cache_row_nonnegative {
+    %r1_cache_row = index.cast %r1_cache_row_i32 : i32 to index
+    %r1_cache_row_valid = index.cmp ult, %r1_cache_row, %c256 : index
+    scf.if %r1_cache_row_valid {
+      %r1_cache_base0 = index.mul %r1_cache_row, %c512 : index
+      %r1_cache_index0_0 = index.add %r1_cache_base0,
+          %r1_col0_out : index
+      %r1_cache_index1_0 = index.add %r1_cache_base0,
+          %r1_col1_out : index
+      %r1_cache_index0 = index.assume %r1_cache_index0_0
+          [range(%r1_cache_index0_0, 0, 131071)] : index
+      %r1_cache_index1 = index.assume %r1_cache_index1_0
+          [range(%r1_cache_index1_0, 0, 131071)] : index
+      %r1_half0 = scalar.fptrunc %r1_value0 : f32 to f16
+      %r1_half1 = scalar.fptrunc %r1_value1 : f32 to f16
+      %r1_half_bits0 = scalar.bitcast %r1_half0 : f16 to i16
+      %r1_half_bits1 = scalar.bitcast %r1_half1 : f16 to i16
+      view.store %r1_half_bits0, %cache_v[%r1_cache_index0] :
+          i16, view<131072xi16, #dense>
+      view.store %r1_half_bits1, %cache_v[%r1_cache_index1] :
+          i16, view<131072xi16, #dense>
+    }
+  }
+  %r1_acc0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r0_acc1, %r1_value0 : f32
+  %r1_acc1 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r1_acc0, %r1_value1 : f32
+
+  %r2_base = index.constant 1024 : index
+  // Preserve the accepted strided RMS kernel's reduction recurrence exactly:
+  // each of 256 lanes accumulates col=lane, then col=lane+256, before the
+  // workgroup reduction.  A 32-lane vector reduction changes association and
+  // can cross an F16 rounding boundary in the recurrent cache publication.
+  %r2_index0_0 = index.add %r2_base, %lane : index
+  %r2_index1_0 = index.add %r2_index0_0, %c256 : index
+  %r2_index0 = index.assume %r2_index0_0
+      [range(%r2_index0_0, 1024, 1279)] : index
+  %r2_index1 = index.assume %r2_index1_0
+      [range(%r2_index1_0, 1280, 1535)] : index
+  %r2_src0 = view.load %src_v[%r2_index0] :
+      view<2048xf32, #dense> -> f32
+  %r2_src1 = view.load %src_v[%r2_index1] :
+      view<2048xf32, #dense> -> f32
+  %r2_square0 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r2_src0, %r2_src0 : f32
+  %r2_square1 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r2_src1, %r2_src1 : f32
+  %r2_lane_sum0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %zero_f32, %r2_square0 : f32
+  %r2_lane_sum = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r2_lane_sum0, %r2_square1 : f32
+  %r2_sum = kernel.workgroup.reduce<addf> %r2_lane_sum : f32
+  %r2_mean = scalar.divf<reassoc|nnan|ninf|nsz>
+      %r2_sum, %ncols_f32 : f32
+  %r2_biased = scalar.addf<nnan|ninf|nsz> %r2_mean, %eps : f32
+  %r2_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %r2_biased : f32
+  %r2_row = index.constant 2 : index
+  %r2_col0_out0 = index.add %lane, %zero : index
+  %r2_col0_out = index.assume %r2_col0_out0
+      [range(%r2_col0_out0, 0, 255)] : index
+  %r2_col1_out0 = index.add %lane, %c256 : index
+  %r2_col1_out = index.assume %r2_col1_out0
+      [range(%r2_col1_out0, 256, 511)] : index
+  %r2_value0 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r2_row, %r2_col0_out,
+      %r2_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r2_value1 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r2_row, %r2_col1_out,
+      %r2_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r2_index_word0 = index.constant 4 : index
+  %r2_cache_row_i32 = view.load %indices_v[%r2_index_word0] :
+      view<8xi32, #dense> -> i32
+  %r2_cache_row_nonnegative = scalar.cmpi sge, %r2_cache_row_i32,
+      %zero_i32 : i32
+  scf.if %r2_cache_row_nonnegative {
+    %r2_cache_row = index.cast %r2_cache_row_i32 : i32 to index
+    %r2_cache_row_valid = index.cmp ult, %r2_cache_row, %c256 : index
+    scf.if %r2_cache_row_valid {
+      %r2_cache_base0 = index.mul %r2_cache_row, %c512 : index
+      %r2_cache_index0_0 = index.add %r2_cache_base0,
+          %r2_col0_out : index
+      %r2_cache_index1_0 = index.add %r2_cache_base0,
+          %r2_col1_out : index
+      %r2_cache_index0 = index.assume %r2_cache_index0_0
+          [range(%r2_cache_index0_0, 0, 131071)] : index
+      %r2_cache_index1 = index.assume %r2_cache_index1_0
+          [range(%r2_cache_index1_0, 0, 131071)] : index
+      %r2_half0 = scalar.fptrunc %r2_value0 : f32 to f16
+      %r2_half1 = scalar.fptrunc %r2_value1 : f32 to f16
+      %r2_half_bits0 = scalar.bitcast %r2_half0 : f16 to i16
+      %r2_half_bits1 = scalar.bitcast %r2_half1 : f16 to i16
+      view.store %r2_half_bits0, %cache_v[%r2_cache_index0] :
+          i16, view<131072xi16, #dense>
+      view.store %r2_half_bits1, %cache_v[%r2_cache_index1] :
+          i16, view<131072xi16, #dense>
+    }
+  }
+  %r2_acc0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r1_acc1, %r2_value0 : f32
+  %r2_acc1 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r2_acc0, %r2_value1 : f32
+
+  %r3_base = index.constant 1536 : index
+  // Preserve the accepted strided RMS kernel's reduction recurrence exactly:
+  // each of 256 lanes accumulates col=lane, then col=lane+256, before the
+  // workgroup reduction.  A 32-lane vector reduction changes association and
+  // can cross an F16 rounding boundary in the recurrent cache publication.
+  %r3_index0_0 = index.add %r3_base, %lane : index
+  %r3_index1_0 = index.add %r3_index0_0, %c256 : index
+  %r3_index0 = index.assume %r3_index0_0
+      [range(%r3_index0_0, 1536, 1791)] : index
+  %r3_index1 = index.assume %r3_index1_0
+      [range(%r3_index1_0, 1792, 2047)] : index
+  %r3_src0 = view.load %src_v[%r3_index0] :
+      view<2048xf32, #dense> -> f32
+  %r3_src1 = view.load %src_v[%r3_index1] :
+      view<2048xf32, #dense> -> f32
+  %r3_square0 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r3_src0, %r3_src0 : f32
+  %r3_square1 = scalar.mulf<reassoc|nnan|ninf|nsz>
+      %r3_src1, %r3_src1 : f32
+  %r3_lane_sum0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %zero_f32, %r3_square0 : f32
+  %r3_lane_sum = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r3_lane_sum0, %r3_square1 : f32
+  %r3_sum = kernel.workgroup.reduce<addf> %r3_lane_sum : f32
+  %r3_mean = scalar.divf<reassoc|nnan|ninf|nsz>
+      %r3_sum, %ncols_f32 : f32
+  %r3_biased = scalar.addf<nnan|ninf|nsz> %r3_mean, %eps : f32
+  %r3_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %r3_biased : f32
+  %r3_row = index.constant 3 : index
+  %r3_col0_out0 = index.add %lane, %zero : index
+  %r3_col0_out = index.assume %r3_col0_out0
+      [range(%r3_col0_out0, 0, 255)] : index
+  %r3_col1_out0 = index.add %lane, %c256 : index
+  %r3_col1_out = index.assume %r3_col1_out0
+      [range(%r3_col1_out0, 256, 511)] : index
+  %r3_value0 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r3_row, %r3_col0_out,
+      %r3_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r3_value1 = func.call inline @dsv4_hca_stage03_value_f32(
+      %src_na, %weight_na, %pos_na, %r3_row, %r3_col1_out,
+      %r3_scale, %attn_factor, %beta_fast, %beta_slow, %ext_factor,
+      %freq_base, %freq_scale, %n_ctx_orig)
+      : (buffer, buffer, buffer, index, index, f32, f32, f32, f32, f32,
+         f32, f32, index) -> (f32)
+  %r3_index_word0 = index.constant 6 : index
+  %r3_cache_row_i32 = view.load %indices_v[%r3_index_word0] :
+      view<8xi32, #dense> -> i32
+  %r3_cache_row_nonnegative = scalar.cmpi sge, %r3_cache_row_i32,
+      %zero_i32 : i32
+  scf.if %r3_cache_row_nonnegative {
+    %r3_cache_row = index.cast %r3_cache_row_i32 : i32 to index
+    %r3_cache_row_valid = index.cmp ult, %r3_cache_row, %c256 : index
+    scf.if %r3_cache_row_valid {
+      %r3_cache_base0 = index.mul %r3_cache_row, %c512 : index
+      %r3_cache_index0_0 = index.add %r3_cache_base0,
+          %r3_col0_out : index
+      %r3_cache_index1_0 = index.add %r3_cache_base0,
+          %r3_col1_out : index
+      %r3_cache_index0 = index.assume %r3_cache_index0_0
+          [range(%r3_cache_index0_0, 0, 131071)] : index
+      %r3_cache_index1 = index.assume %r3_cache_index1_0
+          [range(%r3_cache_index1_0, 0, 131071)] : index
+      %r3_half0 = scalar.fptrunc %r3_value0 : f32 to f16
+      %r3_half1 = scalar.fptrunc %r3_value1 : f32 to f16
+      %r3_half_bits0 = scalar.bitcast %r3_half0 : f16 to i16
+      %r3_half_bits1 = scalar.bitcast %r3_half1 : f16 to i16
+      view.store %r3_half_bits0, %cache_v[%r3_cache_index0] :
+          i16, view<131072xi16, #dense>
+      view.store %r3_half_bits1, %cache_v[%r3_cache_index1] :
+          i16, view<131072xi16, #dense>
+    }
+  }
+  %r3_acc0 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r2_acc1, %r3_value0 : f32
+  %r3_acc1 = scalar.addf<reassoc|nnan|ninf|nsz>
+      %r3_acc0, %r3_value1 : f32
+
+  %total_sum = kernel.workgroup.reduce<addf> %r3_acc1 : f32
+  %is_lane0 = index.cmp eq, %lane, %zero : index
+  scf.if %is_lane0 {
+    view.store %total_sum, %sum_v[%zero] : f32, view<1xf32, #dense>
+  }
+  kernel.return
+}

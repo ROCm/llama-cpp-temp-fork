@@ -1,0 +1,58 @@
+config.decl @hrx2_shape_soft_max_ncols : %value: index where [range(%value, 1, 256)]
+config.decl @hrx2_shape_soft_max_nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_tuning_soft_max_workgroup_size : %value: index where [range(%value, 32, 256), mul(%value, 32)]
+
+kernel.def export("hrx2_soft_max_f32_nomask") @hrx2_soft_max_f32_nomask() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2_shape_soft_max_nrows : index
+  %workgroup_size = config.get @hrx2_tuning_soft_max_workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%scale: f32, %src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2_shape_soft_max_ncols : index
+  %nrows = config.get @hrx2_shape_soft_max_nrows : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 256)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %minus_inf = scalar.constant -3.4028234663852886e+38 : f32
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %dst_global : buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %row_offset0 = index.mul %row, %ncols_bounded : index
+  %row_offset = index.assume %row_offset0 [range(%row_offset0, 0, 1073741823)] : index
+  %col_in_bounds = index.cmp ult, %lane, %ncols_bounded : index
+  %input_value = scf.if %col_in_bounds -> (f32) {
+    %idx0 = index.add %row_offset, %lane : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    %x = view.load %src0_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %scaled = scalar.mulf<nnan|ninf|nsz> %x, %scale : f32
+    scf.yield %scaled : f32
+  } else {
+    scf.yield %minus_inf : f32
+  }
+
+  %row_max = kernel.workgroup.reduce<maxnumf> %input_value : f32
+  %shifted = scalar.subf<nnan|ninf|nsz> %input_value, %row_max : f32
+  %exp_value = scf.if %col_in_bounds -> (f32) {
+    %exp0 = scalar.expf<afn> %shifted : f32
+    scf.yield %exp0 : f32
+  } else {
+    scf.yield %zero_f32 : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %exp_value : f32
+  %norm = scalar.divf<nnan|ninf|nsz|arcp> %exp_value, %row_sum : f32
+  scf.if %col_in_bounds {
+    %idx0 = index.add %row_offset, %lane : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    view.store %norm, %dst_view[%idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}

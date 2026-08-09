@@ -1,0 +1,119 @@
+config.decl @shape_top_k_ncols : %value: index where [range(%value, 1, 8192)]
+config.decl @shape_top_k_nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_top_k_k : %value: index where [range(%value, 1, 512)]
+config.decl @shape_top_k_src_total_size : %value: index where [range(%value, 1, 1073741824)]
+config.decl @shape_top_k_dst_total_size : %value: index where [range(%value, 1, 1073741824)]
+config.decl @tuning_top_k_workgroup_size : %value: index where [range(%value, 32, 32)]
+
+kernel.def export("hrx2_top_k_f32_i32") @hrx2_top_k_f32_i32() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @shape_top_k_nrows : index
+  %workgroup_size = config.get @tuning_top_k_workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %scores_offset = index.constant 0 : offset
+  %selected_offset = index.constant 32768 : offset
+  %scratch_bytes = index.constant 33792 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %thirty_two = index.constant 32 : index
+  %two_fifty_six = index.constant 256 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %negative_inf_bits = scalar.constant -8388608 : i32
+  %negative_inf = scalar.bitcast %negative_inf_bits : i32 to f32
+  %ncols = config.get @shape_top_k_ncols : index
+  %nrows = config.get @shape_top_k_nrows : index
+  %k = config.get @shape_top_k_k : index
+  %src_total_size = config.get @shape_top_k_src_total_size : index
+  %dst_total_size = config.get @shape_top_k_dst_total_size : index
+  %workgroup_size = config.get @tuning_top_k_workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 8192)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %k_bounded = index.assume %k [range(%k, 1, 512)] : index
+  %src_total_size_bounded = index.assume %src_total_size [range(%src_total_size, 1, 1073741824)] : index
+  %dst_total_size_bounded = index.assume %dst_total_size [range(%dst_total_size, 1, 1073741824)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575), lt(%row0, %nrows_bounded)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %is_lane0 = index.cmp eq, %lane, %zero : index
+  %src_row_offset0 = index.mul %row, %ncols_bounded : index
+  %src_row_offset = index.assume %src_row_offset0 [range(%src_row_offset0, 0, 1073741823), lt(%src_row_offset0, %src_total_size_bounded)] : index
+  %dst_row_offset0 = index.mul %row, %k_bounded : index
+  %dst_row_offset = index.assume %dst_row_offset0 [range(%dst_row_offset0, 0, 1073741823), lt(%dst_row_offset0, %dst_total_size_bounded)] : index
+  %ncols_i32 = index.cast %ncols_bounded : index to i32
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<[%src_total_size_bounded]xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<[%dst_total_size_bounded]xi32, #dense>
+  %scratch = buffer.alloca %scratch_bytes {base_alignment = 16, memory_space = workgroup} : buffer
+  %scores_view = buffer.view %scratch[%scores_offset] : buffer -> view<8192xf32, #dense>
+  %selected_view = buffer.view %scratch[%selected_offset] : buffer -> view<256xi32, #dense>
+
+  scf.for %word = [%lane to %two_fifty_six step %workgroup_size] {
+    view.store %zero_i32, %selected_view[%word] : i32, view<256xi32, #dense>
+  }
+  scf.for %col = [%lane to %ncols_bounded step %workgroup_size] {
+    %src_index0 = index.add %src_row_offset, %col : index
+    %src_index = index.assume %src_index0 [range(%src_index0, 0, 1073741823), lt(%src_index0, %src_total_size_bounded)] : index
+    %score = view.load %src0_view[%src_index] : view<[%src_total_size_bounded]xf32, #dense> -> f32
+    view.store %score, %scores_view[%col] : f32, view<8192xf32, #dense>
+  }
+  kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+
+  scf.for %slot = [%zero to %k_bounded step %one] {
+    %local_value = scf.for %col = [%lane to %ncols_bounded step %workgroup_size](%best_value = %negative_inf : f32) -> (f32) {
+      %selected_word_index = index.div %col, %thirty_two : index
+      %selected_bit_index = index.rem %col, %thirty_two : index
+      %selected_bit_i32 = index.cast %selected_bit_index : index to i32
+      %selected_mask = scalar.shli %one_i32, %selected_bit_i32 : i32
+      %selected_word = view.load %selected_view[%selected_word_index] : view<256xi32, #dense> -> i32
+      %selected_bits = scalar.andi %selected_word, %selected_mask : i32
+      %is_unselected = scalar.cmpi eq, %selected_bits, %zero_i32 : i32
+      %score = view.load %scores_view[%col] : view<8192xf32, #dense> -> f32
+      %greater = scalar.cmpf ogt, %score, %best_value : f32
+      %take = scalar.andi %is_unselected, %greater : i1
+      %next_value = scf.select %take, %score, %best_value : f32
+      scf.yield %next_value : f32
+    }
+    %global_value = kernel.subgroup.reduce<maxnumf> %local_value : f32
+    %local_index = scf.for %col = [%lane to %ncols_bounded step %workgroup_size](%best_index = %ncols_bounded : index) -> (index) {
+      %selected_word_index = index.div %col, %thirty_two : index
+      %selected_bit_index = index.rem %col, %thirty_two : index
+      %selected_bit_i32 = index.cast %selected_bit_index : index to i32
+      %selected_mask = scalar.shli %one_i32, %selected_bit_i32 : i32
+      %selected_word = view.load %selected_view[%selected_word_index] : view<256xi32, #dense> -> i32
+      %selected_bits = scalar.andi %selected_word, %selected_mask : i32
+      %is_unselected = scalar.cmpi eq, %selected_bits, %zero_i32 : i32
+      %score = view.load %scores_view[%col] : view<8192xf32, #dense> -> f32
+      %matches_global = scalar.cmpf oeq, %score, %global_value : f32
+      %lower_index = index.cmp ult, %col, %best_index : index
+      %is_candidate = scalar.andi %is_unselected, %matches_global : i1
+      %take = scalar.andi %is_candidate, %lower_index : i1
+      %next_index = scf.select %take, %col, %best_index : index
+      scf.yield %next_index : index
+    }
+    %local_index_i32 = index.cast %local_index : index to i32
+    %chosen_i32 = kernel.subgroup.reduce<minsi> %local_index_i32 : i32
+
+    scf.if %is_lane0 {
+      %chosen0 = index.cast %chosen_i32 : i32 to index
+      %chosen = index.assume %chosen0 [range(%chosen0, 0, 8191), lt(%chosen0, %ncols_bounded)] : index
+      %dst_index0 = index.add %dst_row_offset, %slot : index
+      %dst_index = index.assume %dst_index0 [range(%dst_index0, 0, 1073741823), lt(%dst_index0, %dst_total_size_bounded)] : index
+      view.store %chosen_i32, %dst_view[%dst_index] : i32, view<[%dst_total_size_bounded]xi32, #dense>
+      %selected_word_index = index.div %chosen, %thirty_two : index
+      %selected_bit_index = index.rem %chosen, %thirty_two : index
+      %selected_bit_i32 = index.cast %selected_bit_index : index to i32
+      %selected_mask = scalar.shli %one_i32, %selected_bit_i32 : i32
+      %selected_word = view.load %selected_view[%selected_word_index] : view<256xi32, #dense> -> i32
+      %selected_word_next = scalar.ori %selected_word, %selected_mask : i32
+      view.store %selected_word_next, %selected_view[%selected_word_index] : i32, view<256xi32, #dense>
+    }
+    kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+  }
+  kernel.return
+}

@@ -1,0 +1,137 @@
+// Native CSA stage-6 storage glue and state publication.
+
+kernel.def export("hrx2_dsv4_csa_stage6_concat_rope_f32") @hrx2_dsv4_csa_stage6_concat_rope_f32() {
+  %one = index.constant 1 : index
+  %groups = index.constant 64 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%groups, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%prefix_source: buffer, %rope_tail: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %wg0 = kernel.workgroup.id<x> : index
+  %wg = index.assume %wg0 [range(%wg0, 0, 63)] : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %linear0 = index.madd %wg, %c256, %tid : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 16383)] : index
+  %feature = index.rem %linear, %c128 : index
+  %row = index.div %linear, %c128 : index
+  %prefix_g = buffer.assume.memory_space<global> %prefix_source : buffer
+  %rope_g = buffer.assume.memory_space<global> %rope_tail : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %prefix_na, %rope_na, %dst_na = buffer.assume.noalias %prefix_g, %rope_g, %dst_g : buffer, buffer, buffer
+  %prefix_v = buffer.view %prefix_na[%base] : buffer -> view<16384xf32, #dense>
+  %rope_v = buffer.view %rope_na[%base] : buffer -> view<8192xf32, #dense>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<16384xf32, #dense>
+  %is_prefix = index.cmp ult, %feature, %c64 : index
+  %value = scf.if %is_prefix -> (f32) {
+    %source_index0 = index.madd %row, %c128, %feature : index
+    %source_index = index.assume %source_index0 [range(%source_index0, 0, 16319)] : index
+    %x = view.load %prefix_v[%source_index] : view<16384xf32, #dense> -> f32
+    scf.yield %x : f32
+  } else {
+    %tail_feature = index.sub %feature, %c64 : index
+    %source_index0 = index.madd %row, %c64, %tail_feature : index
+    %source_index = index.assume %source_index0 [range(%source_index0, 0, 8191)] : index
+    %x = view.load %rope_v[%source_index] : view<8192xf32, #dense> -> f32
+    scf.yield %x : f32
+  }
+  view.store %value, %dst_v[%linear] : f32, view<16384xf32, #dense>
+  kernel.return
+}
+
+kernel.def export("hrx2_dsv4_csa_stage6_state_publish_f32_f16") @hrx2_dsv4_csa_stage6_state_publish_f32_f16() {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%one, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%scale0: f32, %bias0: f32, %scale1: f32, %bias1: f32,
+         %projection: buffer, %cache_indices: buffer, %cache_dst: buffer,
+         %state0: buffer, %select_indices: buffer, %update_indices: buffer,
+         %state_dst0: buffer, %state1: buffer, %state_dst1: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %two = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c16384 = index.constant 16384 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %projection_g = buffer.assume.memory_space<global> %projection : buffer
+  %cache_indices_g = buffer.assume.memory_space<global> %cache_indices : buffer
+  %cache_dst_g = buffer.assume.memory_space<global> %cache_dst : buffer
+  %state0_g = buffer.assume.memory_space<global> %state0 : buffer
+  %select_indices_g = buffer.assume.memory_space<global> %select_indices : buffer
+  %update_indices_g = buffer.assume.memory_space<global> %update_indices : buffer
+  %state_dst0_g = buffer.assume.memory_space<global> %state_dst0 : buffer
+  %state1_g = buffer.assume.memory_space<global> %state1 : buffer
+  %state_dst1_g = buffer.assume.memory_space<global> %state_dst1 : buffer
+  %projection_v = buffer.view %projection_g[%base] : buffer -> view<16384xf32, #dense>
+  // I64 indices are consumed exactly like the accepted SET_ROWS kernel: the
+  // low i32 word at a two-i32 element stride.
+  %cache_indices_v = buffer.view %cache_indices_g[%base] : buffer -> view<256xi32, #dense>
+  %cache_dst_v = buffer.view %cache_dst_g[%base] : buffer -> view<32768xi16, #dense>
+  %state0_v = buffer.view %state0_g[%base] : buffer -> view<131072xf32, #dense>
+  %select_indices_v = buffer.view %select_indices_g[%base] : buffer -> view<8xi32, #dense>
+  %update_indices_v = buffer.view %update_indices_g[%base] : buffer -> view<8xi32, #dense>
+  %state_dst0_v = buffer.view %state_dst0_g[%base] : buffer -> view<2048xf32, #dense>
+  %state1_v = buffer.view %state1_g[%base] : buffer -> view<131072xf32, #dense>
+  %state_dst1_v = buffer.view %state_dst1_g[%base] : buffer -> view<2048xf32, #dense>
+
+  %lane_sum = scf.for %i = [%lane to %c16384 step %c256]
+      (%acc = %zero_f32 : f32) -> (f32) {
+    %value = view.load %projection_v[%i] : view<16384xf32, #dense> -> f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %value : f32
+    scf.yield %next : f32
+  }
+  %total = kernel.workgroup.reduce<addf> %lane_sum : f32
+  %scaled0 = scalar.mulf<nnan|ninf|nsz> %total, %scale0 : f32
+  %sum_bias0 = scalar.addf<nnan|ninf|nsz> %scaled0, %bias0 : f32
+  %scaled1 = scalar.mulf<nnan|ninf|nsz> %total, %scale1 : f32
+  %sum_bias1 = scalar.addf<nnan|ninf|nsz> %scaled1, %bias1 : f32
+
+  scf.for %linear = [%lane to %c16384 step %c256] {
+    %source_row = index.div %linear, %c128 : index
+    %feature = index.rem %linear, %c128 : index
+    %idx_word = index.mul %source_row, %two : index
+    %dst_row_i32 = view.load %cache_indices_v[%idx_word] : view<256xi32, #dense> -> i32
+    %dst_row = index.cast %dst_row_i32 : i32 to index
+    %valid = index.cmp ult, %dst_row, %c256 : index
+    scf.if %valid {
+      %dst_index0 = index.madd %dst_row, %c128, %feature : index
+      %dst_index = index.assume %dst_index0 [range(%dst_index0, 0, 32767)] : index
+      %value = view.load %projection_v[%linear] : view<16384xf32, #dense> -> f32
+      %half = scalar.fptrunc %value : f32 to f16
+      %half_bits = scalar.bitcast %half : f16 to i16
+      view.store %half_bits, %cache_dst_v[%dst_index] : i16, view<32768xi16, #dense>
+    }
+  }
+
+  %c2048 = index.constant 2048 : index
+  scf.for %linear = [%lane to %c2048 step %c256] {
+    %source_row = index.div %linear, %c256 : index
+    %feature = index.rem %linear, %c256 : index
+    %selected_i32 = view.load %select_indices_v[%source_row] : view<8xi32, #dense> -> i32
+    %selected = index.cast %selected_i32 : i32 to index
+    %selected_b = index.assume %selected [range(%selected, 0, 511)] : index
+    %source_index0 = index.madd %selected_b, %c256, %feature : index
+    %source_index = index.assume %source_index0 [range(%source_index0, 0, 131071)] : index
+    %dst_row_i32 = view.load %update_indices_v[%source_row] : view<8xi32, #dense> -> i32
+    %dst_row = index.cast %dst_row_i32 : i32 to index
+    %dst_row_b = index.assume %dst_row [range(%dst_row, 0, 7)] : index
+    %dst_index0 = index.madd %dst_row_b, %c256, %feature : index
+    %dst_index = index.assume %dst_index0 [range(%dst_index0, 0, 2047)] : index
+    %value0 = view.load %state0_v[%source_index] : view<131072xf32, #dense> -> f32
+    %result0 = scalar.addf<nnan|ninf|nsz> %value0, %sum_bias0 : f32
+    view.store %result0, %state_dst0_v[%dst_index] : f32, view<2048xf32, #dense>
+    %value1 = view.load %state1_v[%source_index] : view<131072xf32, #dense> -> f32
+    %result1 = scalar.addf<nnan|ninf|nsz> %value1, %sum_bias1 : f32
+    view.store %result1, %state_dst1_v[%dst_index] : f32, view<2048xf32, #dense>
+  }
+  kernel.return
+}

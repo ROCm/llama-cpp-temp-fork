@@ -1,0 +1,84 @@
+config.decl @shape_dsv4_hc_post_n_embd : %value: index where [range(%value, 1, 1048576)]
+config.decl @shape_dsv4_hc_post_hc : %value: index where [range(%value, 1, 64)]
+config.decl @shape_dsv4_hc_post_n_tokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @tuning_dsv4_hc_post_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_dsv4_hc_post_f32") @hrx2_dsv4_hc_post_f32() {
+  %unit = index.constant 1 : index
+  %hc = config.get @shape_dsv4_hc_post_hc : index
+  %n_tokens = config.get @shape_dsv4_hc_post_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_post_workgroup_size : index
+  %workgroups = index.mul %hc, %n_tokens : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%x: buffer, %residual: buffer, %post: buffer, %comb: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %n_embd = config.get @shape_dsv4_hc_post_n_embd : index
+  %hc = config.get @shape_dsv4_hc_post_hc : index
+  %n_tokens = config.get @shape_dsv4_hc_post_n_tokens : index
+  %workgroup_size = config.get @tuning_dsv4_hc_post_workgroup_size : index
+  %n_embd_bounded = index.assume %n_embd [range(%n_embd, 1, 1048576)] : index
+  %hc_bounded = index.assume %hc [range(%hc, 1, 64)] : index
+  %n_tokens_bounded = index.assume %n_tokens [range(%n_tokens, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %workgroups0 = index.mul %hc_bounded, %n_tokens_bounded : index
+  %workgroups = index.assume %workgroups0 [range(%workgroups0, 1, 67108864)] : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 67108863), lt(%workgroup0, %workgroups)] : index
+  %idst = index.rem %workgroup, %hc_bounded : index
+  %token = index.div %workgroup, %hc_bounded : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %x_global = buffer.assume.memory_space<global> %x : buffer
+  %residual_global = buffer.assume.memory_space<global> %residual : buffer
+  %post_global = buffer.assume.memory_space<global> %post : buffer
+  %comb_global = buffer.assume.memory_space<global> %comb : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %x_noalias, %residual_noalias, %post_noalias, %comb_noalias, %dst_noalias = buffer.assume.noalias %x_global, %residual_global, %post_global, %comb_global, %dst_global : buffer, buffer, buffer, buffer, buffer
+  %x_view = buffer.view %x_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %residual_view = buffer.view %residual_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %post_view = buffer.view %post_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %comb_view = buffer.view %comb_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %token_x0 = index.mul %token, %n_embd_bounded : index
+  %token_x = index.assume %token_x0 [range(%token_x0, 0, 1073741823)] : index
+  %token_hc0 = index.mul %token, %hc_bounded : index
+  %post_idx0 = index.add %token_hc0, %idst : index
+  %post_idx = index.assume %post_idx0 [range(%post_idx0, 0, 1073741823)] : index
+  %pv = view.load %post_view[%post_idx] : view<1073741824xf32, #dense> -> f32
+  %token_hc_square0 = index.mul %token_hc0, %hc_bounded : index
+  %comb_idst0 = index.add %token_hc_square0, %idst : index
+  %comb_idst = index.assume %comb_idst0 [range(%comb_idst0, 0, 1073741823)] : index
+  %token_output_plane0 = index.mul %token_hc0, %n_embd_bounded : index
+  %idst_output_plane0 = index.mul %idst, %n_embd_bounded : index
+  %output_plane0 = index.add %token_output_plane0, %idst_output_plane0 : index
+  %output_plane = index.assume %output_plane0 [range(%output_plane0, 0, 1073741823)] : index
+
+  scf.for %i0 = [%lane to %n_embd_bounded step %workgroup_size] {
+    %x_idx0 = index.add %token_x, %i0 : index
+    %x_idx = index.assume %x_idx0 [range(%x_idx0, 0, 1073741823)] : index
+    %xv = view.load %x_view[%x_idx] : view<1073741824xf32, #dense> -> f32
+    %initial = scalar.mulf %xv, %pv : f32
+    %sum = scf.for %isrc = [%zero to %hc_bounded step %one](%acc = %initial : f32) -> (f32) {
+      %isrc_plane0 = index.mul %isrc, %n_embd_bounded : index
+      %residual_idx0 = index.add %token_output_plane0, %isrc_plane0 : index
+      %residual_idx1 = index.add %residual_idx0, %i0 : index
+      %residual_idx = index.assume %residual_idx1 [range(%residual_idx1, 0, 1073741823)] : index
+      %comb_isrc0 = index.mul %isrc, %hc_bounded : index
+      %comb_idx0 = index.add %comb_idst, %comb_isrc0 : index
+      %comb_idx = index.assume %comb_idx0 [range(%comb_idx0, 0, 1073741823)] : index
+      %rv = view.load %residual_view[%residual_idx] : view<1073741824xf32, #dense> -> f32
+      %cv = view.load %comb_view[%comb_idx] : view<1073741824xf32, #dense> -> f32
+      %product = scalar.mulf %rv, %cv : f32
+      %next = scalar.addf %acc, %product : f32
+      scf.yield %next : f32
+    }
+    %dst_idx0 = index.add %output_plane, %i0 : index
+    %dst_idx = index.assume %dst_idx0 [range(%dst_idx0, 0, 1073741823)] : index
+    view.store %sum, %dst_view[%dst_idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
