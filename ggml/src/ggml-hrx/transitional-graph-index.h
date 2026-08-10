@@ -1,6 +1,6 @@
 #pragma once
 
-#include "graph-ir.h"
+#include "transitional-graph.h"
 
 #include <cstdint>
 #include <map>
@@ -27,14 +27,13 @@ enum class DecisionReason : uint16_t {
 };
 
 struct Decision {
-    bool allowed = false;
-    DecisionReason reason = DecisionReason::ProviderError;
-    std::string detail;
+    bool                  allowed = false;
+    DecisionReason        reason  = DecisionReason::ProviderError;
+    std::string           detail;
     std::vector<uint32_t> implicated_ids;
 
-    static Decision allow();
-    static Decision reject(DecisionReason reason, std::string detail,
-                           std::vector<uint32_t> implicated_ids = {});
+    static Decision     allow();
+    static Decision     reject(DecisionReason reason, std::string detail, std::vector<uint32_t> implicated_ids = {});
     static const char * reason_name(DecisionReason reason);
 };
 
@@ -47,34 +46,36 @@ struct RegionBoundary {
 // Search providers query this object instead of repeatedly scanning Graph or
 // depending on the incidental operation vector layout.
 class GraphIndex {
-public:
+  public:
     explicit GraphIndex(const Graph & graph);
 
     const Graph & graph() const { return graph_; }
+
     bool valid() const { return errors_.empty(); }
+
     const std::vector<std::string> & errors() const { return errors_; }
 
     const std::vector<OperationId> & consumers(ValueId value) const;
     const std::vector<OperationId> & predecessors(OperationId operation) const;
     const std::vector<OperationId> & successors(OperationId operation) const;
-    OperationId storage_writer(StorageId storage, uint32_t version) const;
-    const std::string & structural_key(OperationId operation) const;
+    OperationId                      storage_writer(StorageId storage, uint32_t version) const;
+    const std::string &              structural_key(OperationId operation) const;
 
     RegionBoundary boundary(const std::vector<OperationId> & operations) const;
-    Decision validate_region(const std::vector<OperationId> & operations,
-                             const std::vector<ValueId> & materialized_outputs,
-                             bool allow_disconnected = false) const;
-    Decision topologically_order_regions(const std::vector<std::vector<OperationId>> & regions,
-                                         std::vector<size_t> & order) const;
+    Decision       validate_region(const std::vector<OperationId> & operations,
+                                   const std::vector<ValueId> &     materialized_outputs,
+                                   bool                             allow_disconnected = false) const;
+    Decision       topologically_order_regions(const std::vector<std::vector<OperationId>> & regions,
+                                               std::vector<size_t> &                         order) const;
 
-private:
-    const Graph & graph_;
-    std::vector<std::vector<OperationId>> consumers_;
-    std::vector<std::vector<OperationId>> predecessors_;
-    std::vector<std::vector<OperationId>> successors_;
+  private:
+    const Graph &                                         graph_;
+    std::vector<std::vector<OperationId>>                 consumers_;
+    std::vector<std::vector<OperationId>>                 predecessors_;
+    std::vector<std::vector<OperationId>>                 successors_;
     std::map<std::pair<StorageId, uint32_t>, OperationId> writers_;
-    std::vector<std::string> structural_keys_;
-    std::vector<std::string> errors_;
+    std::vector<std::string>                              structural_keys_;
+    std::vector<std::string>                              errors_;
 };
 
-} // namespace ggml::hrx
+}  // namespace ggml::hrx

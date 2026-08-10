@@ -1,8 +1,8 @@
 #pragma once
 
-#include "graph/command-program.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
+#include "transitional-command-program.h"
 #include "weight-residency.h"
 
 #include <array>

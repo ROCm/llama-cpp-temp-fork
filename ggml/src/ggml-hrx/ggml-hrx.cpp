@@ -1,15 +1,18 @@
 #include "ggml-hrx.h"
 
+#include "domains/llm-patterns.h"
 #include "executable-program.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
-#include "graph/command-program.h"
-#include "graph/graph-ir.h"
-#include "graph/reactive-plan.h"
+#include "graph-plan.h"
 #include "hrx_runtime.h"
 #include "kernel-corpus-json.h"
 #include "kernel-corpus.h"
+#include "planner.h"
+#include "program-selection.h"
 #include "transfer-manager.h"
+#include "transitional-command-program.h"
+#include "transitional-program.h"
 #include "weight-residency.h"
 
 #include <algorithm>
@@ -56,17 +59,19 @@ struct ggml_backend_hrx_buffer_context {
 };
 
 struct ggml_backend_hrx_device_context {
-    hrx_device_t                                 device = nullptr;
-    std::string                                  name;
-    std::string                                  description;
-    std::string                                  architecture;
-    size_t                                       memory_total = 0;
-    ggml_backend_buffer_type                     buft         = {};
-    ggml_backend_hrx_buffer_type_context         buft_context = {};
-    ggml::hrx::ReactivePlanCache                 plan_cache;
-    std::unique_ptr<ggml::hrx::transfer_manager> transfers;
-    std::mutex                                   active_stream_mutex;
-    hrx_stream_t                                 active_stream = nullptr;
+    hrx_device_t                                                                device = nullptr;
+    std::string                                                                 name;
+    std::string                                                                 description;
+    std::string                                                                 architecture;
+    size_t                                                                      memory_total = 0;
+    ggml_backend_buffer_type                                                    buft         = {};
+    ggml_backend_hrx_buffer_type_context                                        buft_context = {};
+    ggml::hrx::graph_plan_cache                                                 plan_cache;
+    std::mutex                                                                  transitional_plan_mutex;
+    std::unordered_map<uint64_t, std::shared_ptr<const ggml::hrx::ProgramPlan>> transitional_plans;
+    std::unique_ptr<ggml::hrx::transfer_manager>                                transfers;
+    std::mutex                                                                  active_stream_mutex;
+    hrx_stream_t                                                                active_stream = nullptr;
 };
 
 struct ggml_backend_hrx_context {
@@ -120,6 +125,20 @@ struct ggml_backend_hrx_reg_context {
                 hrx_status_ignore(status);
             }
         }
+    }
+};
+
+struct hrx_execution_frame {
+    std::shared_ptr<const ggml::hrx::ProgramPlan>       plan;
+    std::shared_ptr<const ggml::hrx::graph_plan>        semantic_plan;
+    std::shared_ptr<const ggml::hrx::program_selection> selection;
+    std::vector<const ggml_tensor *>                    values;
+    std::vector<const ggml_tensor *>                    storage_roots;
+    uint64_t                                            uid = 0;
+    std::vector<std::string>                            errors;
+
+    bool valid() const {
+        return errors.empty() && plan != nullptr && semantic_plan != nullptr && selection != nullptr && plan->valid();
     }
 };
 
@@ -402,7 +421,7 @@ static void dump_graph(const ggml_backend_hrx_context::diagnostic_options & opti
     static std::mutex            mutex;
     const uint64_t               id = sequence.fetch_add(1);
     try {
-        const ggml::hrx::Graph        normalized = ggml::hrx::ImportedGraph::import(graph).graph;
+        const ggml::hrx::graph_plan   normalized = ggml::hrx::graph_plan::import(graph);
         const std::filesystem::path & directory  = options.directory;
         std::filesystem::create_directories(directory);
         const std::string stem = std::to_string(id) + "-uid-" + std::to_string(graph->uid) + "-" + mode + "-" + stage;
@@ -411,17 +430,17 @@ static void dump_graph(const ggml_backend_hrx_context::diagnostic_options & opti
         std::lock_guard<std::mutex> lock(mutex);
         const std::filesystem::path normalized_directory = std::filesystem::path(directory) / "normalized";
         std::filesystem::create_directories(normalized_directory);
-        const std::filesystem::path json_path = normalized_directory / (normalized.fingerprint + ".json");
+        const std::filesystem::path json_path = normalized_directory / (stem + ".json");
         if (!std::filesystem::exists(json_path)) {
             const std::filesystem::path temporary_path = json_path.string() + ".tmp";
             std::ofstream               output(temporary_path, std::ios::binary | std::ios::trunc);
-            output << ggml::hrx::Graph::serialize_json(normalized) << '\n';
+            output << normalized.serialize_json() << '\n';
             output.close();
             std::filesystem::rename(temporary_path, json_path);
         }
         std::ofstream manifest(std::filesystem::path(directory) / "manifest.tsv", std::ios::app);
         manifest << id << '\t' << graph->uid << '\t' << mode << '\t' << stage << '\t' << graph->n_nodes << '\t'
-                 << graph->n_leafs << '\t' << normalized.fingerprint << '\t' << dot_path.filename().string() << '\t'
+                 << graph->n_leafs << '\t' << "uid-" << graph->uid << '\t' << dot_path.filename().string() << '\t'
                  << std::filesystem::relative(json_path, directory).string() << '\n';
     } catch (const std::exception & error) {
         GGML_LOG_ERROR("%s: graph dump failed: %s\n", __func__, error.what());
@@ -471,6 +490,8 @@ static void write_atomic(const std::filesystem::path & path, const std::vector<u
 
 static void dump_plan(const ggml_backend_hrx_context::diagnostic_options & options,
                       const ggml::hrx::ProgramPlan &                       plan,
+                      const ggml::hrx::graph_plan &                        semantic_plan,
+                      const ggml::hrx::program_selection &                 selection,
                       const ggml::hrx::kernel_corpus &                     corpus) {
     if (options.directory.empty()) {
         return;
@@ -487,6 +508,11 @@ static void dump_plan(const ggml_backend_hrx_context::diagnostic_options & optio
         const ggml::hrx::VerificationResult command_verification =
             ggml::hrx::verify_command_program(plan, corpus, commands);
         write_atomic(directory / "program.txt", plan.semantic_witness);
+        write_atomic(directory / "graph-plan.txt", semantic_plan.format());
+        write_atomic(directory / "graph-plan.json", semantic_plan.serialize_json());
+        write_atomic(directory / "graph-plan.dot", semantic_plan.dot());
+        write_atomic(directory / "program-selection.txt", selection.format());
+        write_atomic(directory / "program-selection.json", selection.serialize_json());
         write_atomic(directory / "semantic-witness.txt", plan.semantic_witness);
         write_atomic(directory / "program.json", ggml::hrx::serialize_schedule_json(plan.schedule));
         if (!plan.fusion_search_text.empty()) {
@@ -577,9 +603,21 @@ static enum ggml_backend_graph_claim_result graph_claim(ggml_backend_t          
     dump_graph(context->diagnostics, graph, mode == GGML_BACKEND_GRAPH_CLAIM_MODE_MEASURE ? "measure" : "execute",
                "raw-oracle");
     if (mode == GGML_BACKEND_GRAPH_CLAIM_MODE_EXECUTE) {
-        // Use executable-reachability import because unused pre-placement leaves would perturb value IDs and ABI binding order.
-        const ggml::hrx::Graph       normalized = ggml::hrx::ImportedGraph::import(graph).graph;
-        const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(normalized, context->device->architecture);
+        // This diagnostic path deliberately does not publish into the UID cache:
+        // pre-placement tensor allocations differ from the executable graph.
+        ggml::hrx::graph_import     imported = ggml::hrx::graph_import::import(graph);
+        ggml::hrx::pattern_registry patterns;
+        ggml::hrx::llm_patterns::register_patterns(patterns);
+        if (imported.plan.valid()) {
+            ggml::hrx::matcher::recognize(imported.plan, patterns);
+        }
+        if (imported.plan.valid()) {
+            ggml::hrx::planner::select_recipes(imported.plan, context->device->architecture);
+        }
+        const ggml::hrx::program_selection selection =
+            ggml::hrx::program_selection::select(imported.plan, context->device->architecture);
+        const ggml::hrx::ProgramPlan plan =
+            ggml::hrx::build_transitional_program(imported.plan, selection, context->device->architecture, graph->uid);
         if (!plan.valid()) {
             GGML_LOG_WARN("%s: diagnostic oracle could not build a plan: %s\n", __func__, plan.errors.front().c_str());
         } else {
@@ -712,9 +750,50 @@ static void backend_synchronize(ggml_backend_t backend) {
     context->pending_completions.clear();
 }
 
-static ggml::hrx::executable_bindings resolve_executable_bindings(const ggml_backend_hrx_context &  context,
-                                                                  const ggml::hrx::ExecutionFrame & frame,
-                                                                  std::vector<std::string> &        errors) {
+static hrx_execution_frame prepare_execution_frame(ggml_backend_hrx_device_context & device,
+                                                   const ggml_cgraph *               graph) {
+    hrx_execution_frame              result;
+    ggml::hrx::graph_execution_frame semantic = device.plan_cache.prepare(graph, device.architecture);
+    result.uid                                = semantic.uid;
+    result.values                             = std::move(semantic.values);
+    result.errors                             = std::move(semantic.errors);
+    result.semantic_plan                      = semantic.plan;
+    result.selection                          = semantic.selection;
+    if (!result.errors.empty() || semantic.plan == nullptr || semantic.selection == nullptr) {
+        return result;
+    }
+
+    if (result.uid != 0) {
+        std::lock_guard<std::mutex> lock(device.transitional_plan_mutex);
+        const auto                  found = device.transitional_plans.find(result.uid);
+        if (found != device.transitional_plans.end()) {
+            result.plan = found->second;
+            ggml::hrx::transitional_program_adapter::bind_storage_roots(
+                *result.semantic_plan, *result.plan, semantic.storage_roots, result.storage_roots, result.errors);
+            return result;
+        }
+    }
+
+    auto program = std::make_shared<ggml::hrx::ProgramPlan>(
+        ggml::hrx::build_transitional_program(*semantic.plan, *semantic.selection, device.architecture, result.uid));
+    if (!program->valid()) {
+        result.errors = program->errors;
+        return result;
+    }
+    result.plan = program;
+    if (result.uid != 0) {
+        std::lock_guard<std::mutex> lock(device.transitional_plan_mutex);
+        auto [position, inserted] = device.transitional_plans.emplace(result.uid, std::move(program));
+        result.plan               = position->second;
+    }
+    ggml::hrx::transitional_program_adapter::bind_storage_roots(
+        *result.semantic_plan, *result.plan, semantic.storage_roots, result.storage_roots, result.errors);
+    return result;
+}
+
+static ggml::hrx::executable_bindings resolve_executable_bindings(const ggml_backend_hrx_context & context,
+                                                                  const hrx_execution_frame &      frame,
+                                                                  std::vector<std::string> &       errors) {
     ggml::hrx::executable_bindings result;
     result.snapshot.device_identity = context.device->name + ":" + context.device->architecture;
     if (frame.storage_roots.size() != frame.plan->graph.storages.size()) {
@@ -803,7 +882,7 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
 
     // Recover or look up the frozen schedule for the normalized eager graph.
     dump_graph(context->diagnostics, graph, "execute", "reactive-split");
-    ggml::hrx::ExecutionFrame frame = context->device->plan_cache.prepare(graph, context->device->architecture);
+    hrx_execution_frame frame = prepare_execution_frame(*context->device, graph);
     if (!frame.valid()) {
         GGML_LOG_ERROR("%s: reactive plan preparation failed: %s\n", __func__,
                        frame.errors.empty() ? "unknown error" : frame.errors.front().c_str());
@@ -840,12 +919,12 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     }
 
     // Plan reporting is a cold-path no-op unless initialization configured a diagnostic directory.
-    const ggml::hrx::PlanCacheStats stats = context->device->plan_cache.stats();
+    const ggml::hrx::graph_plan_cache_stats stats = context->device->plan_cache.stats();
     GGML_LOG_WARN("%s: verified reactive %s plan with %zu operations, %zu dispatches, cache builds=%llu hits=%llu\n",
                   __func__, frame.plan->schedule.workload.c_str(), frame.plan->graph.operations.size(),
                   ggml::hrx::schedule_dispatch_count(frame.plan->schedule),
                   static_cast<unsigned long long>(stats.builds), static_cast<unsigned long long>(stats.hits));
-    dump_plan(context->diagnostics, *frame.plan, *context->corpus);
+    dump_plan(context->diagnostics, *frame.plan, *frame.semantic_plan, *frame.selection, *context->corpus);
 
     // Resolve graph storages and reject cached executables with stale allocation identities, generations, or offsets.
     std::vector<std::string>       binding_errors;

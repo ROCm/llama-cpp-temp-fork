@@ -1,8 +1,8 @@
 #pragma once
 
-#include "graph/resource-access.h"
-#include "graph/schedule.h"
 #include "kernel-corpus-catalog.h"
+#include "transitional-resource-access.h"
+#include "transitional-schedule.h"
 
 #include <cstddef>
 #include <cstdint>

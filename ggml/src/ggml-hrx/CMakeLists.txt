@@ -94,25 +94,37 @@ option(GGML_HRX_BUNDLE_RUNTIME_LIBS "Bundle HRX/ROCm runtime libraries next to t
 set(GGML_HRX_BUNDLE_LIBRARY_DIRS "" CACHE STRING "Library directories to scan when GGML_HRX_BUNDLE_RUNTIME_LIBS=ON")
 
 add_library(ggml-hrx-graph STATIC
-    graph/fusion-search.cpp
-    graph/fusion-search.h
-    graph/graph-index.cpp
-    graph/graph-index.h
-    graph/command-program.cpp
-    graph/command-program.h
-    graph/graph-ir.cpp
-    graph/graph-ir.h
-    graph/reactive-plan.cpp
-    graph/reactive-plan.h
-    graph/resource-access.h
-    graph/routed-transformer.cpp
-    graph/routed-transformer.h
-    graph/routed-transformer-bindings.cpp
-    graph/routed-transformer-bindings.h
-    graph/routed-transformer-program.cpp
-    graph/routed-transformer-program.h
-    graph/schedule.cpp
-    graph/schedule.h
+    graph-plan.cpp
+    graph-plan.h
+    matcher.cpp
+    matcher.h
+    planner.cpp
+    planner.h
+    program-selection.cpp
+    program-selection.h
+    primitive-capabilities.cpp
+    primitive-capabilities.h
+    domains/llm-patterns.h
+    domains/llm-recipes.h
+    transitional-command-program.cpp
+    transitional-command-program.h
+    transitional-fusion-search.cpp
+    transitional-fusion-search.h
+    transitional-graph.cpp
+    transitional-graph.h
+    transitional-graph-index.cpp
+    transitional-graph-index.h
+    transitional-llm-bindings.cpp
+    transitional-llm-adapter.cpp
+    transitional-llm-program.cpp
+    transitional-llm-program.h
+    transitional-llm-schedule.cpp
+    transitional-llm-schedule.h
+    transitional-program.cpp
+    transitional-program.h
+    transitional-resource-access.h
+    transitional-schedule.cpp
+    transitional-schedule.h
     kernel-corpus-json.cpp
     kernel-corpus-json.h
     kernel-corpus-catalog-verify.h
@@ -123,7 +135,7 @@ add_library(ggml-hrx-graph STATIC
     "${GGML_HRX_KERNEL_CORPUS_QWEN_INC}"
     "${GGML_HRX_KERNEL_CORPUS_CATALOG_INC}"
 )
-target_include_directories(ggml-hrx-graph PUBLIC . graph PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" .. ../../include ../../../vendor)
+target_include_directories(ggml-hrx-graph PUBLIC . PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" .. ../../include ../../../vendor)
 target_compile_features(ggml-hrx-graph PRIVATE cxx_std_17)
 target_link_libraries(ggml-hrx-graph PRIVATE ggml-base)
 set_target_properties(ggml-hrx-graph PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -146,7 +158,7 @@ add_library(ggml-hrx-executable STATIC
     loom-jit.cpp
     loom-jit.h
 )
-target_include_directories(ggml-hrx-executable PUBLIC . graph PRIVATE loom-jit .. ../../include ../../../vendor)
+target_include_directories(ggml-hrx-executable PUBLIC . PRIVATE loom-jit .. ../../include ../../../vendor)
 target_compile_features(ggml-hrx-executable PRIVATE cxx_std_17)
 target_link_libraries(ggml-hrx-executable PUBLIC ggml-hrx-graph ggml-hrx-transfer hrx::hrx PRIVATE loomc::loomc)
 set_target_properties(ggml-hrx-executable PROPERTIES POSITION_INDEPENDENT_CODE ON)

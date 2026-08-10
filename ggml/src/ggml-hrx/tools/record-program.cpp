@@ -1,11 +1,14 @@
-#include "command-program.h"
+#include "domains/llm-patterns.h"
 #include "executable-program.h"
-#include "graph-ir.h"
+#include "graph-plan.h"
 #include "hrx_runtime.h"
 #include "kernel-corpus.h"
-#include "reactive-plan.h"
+#include "planner.h"
+#include "program-selection.h"
 #include "tool-utils.h"
 #include "transfer-manager.h"
+#include "transitional-command-program.h"
+#include "transitional-program.h"
 #include "weight-residency.h"
 
 #include <algorithm>
@@ -36,11 +39,16 @@ int main(int argc, char ** argv) {
         if (graph_text.empty()) {
             throw std::runtime_error("cannot read " + graph_path.string());
         }
-        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
+        ggml::hrx::graph_plan graph = ggml::hrx::graph_plan::deserialize_json(graph_text);
         if (!graph.valid()) {
             throw std::runtime_error("normalized graph is invalid");
         }
-        const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(graph, target);
+        ggml::hrx::pattern_registry patterns;
+        ggml::hrx::llm_patterns::register_patterns(patterns);
+        ggml::hrx::matcher::recognize(graph, patterns);
+        ggml::hrx::planner::select_recipes(graph, target);
+        const ggml::hrx::program_selection selection = ggml::hrx::program_selection::select(graph, target);
+        const ggml::hrx::ProgramPlan       plan = ggml::hrx::build_transitional_program(graph, selection, target, 0);
         if (!plan.valid()) {
             throw std::runtime_error("reactive plan is invalid");
         }

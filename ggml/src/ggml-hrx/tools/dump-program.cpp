@@ -1,10 +1,13 @@
-#include "command-program.h"
-#include "graph-ir.h"
+#include "domains/llm-patterns.h"
+#include "graph-plan.h"
 #include "kernel-corpus-json.h"
 #include "kernel-corpus.h"
-#include "reactive-plan.h"
-#include "schedule.h"
+#include "planner.h"
+#include "program-selection.h"
 #include "tool-utils.h"
+#include "transitional-command-program.h"
+#include "transitional-program.h"
+#include "transitional-schedule.h"
 
 #include <filesystem>
 #include <iostream>
@@ -29,13 +32,18 @@ int main(int argc, char ** argv) {
         if (graph_text.empty()) {
             throw std::runtime_error("cannot read " + graph_path.string());
         }
-        const ggml::hrx::Graph graph = ggml::hrx::Graph::deserialize_json(graph_text);
+        ggml::hrx::graph_plan graph = ggml::hrx::graph_plan::deserialize_json(graph_text);
         if (!graph.valid()) {
-            throw std::runtime_error("invalid normalized graph: " +
-                                     (graph.errors.empty() ? std::string("unknown error") : graph.errors.front()));
+            throw std::runtime_error("invalid normalized graph: " + (graph.diagnostics().errors.empty() ?
+                                                                         std::string("unknown error") :
+                                                                         graph.diagnostics().errors.front()));
         }
-
-        const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(graph, target);
+        ggml::hrx::pattern_registry patterns;
+        ggml::hrx::llm_patterns::register_patterns(patterns);
+        ggml::hrx::matcher::recognize(graph, patterns);
+        ggml::hrx::planner::select_recipes(graph, target);
+        const ggml::hrx::program_selection selection = ggml::hrx::program_selection::select(graph, target);
+        const ggml::hrx::ProgramPlan       plan = ggml::hrx::build_transitional_program(graph, selection, target, 0);
         if (!plan.valid()) {
             throw std::runtime_error("cannot recover program: " +
                                      (plan.errors.empty() ? std::string("unknown error") : plan.errors.front()));
@@ -48,6 +56,11 @@ int main(int argc, char ** argv) {
         std::filesystem::create_directories(output_directory);
         const std::string & readable_program = plan.semantic_witness;
         write_file(output_directory / "program.txt", readable_program);
+        write_file(output_directory / "graph-plan.txt", graph.format());
+        write_file(output_directory / "graph-plan.json", graph.serialize_json());
+        write_file(output_directory / "graph-plan.dot", graph.dot());
+        write_file(output_directory / "program-selection.txt", selection.format());
+        write_file(output_directory / "program-selection.json", selection.serialize_json());
         write_file(output_directory / "program-summary.txt", readable_program);
         write_file(output_directory / "semantic-witness.txt", plan.semantic_witness);
         write_file(output_directory / "program.json", ggml::hrx::serialize_schedule_json(plan.schedule));
@@ -72,10 +85,10 @@ int main(int argc, char ** argv) {
         status << "schema=ggml-hrx-plan-diagnostics-v1\n"
                << "workload=" << plan.schedule.workload << '\n'
                << "target=" << target << '\n'
-               << "graph=" << graph.fingerprint << '\n'
+               << "graph=uid-0\n"
                << "planner=" << plan.planner_identity << '\n'
                << "atom_fallbacks=" << plan.atom_fallback_count << '\n'
-               << "operations=" << graph.operations.size() << '\n'
+               << "operations=" << graph.operations().size() << '\n'
                << "dispatches=" << ggml::hrx::schedule_dispatch_count(plan.schedule) << '\n'
                << "commands=" << commands.commands.size() << '\n'
                << "valid=" << (verification.valid() ? "true" : "false") << '\n'
@@ -87,7 +100,7 @@ int main(int argc, char ** argv) {
         write_file(output_directory / "verification-errors.txt",
                    ggml::hrx::format_verification_errors(verification.errors));
 
-        std::cout << "dumped " << plan.schedule.workload << " graph=" << graph.fingerprint
+        std::cout << "dumped " << plan.schedule.workload << " graph=uid-0"
                   << " dispatches=" << ggml::hrx::schedule_dispatch_count(plan.schedule)
                   << " commands=" << commands.commands.size() << " valid=" << (verification.valid() ? "true" : "false")
                   << " to " << output_directory << '\n';
