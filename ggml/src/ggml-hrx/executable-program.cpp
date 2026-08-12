@@ -679,10 +679,9 @@ bool executable_program_preparer::compile_artifacts() {
             result.errors_.push_back("compiled launch workgroup size does not match executable metadata for " + key);
             break;
         }
-        if (compiled_artifact->launch.workgroup_storage_bytes != 0) {
-            result.errors_.push_back("HRX graph ABI cannot encode dynamic workgroup storage for " + key);
-            break;
-        }
+        // launch.workgroup_storage_bytes is the kernel's total static
+        // requirement; the code object from the same compile already carries
+        // it, so dispatch needs no extra storage argument.
         compiled_artifact->diagnostic.key       = key;
         compiled_artifact->diagnostic.kernel_id = definition->name != nullptr ? definition->name : "";
         for (size_t i = 0; i < 3; ++i) {

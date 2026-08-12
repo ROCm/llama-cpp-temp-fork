@@ -392,12 +392,8 @@ hrx_status_t ggml_hrx_loom_jit_copy_artifact_bytes(const loomc_artifact_t * arti
     return hrx_ok_status();
 }
 
-hrx_status_t ggml_hrx_loom_jit_evaluate_launch_config(loomc_module_t *                                  module,
-                                                      loomc_workspace_t *                               workspace,
-                                                      const char *                                      root_symbol,
-                                                      loomc_target_profile_t *                          target_profile,
-                                                      const std::unique_ptr<loomc_config_binding_t[]> & config_bindings,
-                                                      size_t                            config_binding_count,
+hrx_status_t ggml_hrx_loom_jit_evaluate_launch_config(const loomc_result_t *            compile_result,
+                                                      const char *                      root_symbol,
                                                       const int64_t *                   workload_arguments,
                                                       size_t                            workload_argument_count,
                                                       ggml_hrx_loom_jit_launch_config * out_launch_config) {
@@ -405,59 +401,48 @@ hrx_status_t ggml_hrx_loom_jit_evaluate_launch_config(loomc_module_t *          
         return ggml_hrx_loom_jit_make_status(HRX_STATUS_INVALID_ARGUMENT, "out_launch_config is required");
     }
 
-    const loomc_target_specialization_t specialization = {
-        loomc_make_cstring_view(root_symbol),
-        target_profile,
-    };
-    loomc_target_specialization_options_t target_options = {};
-    target_options.type                                  = LOOMC_STRUCTURE_TYPE_TARGET_SPECIALIZATION_OPTIONS;
-    target_options.structure_size                        = sizeof(target_options);
-    target_options.specializations                       = &specialization;
-    target_options.specialization_count                  = 1;
-    loomc_launch_config_eval_options_t options           = {};
-    options.type                                         = LOOMC_STRUCTURE_TYPE_LAUNCH_CONFIG_EVAL_OPTIONS;
-    options.structure_size                               = sizeof(options);
-    options.next                                         = &target_options;
-    options.function_symbol                              = loomc_make_cstring_view(root_symbol);
-    options.config.bindings                              = config_bindings.get();
-    options.config.binding_count                         = config_binding_count;
-    options.config.flags                                 = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
-    options.workload_arguments                           = workload_arguments;
-    options.workload_argument_count                      = workload_argument_count;
-    options.required_fields =
-        LOOMC_LAUNCH_CONFIG_FIELD_FLAG_WORKGROUP_COUNT | LOOMC_LAUNCH_CONFIG_FIELD_FLAG_WORKGROUP_SIZE;
-
+    const loomc_artifact_t * artifact = ggml_hrx_loom_jit_find_artifact(
+        compile_result, LOOMC_ARTIFACT_KIND_LAUNCH_CONFIG, loomc_make_cstring_view(LOOMC_ARTIFACT_FORMAT_LOOM_BYTECODE));
+    if (!artifact) {
+        return ggml_hrx_loom_jit_make_status(HRX_STATUS_FAILED_PRECONDITION,
+                                             "Loom compilation produced no launch-config artifact");
+    }
+    loomc_launch_config_program_t * program = nullptr;
+    loomc_status_t                  status =
+        loomc_launch_config_program_load(artifact, nullptr, nullptr, loomc_allocator_system(), &program);
+    if (!loomc_status_is_ok(status)) {
+        return ggml_hrx_loom_jit_status_from_loom(status, "load Loom launch-config program");
+    }
+    loomc_launch_config_function_t function = loomc_launch_config_function_invalid();
+    status = loomc_launch_config_program_lookup_function(program, loomc_make_cstring_view(root_symbol), &function);
+    if (!loomc_status_is_ok(status)) {
+        loomc_launch_config_program_release(program);
+        return ggml_hrx_loom_jit_status_from_loom(status, "resolve Loom launch-config function");
+    }
+    // Workload slots carry raw two's-complement scalar bits.
+    std::vector<uint64_t> workload_bits(workload_argument_count);
+    for (size_t i = 0; i < workload_argument_count; ++i) {
+        workload_bits[i] = static_cast<uint64_t>(workload_arguments[i]);
+    }
     loomc_launch_config_t launch_config = {};
     launch_config.type                  = LOOMC_STRUCTURE_TYPE_LAUNCH_CONFIG;
     launch_config.structure_size        = sizeof(launch_config);
-
-    loom_result    result;
-    loomc_status_t status = loomc_module_evaluate_launch_config(module, workspace, &options, loomc_allocator_system(),
-                                                                &launch_config, result.out());
+    status                              = loomc_launch_config_program_invoke(
+        program, function, workload_argument_count == 0 ? nullptr : workload_bits.data(), workload_argument_count,
+        &launch_config);
+    loomc_launch_config_program_release(program);
     if (!loomc_status_is_ok(status)) {
         return ggml_hrx_loom_jit_status_from_loom(status, "evaluate Loom launch config");
     }
-    if (!loomc_result_succeeded(result.get())) {
-        return ggml_hrx_loom_jit_status_from_result(result.get(), "Loom launch config evaluation failed");
-    }
-    if ((launch_config.fields & options.required_fields) != options.required_fields) {
-        return ggml_hrx_loom_jit_make_status(HRX_STATUS_FAILED_PRECONDITION,
-                                             "Loom launch config did not provide required workgroup count and size");
-    }
 
-    out_launch_config->fields             = launch_config.fields;
-    out_launch_config->workgroup_count[0] = launch_config.workgroup_count.x;
-    out_launch_config->workgroup_count[1] = launch_config.workgroup_count.y;
-    out_launch_config->workgroup_count[2] = launch_config.workgroup_count.z;
-    out_launch_config->workgroup_size[0]  = launch_config.workgroup_size.x;
-    out_launch_config->workgroup_size[1]  = launch_config.workgroup_size.y;
-    out_launch_config->workgroup_size[2]  = launch_config.workgroup_size.z;
-    out_launch_config->subgroup_size =
-        (launch_config.fields & LOOMC_LAUNCH_CONFIG_FIELD_FLAG_SUBGROUP_SIZE) ? launch_config.subgroup_size : 0;
-    out_launch_config->workgroup_storage_bytes =
-        (launch_config.fields & LOOMC_LAUNCH_CONFIG_FIELD_FLAG_WORKGROUP_STORAGE_BYTES) ?
-            launch_config.workgroup_storage_bytes :
-            0;
+    out_launch_config->workgroup_count[0]      = launch_config.workgroup_count.x;
+    out_launch_config->workgroup_count[1]      = launch_config.workgroup_count.y;
+    out_launch_config->workgroup_count[2]      = launch_config.workgroup_count.z;
+    out_launch_config->workgroup_size[0]       = launch_config.workgroup_size.x;
+    out_launch_config->workgroup_size[1]       = launch_config.workgroup_size.y;
+    out_launch_config->workgroup_size[2]       = launch_config.workgroup_size.z;
+    out_launch_config->subgroup_size           = launch_config.subgroup_size;
+    out_launch_config->workgroup_storage_bytes = launch_config.workgroup_storage_bytes;
     out_launch_config->workload_argument_count = workload_argument_count;
     return hrx_ok_status();
 }
@@ -882,18 +867,6 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     }
     result.reset();
 
-    hrx_status_t hrx_status = hrx_ok_status();
-    if (options->evaluate_launch_config) {
-        hrx_status = ggml_hrx_loom_jit_evaluate_launch_config(
-            module.get(), workspace.get(), options->root_symbol, jit->target_profile, config_bindings,
-            options->config_binding_count,
-            options->workload_argument_count == 0 ? nullptr : options->workload_arguments,
-            options->workload_argument_count, &out_result->launch_config);
-        if (!hrx_status_is_ok(hrx_status)) {
-            return hrx_status;
-        }
-    }
-
     const loomc_target_specialization_t specialization = {
         loomc_make_cstring_view(options->root_symbol),
         jit->target_profile,
@@ -909,6 +882,9 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     compile_options.next                                         = &compile_target_options;
     compile_options.module_name                                  = loomc_make_cstring_view(options->module_name);
     compile_options.artifact_flags  = LOOMC_COMPILE_ARTIFACT_FLAG_MODULE_TEXT | LOOMC_COMPILE_ARTIFACT_FLAG_REPORT_JSON;
+    if (options->evaluate_launch_config) {
+        compile_options.artifact_flags |= LOOMC_COMPILE_ARTIFACT_FLAG_LAUNCH_CONFIG;
+    }
     compile_options.config.bindings = config_bindings.get();
     compile_options.config.binding_count = options->config_binding_count;
     compile_options.config.flags         = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
@@ -919,6 +895,17 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     }
     if (!loomc_result_succeeded(result.get())) {
         return ggml_hrx_loom_jit_status_from_result(result.get(), "Loom compilation failed");
+    }
+
+    hrx_status_t hrx_status = hrx_ok_status();
+    if (options->evaluate_launch_config) {
+        hrx_status = ggml_hrx_loom_jit_evaluate_launch_config(
+            result.get(), options->root_symbol,
+            options->workload_argument_count == 0 ? nullptr : options->workload_arguments,
+            options->workload_argument_count, &out_result->launch_config);
+        if (!hrx_status_is_ok(hrx_status)) {
+            return hrx_status;
+        }
     }
 
     const loomc_artifact_t * compile_report = ggml_hrx_loom_jit_find_artifact(
