@@ -172,7 +172,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x136xf16>
   }
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-  %full_max, %full_sum, %full_output0, %full_output1, %full_output2, %full_output3 = scf.for %key_origin = [%c0 to %full_key_value_token_count step %c64](%current_max = %negative_f32x4 : vector<4xf32>, %current_sum = %c0_f32x4 : vector<4xf32>, %current_output0 = %output_zero0 : vector<4xf16>, %current_output1 = %output_zero1 : vector<4xf16>, %current_output2 = %output_zero2 : vector<4xf16>, %current_output3 = %output_zero3 : vector<4xf16>) -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+  %full_max, %full_sum, %full_fragment0, %full_fragment1 = scf.for %key_origin = [%c0 to %full_key_value_token_count step %c64](%current_max = %negative_f32x4 : vector<4xf32>, %current_sum = %c0_f32x4 : vector<4xf32>, %current_fragment0 = %c0_f16x8 : vector<8xf16>, %current_fragment1 = %c0_f16x8 : vector<8xf16>) -> (vector<4xf32>, vector<4xf32>, vector<8xf16>, vector<8xf16>) {
     // Cache the complete 16x64 mask tile before QK. Causal masks leave future
     // KV blocks entirely at negative infinity; reducing the cached tile lets
     // the workgroup skip QK, softmax, and P*V for those blocks. This mirrors
@@ -216,7 +216,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     %subgroup_mask_maxima = vector.load %mask_summary_view[%c0] : view<4xf32> -> vector<4xf32>
     %workgroup_mask_maximum = vector.reduce<maxnumf> %subgroup_mask_maxima, %negative_large : vector<4xf32>, f32
     %block_has_attention = scalar.cmpf ogt, %workgroup_mask_maximum, %negative_large : f32
-    %next_block_max, %next_block_sum, %next_block_output0, %next_block_output1, %next_block_output2, %next_block_output3 = scf.if %block_has_attention -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+    %next_block_max, %next_block_sum, %next_block_fragment0, %next_block_fragment1 = scf.if %block_has_attention -> (vector<4xf32>, vector<4xf32>, vector<8xf16>, vector<8xf16>) {
       // Four independent wave-level WMMAs produce a 16x64 score tile.
       %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
       %last_full_key_tile_start = index.sub %bounded_key_value_token_count, %c15 : index
@@ -262,24 +262,37 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
       view.store %probability1, %probability_stage_view[%query_row1, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
       view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
       view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+      // Keep each output tile in native F16 WMMA result ownership across KV
+      // blocks. Result payload lanes {0,2,4,6} own rows {lane/16 + 4*i}; the
+      // adjacent physical lanes carry the matching packed-half value.
+      %scale_publisher = index.cmp eq, %lane, %c0 : index
+      scf.if %scale_publisher {
+        %published_scale0 = vector.extract %old_scale[0] : vector<4xf32> -> f32
+        %published_scale1 = vector.extract %old_scale[1] : vector<4xf32> -> f32
+        %published_scale2 = vector.extract %old_scale[2] : vector<4xf32> -> f32
+        %published_scale3 = vector.extract %old_scale[3] : vector<4xf32> -> f32
+        view.store %published_scale0, %score_stage_view[%query_row0, %c16] : f32, view<64x24xf32>
+        view.store %published_scale1, %score_stage_view[%query_row1, %c16] : f32, view<64x24xf32>
+        view.store %published_scale2, %score_stage_view[%query_row2, %c16] : f32, view<64x24xf32>
+        view.store %published_scale3, %score_stage_view[%query_row3, %c16] : f32, view<64x24xf32>
+      }
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      // Match the Vulkan CM1 ownership schedule by computing two sequential
-      // 64-channel output tiles. This keeps one P*V accumulator live per wave
-      // and reuses a 2 KiB exchange tile instead of retaining both halves.
-      %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
-      %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
-      %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
-      %old_scale2_scalar = vector.extract %old_scale_f16[2] : vector<4xf16> -> f16
-      %old_scale3_scalar = vector.extract %old_scale_f16[3] : vector<4xf16> -> f16
-      %old_scale0 = vector.splat %old_scale0_scalar : vector<4xf16>
-      %old_scale1 = vector.splat %old_scale1_scalar : vector<4xf16>
-      %old_scale2 = vector.splat %old_scale2_scalar : vector<4xf16>
-      %old_scale3 = vector.splat %old_scale3_scalar : vector<4xf16>
-      %scaled_current_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output0, %old_scale0 : vector<4xf16>
-      %scaled_current_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output1, %old_scale1 : vector<4xf16>
-      %scaled_current_output2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output2, %old_scale2 : vector<4xf16>
-      %scaled_current_output3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output3, %old_scale3 : vector<4xf16>
-      %next_output0, %next_output1, %next_output2, %next_output3 = scf.for %output_tile = [%c0 to %c2 step %c1](%tile_output0 = %scaled_current_output0 : vector<4xf16>, %tile_output1 = %scaled_current_output1 : vector<4xf16>, %tile_output2 = %scaled_current_output2 : vector<4xf16>, %tile_output3 = %scaled_current_output3 : vector<4xf16>) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) unroll {
+      %fragment_scale_row0 = index.add %lane_output_tile, %c0 : index
+      %fragment_scale_row1 = index.add %lane_output_tile, %c4 : index
+      %fragment_scale_row2 = index.add %fragment_scale_row1, %c4 : index
+      %fragment_scale_row3 = index.add %fragment_scale_row2, %c4 : index
+      %fragment_scale0_f32 = view.load %score_stage_view[%fragment_scale_row0, %c16] : view<64x24xf32> -> f32
+      %fragment_scale1_f32 = view.load %score_stage_view[%fragment_scale_row1, %c16] : view<64x24xf32> -> f32
+      %fragment_scale2_f32 = view.load %score_stage_view[%fragment_scale_row2, %c16] : view<64x24xf32> -> f32
+      %fragment_scale3_f32 = view.load %score_stage_view[%fragment_scale_row3, %c16] : view<64x24xf32> -> f32
+      %fragment_scale0 = scalar.fptrunc %fragment_scale0_f32 : f32 to f16
+      %fragment_scale1 = scalar.fptrunc %fragment_scale1_f32 : f32 to f16
+      %fragment_scale2 = scalar.fptrunc %fragment_scale2_f32 : f32 to f16
+      %fragment_scale3 = scalar.fptrunc %fragment_scale3_f32 : f32 to f16
+      %fragment_scale = vector.from_elements %fragment_scale0, %fragment_scale0, %fragment_scale1, %fragment_scale1, %fragment_scale2, %fragment_scale2, %fragment_scale3, %fragment_scale3 : vector<8xf16>
+      %scaled_current_fragment0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_fragment0, %fragment_scale : vector<8xf16>
+      %scaled_current_fragment1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_fragment1, %fragment_scale : vector<8xf16>
+      %next_fragment0, %next_fragment1 = scf.for %output_tile = [%c0 to %c2 step %c1](%tile_fragment0 = %scaled_current_fragment0 : vector<8xf16>, %tile_fragment1 = %scaled_current_fragment1 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>) unroll {
         %output_tile_channel = index.mul %output_tile, %c64 : index
         %value_channel0 = index.add %key_value_head_base, %output_tile_channel : index
         %value_channel = index.add %value_channel0, %subgroup_product_channel : index
@@ -292,31 +305,65 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
           %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
           scf.yield %next_product_accumulator : vector<8xf16>
         }
-        vector.fragment.store<result> %product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
-        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-        %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
-        %updated_output0, %updated_output1, %updated_output2, %updated_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
-          %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-          %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-          %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-          %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-          %updated_tile_output0 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output0, %block_output0 : vector<4xf16>
-          %updated_tile_output1 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output1, %block_output1 : vector<4xf16>
-          %updated_tile_output2 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output2, %block_output2 : vector<4xf16>
-          %updated_tile_output3 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output3, %block_output3 : vector<4xf16>
-          scf.yield %updated_tile_output0, %updated_tile_output1, %updated_tile_output2, %updated_tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        %is_output_tile0 = index.cmp eq, %output_tile, %c0 : index
+        %updated_fragment0 = scf.if %is_output_tile0 -> (vector<8xf16>) {
+          %sum = vector.addf<reassoc|nnan|ninf|nsz> %tile_fragment0, %product_fragment : vector<8xf16>
+          scf.yield %sum : vector<8xf16>
         } else {
-          scf.yield %tile_output0, %tile_output1, %tile_output2, %tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+          scf.yield %tile_fragment0 : vector<8xf16>
         }
-        // Complete every read before the next output tile overwrites LDS.
-        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-        scf.yield %updated_output0, %updated_output1, %updated_output2, %updated_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        %is_output_tile1 = index.cmp eq, %output_tile, %c1 : index
+        %updated_fragment1 = scf.if %is_output_tile1 -> (vector<8xf16>) {
+          %sum = vector.addf<reassoc|nnan|ninf|nsz> %tile_fragment1, %product_fragment : vector<8xf16>
+          scf.yield %sum : vector<8xf16>
+        } else {
+          scf.yield %tile_fragment1 : vector<8xf16>
+        }
+        scf.yield %updated_fragment0, %updated_fragment1 : vector<8xf16>, vector<8xf16>
       }
-      scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      scf.yield %next_max, %next_sum, %next_fragment0, %next_fragment1 : vector<4xf32>, vector<4xf32>, vector<8xf16>, vector<8xf16>
     } else {
-      scf.yield %current_max, %current_sum, %current_output0, %current_output1, %current_output2, %current_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      scf.yield %current_max, %current_sum, %current_fragment0, %current_fragment1 : vector<4xf32>, vector<4xf32>, vector<8xf16>, vector<8xf16>
     }
-    scf.yield %next_block_max, %next_block_sum, %next_block_output0, %next_block_output1, %next_block_output2, %next_block_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    scf.yield %next_block_max, %next_block_sum, %next_block_fragment0, %next_block_fragment1 : vector<4xf32>, vector<4xf32>, vector<8xf16>, vector<8xf16>
+  }
+  // Convert native result-fragment ownership to row-owned packets once after
+  // the aligned KV loop. The legacy schedule performed this exchange twice per
+  // KV64 block; retaining fragments removes those repeated LDS round trips.
+  %final_fragment_row0 = index.add %lane_output_tile, %c0 : index
+  %final_fragment_row1 = index.add %lane_output_tile, %c4 : index
+  %final_fragment_row2 = index.add %final_fragment_row1, %c4 : index
+  %final_fragment_row3 = index.add %final_fragment_row2, %c4 : index
+  %full_output0, %full_output1, %full_output2, %full_output3 = scf.for %output_tile = [%c0 to %c2 step %c1](%row_output0 = %output_zero0 : vector<4xf16>, %row_output1 = %output_zero1 : vector<4xf16>, %row_output2 = %output_zero2 : vector<4xf16>, %row_output3 = %output_zero3 : vector<4xf16>) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) unroll {
+    %is_output_tile0 = index.cmp eq, %output_tile, %c0 : index
+    %output_fragment = scf.if %is_output_tile0 -> (vector<8xf16>) {
+      scf.yield %full_fragment0 : vector<8xf16>
+    } else {
+      scf.yield %full_fragment1 : vector<8xf16>
+    }
+    %fragment_column0 = index.rem %lane, %c16 : index
+    %fragment_column = index.add %subgroup_product_channel, %fragment_column0 : index
+    %fragment_value0 = vector.extract %output_fragment[0] : vector<8xf16> -> f16
+    %fragment_value1 = vector.extract %output_fragment[2] : vector<8xf16> -> f16
+    %fragment_value2 = vector.extract %output_fragment[4] : vector<8xf16> -> f16
+    %fragment_value3 = vector.extract %output_fragment[6] : vector<8xf16> -> f16
+    view.store %fragment_value0, %product_stage_view[%final_fragment_row0, %fragment_column] : f16, view<16x64xf16>
+    view.store %fragment_value1, %product_stage_view[%final_fragment_row1, %fragment_column] : f16, view<16x64xf16>
+    view.store %fragment_value2, %product_stage_view[%final_fragment_row2, %fragment_column] : f16, view<16x64xf16>
+    view.store %fragment_value3, %product_stage_view[%final_fragment_row3, %fragment_column] : f16, view<16x64xf16>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
+    %updated_output0, %updated_output1, %updated_output2, %updated_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+      %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+      %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+      %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+      %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+      scf.yield %block_output0, %block_output1, %block_output2, %block_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    } else {
+      scf.yield %row_output0, %row_output1, %row_output2, %row_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %updated_output0, %updated_output1, %updated_output2, %updated_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
   }
   // A masked 32-row tile handles the final 1-63 KV rows with the same WMMA
   // fragments as the aligned path. K and V are staged separately into product
