@@ -63,8 +63,11 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-set(GGML_HRX_QWEN_KERNEL_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/kernels/qwen_moe")
-set(GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST "${GGML_HRX_QWEN_KERNEL_CORPUS_DIR}/manifest.json")
+set(GGML_HRX_KERNEL_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/kernels")
+set(GGML_HRX_KERNEL_CORPUS_MANIFESTS
+    "${GGML_HRX_KERNEL_CORPUS_DIR}/qwen_moe/manifest.json"
+    "${GGML_HRX_KERNEL_CORPUS_DIR}/qwen36/manifest.json"
+)
 set(GGML_HRX_KERNEL_CORPUS_SOURCES_INC "${CMAKE_CURRENT_BINARY_DIR}/kernel-corpus-sources.inc")
 set(GGML_HRX_KERNEL_CORPUS_QWEN_INC "${CMAKE_CURRENT_BINARY_DIR}/kernel-corpus-qwen.inc")
 set(GGML_HRX_KERNEL_CORPUS_CATALOG_INC "${CMAKE_CURRENT_BINARY_DIR}/kernel-corpus-catalog.inc")
@@ -80,12 +83,13 @@ add_custom_command(
         --source-output "${GGML_HRX_KERNEL_CORPUS_SOURCES_INC}"
         --corpus-output "${GGML_HRX_KERNEL_CORPUS_QWEN_INC}"
         --catalog-output "${GGML_HRX_KERNEL_CORPUS_CATALOG_INC}"
-        --manifest "${GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST}"
-        --corpus-dir "${GGML_HRX_QWEN_KERNEL_CORPUS_DIR}"
+        --manifest "${GGML_HRX_KERNEL_CORPUS_DIR}/qwen_moe/manifest.json"
+        --manifest "${GGML_HRX_KERNEL_CORPUS_DIR}/qwen36/manifest.json"
+        --corpus-dir "${GGML_HRX_KERNEL_CORPUS_DIR}"
         --depfile "${GGML_HRX_KERNEL_CORPUS_DEPFILE}"
     DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_kernel_corpus.py"
-        "${GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST}"
+        ${GGML_HRX_KERNEL_CORPUS_MANIFESTS}
     DEPFILE "${GGML_HRX_KERNEL_CORPUS_DEPFILE}"
     VERBATIM
 )
@@ -102,6 +106,12 @@ add_library(ggml-hrx-graph STATIC
     graph/command-program.h
     graph/graph-ir.cpp
     graph/graph-ir.h
+    graph/qwen-hybrid-recipes.cpp
+    graph/qwen-hybrid-recipes.h
+    graph/qwen-hybrid-transformer.cpp
+    graph/qwen-hybrid-transformer.h
+    graph/qwen-hybrid-transformer-bindings.cpp
+    graph/qwen-hybrid-transformer-bindings.h
     graph/reactive-plan.cpp
     graph/reactive-plan.h
     graph/resource-access.h
@@ -130,6 +140,8 @@ set_target_properties(ggml-hrx-graph PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(ggml-hrx-transfer STATIC
     hrx-interop-utils.h
+    storage-transform.cpp
+    storage-transform.h
     transfer-manager.cpp
     transfer-manager.h
     weight-residency.cpp

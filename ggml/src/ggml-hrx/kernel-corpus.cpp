@@ -36,6 +36,35 @@ static bool string_empty(const char * value) {
     return value == nullptr || value[0] == 0;
 }
 
+static bool transform_name_matches(const kernel_storage_transform & transform, const std::string & name) {
+    const std::string prefix = transform.name_prefix != nullptr ? transform.name_prefix : "";
+    const std::string suffix = transform.name_suffix != nullptr ? transform.name_suffix : "";
+    if (name.size() < prefix.size() + suffix.size() || name.compare(0, prefix.size(), prefix) != 0 ||
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        return false;
+    }
+    if (!transform.decimal_middle) {
+        return true;
+    }
+    const size_t begin = prefix.size();
+    const size_t length = name.size() - prefix.size() - suffix.size();
+    if ((length > 1 && name[begin] == '0') || length == 0) {
+        return false;
+    }
+    return std::all_of(name.begin() + begin, name.begin() + begin + length,
+                       [](char value) { return value >= '0' && value <= '9'; });
+}
+
+static bool storage_transform_matches(
+    const kernel_storage_transform & transform, const std::string & target,
+    enum ggml_type type, const std::array<int64_t, GGML_MAX_DIMS> & shape, bool contiguous,
+    const std::string & tensor_name) {
+    return (string_empty(transform.target_selector) || target == transform.target_selector) &&
+           transform.type == static_cast<int32_t>(type) && transform.shape == shape &&
+           (!transform.contiguous || contiguous) &&
+           transform_name_matches(transform, tensor_name);
+}
+
 static bool contains_source_ref(kernel_span<kernel_source_ref> values, const char * path) {
     return std::find_if(values.begin(), values.end(),
                         [&](const kernel_source_ref & item) { return string_equal(item.path, path); }) != values.end();
@@ -91,6 +120,32 @@ const kernel_source * get_kernel_source(const char * source_path) {
 
 const kernel_corpus & get_qwen_kernel_corpus() {
     return qwen_kernel_corpus;
+}
+
+const kernel_storage_transform * resolve_kernel_storage_transform(
+    const kernel_corpus & corpus, const std::string & target, const std::string & layout,
+    enum ggml_type type, const std::array<int64_t, GGML_MAX_DIMS> & shape, bool contiguous,
+    const std::string & tensor_name) {
+    for (const kernel_storage_transform & transform : corpus.storage_transforms) {
+        if (!string_equal(transform.name, layout.c_str()) ||
+            !storage_transform_matches(transform, target, type, shape, contiguous, tensor_name)) {
+            continue;
+        }
+        return &transform;
+    }
+    return nullptr;
+}
+
+const kernel_storage_transform * match_kernel_storage_transform(
+    const kernel_corpus & corpus, const std::string & target,
+    enum ggml_type type, const std::array<int64_t, GGML_MAX_DIMS> & shape, bool contiguous,
+    const std::string & tensor_name) {
+    for (const kernel_storage_transform & transform : corpus.storage_transforms) {
+        if (storage_transform_matches(transform, target, type, shape, contiguous, tensor_name)) {
+            return &transform;
+        }
+    }
+    return nullptr;
 }
 
 kernel_resolve_result resolve_kernel_definition(const kernel_corpus &               corpus,

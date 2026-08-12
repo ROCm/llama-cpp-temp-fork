@@ -84,6 +84,7 @@ struct executable_buffer_binding {
     bool         mutable_state             = false;
     bool         exported                  = false;
     std::string  layout                    = "ggml-native";
+    const kernel_storage_transform * transform = nullptr;
 };
 
 struct executable_bindings {
@@ -156,7 +157,7 @@ class prepared_executable_program {
 
     const AllocationFingerprint & allocation_fingerprint() const { return allocation_fingerprint_; }
 
-    error_result rebind(const executable_bindings & bindings);
+    error_result rebind(const executable_bindings & bindings, const AllocationFingerprint & fingerprint);
     error_result launch(hrx_stream_t stream);
     error_result complete_after_synchronize();
     error_result snapshot_transients(std::vector<uint8_t> & bytes);

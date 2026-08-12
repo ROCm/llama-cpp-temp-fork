@@ -1,0 +1,70 @@
+config.decl @hrx2_shape_fa_gate_pointwise_d : %value: index where [range(%value, 8, 65536), mul(%value, 8)]
+config.decl @hrx2_shape_fa_gate_pointwise_nheads : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2_shape_fa_gate_pointwise_ntokens : %value: index where [range(%value, 1, 16384)]
+config.decl @hrx2_shape_fa_gate_pointwise_elements : %value: index where [range(%value, 8, 1073741824), mul(%value, 8)]
+config.decl @hrx2_shape_fa_gate_pointwise_gate_stride_head : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2_shape_fa_gate_pointwise_gate_stride_token : %value: index where [range(%value, 1, 32768)]
+
+kernel.def export("hrx2_flash_attn_gate_pointwise_f32") @hrx2_flash_attn_gate_pointwise_f32() {
+  %one = index.constant 1 : index
+  %eight = index.constant 8 : index
+  %wg_size = index.constant 256 : index
+  %wg_rounding = index.constant 255 : index
+  %elements = config.get @hrx2_shape_fa_gate_pointwise_elements : index
+  %vectors = index.div %elements, %eight : index
+  %rounded = index.add %vectors, %wg_rounding : index
+  %workgroups = index.div %rounded, %wg_size : index
+  kernel.launch.config workgroups(%workgroups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%fa: buffer, %gate: buffer, %out: buffer) {
+  %base = index.constant 0 : offset
+  %eight = index.constant 8 : index
+  %wg_size = index.constant 256 : index
+  %d = config.get @hrx2_shape_fa_gate_pointwise_d : index
+  %nheads = config.get @hrx2_shape_fa_gate_pointwise_nheads : index
+  %ntokens = config.get @hrx2_shape_fa_gate_pointwise_ntokens : index
+  %elements = config.get @hrx2_shape_fa_gate_pointwise_elements : index
+  %gate_stride_head = config.get @hrx2_shape_fa_gate_pointwise_gate_stride_head : index
+  %gate_stride_token = config.get @hrx2_shape_fa_gate_pointwise_gate_stride_token : index
+  %vectors = index.div %elements, %eight : index
+
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %vector_base0 = index.mul %workgroup, %wg_size : index
+  %vector_base = index.assume %vector_base0 [range(%vector_base0, 0, 1073741823)] : index
+  %vector_index0 = index.add %vector_base, %lane : index
+  %vector_index = index.assume %vector_index0 [range(%vector_index0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %vector_index, %vectors : index
+
+  %fa_global = buffer.assume.memory_space<global> %fa : buffer
+  %gate_global = buffer.assume.memory_space<global> %gate : buffer
+  %out_global = buffer.assume.memory_space<global> %out : buffer
+  %fa_na, %gate_na, %out_na = buffer.assume.noalias %fa_global, %gate_global, %out_global : buffer, buffer, buffer
+  %fa_view = buffer.view %fa_na[%base] : buffer -> view<1073741824xf32>
+  %gate_view = buffer.view %gate_na[%base] : buffer -> view<1073741824xf32>
+  %out_view = buffer.view %out_na[%base] : buffer -> view<1073741824xf32>
+
+  scf.if %in_bounds {
+    %linear0 = index.mul %vector_index, %eight : index
+    %linear = index.assume %linear0 [range(%linear0, 0, 1073741816)] : index
+    %d_index = index.rem %linear, %d : index
+    %head_linear = index.div %linear, %d : index
+    %head = index.rem %head_linear, %nheads : index
+    %token_linear = index.div %head_linear, %nheads : index
+    %token = index.rem %token_linear, %ntokens : index
+
+    %gate_head = index.mul %head, %gate_stride_head : index
+    %gate_token = index.mul %token, %gate_stride_token : index
+    %gate_index0 = index.add %d_index, %gate_head : index
+    %gate_index1 = index.add %gate_index0, %gate_token : index
+    %gate_index = index.assume %gate_index1 [range(%gate_index1, 0, 1073741816)] : index
+
+    %fa_value = vector.load %fa_view[%linear] : view<1073741824xf32> -> vector<8xf32>
+    %gate_value = vector.load %gate_view[%gate_index] : view<1073741824xf32> -> vector<8xf32>
+    %sigmoid = vector.logisticf<afn> %gate_value : vector<8xf32>
+    %result = vector.mulf<nnan|ninf|nsz> %fa_value, %sigmoid : vector<8xf32>
+    vector.store %result, %out_view[%linear] : vector<8xf32>, view<1073741824xf32>
+  }
+  kernel.return
+}

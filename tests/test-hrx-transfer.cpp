@@ -1,8 +1,10 @@
 #include "hrx_runtime.h"
+#include "storage-transform.h"
 #include "transfer-manager.h"
 #include "weight-residency.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -31,7 +33,50 @@ static void check(hrx_status_t status, const char * operation) {
     std::abort();
 }
 
+static void test_kernel_storage_transforms() {
+    const uint32_t field_order[] = { 2, 0, 1 };
+    ggml::hrx::kernel_storage_transform interleave;
+    interleave.kind        = ggml::hrx::kernel_storage_transform_kind::RowGroupFieldInterleave;
+    interleave.outer_count = 1;
+    interleave.row_count   = 4;
+    interleave.block_count = 2;
+    interleave.field_count = 3;
+    interleave.unit_bytes  = 1;
+    interleave.row_group   = 2;
+    interleave.field_order = { field_order, 3 };
+    const std::array<uint8_t, 24> canonical = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+    };
+    const std::array<uint8_t, 24> expected_interleave = {
+        2, 8, 0, 6, 1, 7, 5, 11, 3, 9, 4, 10, 14, 20, 12, 18, 13, 19, 17, 23, 15, 21, 16, 22,
+    };
+    std::array<uint8_t, 24> packed = {};
+    REQUIRE(ggml::hrx::kernel_storage_transform_size(interleave) == canonical.size());
+    REQUIRE(ggml::hrx::kernel_storage_transform_pack(
+        interleave, canonical.data(), canonical.size(), packed.data(), packed.size()));
+    REQUIRE(packed == expected_interleave);
+
+    ggml::hrx::kernel_storage_transform header_payload;
+    header_payload.kind          = ggml::hrx::kernel_storage_transform_kind::RowGroupBlockGroupHeaderPayload;
+    header_payload.outer_count   = 1;
+    header_payload.row_count     = 2;
+    header_payload.block_count   = 2;
+    header_payload.field_count   = 3;
+    header_payload.unit_bytes    = 1;
+    header_payload.row_group     = 2;
+    header_payload.block_group   = 2;
+    header_payload.header_fields = 1;
+    const std::array<uint8_t, 12> canonical_header_payload = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+    const std::array<uint8_t, 12> expected_header_payload  = { 0, 3, 6, 9, 1, 2, 4, 5, 7, 8, 10, 11 };
+    std::array<uint8_t, 12>       packed_header_payload    = {};
+    REQUIRE(ggml::hrx::kernel_storage_transform_pack(
+        header_payload, canonical_header_payload.data(), canonical_header_payload.size(),
+        packed_header_payload.data(), packed_header_payload.size()));
+    REQUIRE(packed_header_payload == expected_header_payload);
+}
+
 int main() {
+    test_kernel_storage_transforms();
     hrx_status_t initialize_status = hrx_gpu_initialize(0);
     if (!hrx_status_is_ok(initialize_status)) {
         REQUIRE(hrx_status_code(initialize_status) == HRX_STATUS_ALREADY_EXISTS);

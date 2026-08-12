@@ -9,6 +9,7 @@
 #include "schedule.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -118,10 +119,10 @@ static void test_deterministic_import_and_schedule() {
     invocation.covered_operations = { 0, 1 };
     for (ggml::hrx::ValueId value = 0; value < first.values.size(); ++value) {
         if (first.values[value].producer == ggml::hrx::kInvalidId) {
-            invocation.inputs.push_back({ "input" + std::to_string(value), value });
+            invocation.inputs.push_back({ "input" + std::to_string(value), value, 0, 0, {} });
         }
     }
-    invocation.outputs.push_back({ "result", first.operations.back().output });
+    invocation.outputs.push_back({ "result", first.operations.back().output, 0, 0, {} });
     invocation.dispatches.push_back({
         invocation.kernel,
         {
@@ -146,6 +147,31 @@ static void test_deterministic_import_and_schedule() {
     REQUIRE(!ggml::hrx::verify_schedule(first, wrong_dispatch_oracle).valid());
     schedule.invocations[0].covered_operations.pop_back();
     REQUIRE(!ggml::hrx::verify_schedule(first, schedule).valid());
+}
+
+static void test_strided_and_empty_view_spans() {
+    {
+        Fixture       fixture;
+        ggml_tensor * input = ggml_new_tensor_2d(fixture.context, GGML_TYPE_F32, 8192, 512);
+        ggml_set_input(input);
+        ggml_tensor * transposed = ggml_transpose(fixture.context, input);
+        ggml_set_output(transposed);
+        ggml_build_forward_expand(fixture.graph, transposed);
+
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::import(fixture.graph);
+        REQUIRE(graph.valid());
+    }
+    {
+        Fixture       fixture;
+        ggml_tensor * input = ggml_new_tensor_1d(fixture.context, GGML_TYPE_F32, 24576);
+        ggml_set_input(input);
+        ggml_tensor * empty = ggml_view_2d(fixture.context, input, 24576, 0, input->nb[1], ggml_nbytes(input));
+        ggml_set_output(empty);
+        ggml_build_forward_expand(fixture.graph, empty);
+
+        const ggml::hrx::Graph graph = ggml::hrx::Graph::import(fixture.graph);
+        REQUIRE(graph.valid());
+    }
 }
 
 static void test_set_rows_effects_and_views() {
@@ -225,22 +251,22 @@ static void test_set_rows_effects_and_views() {
     consumer.kernel = { "test", "consumer", {}, ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} };
     consumer.covered_operations = { view_id, add_id };
     consumer.inputs             = {
-        { "destination", effect_graph.operations[view_id].inputs[0] },
-        { "increment",   effect_graph.operations[add_id].inputs[1]  }
+        { "destination", effect_graph.operations[view_id].inputs[0], 0, 0, {} },
+        { "increment",   effect_graph.operations[add_id].inputs[1],  0, 0, {} }
     };
     consumer.outputs = {
-        { "sum", effect_graph.operations[add_id].output }
+        { "sum", effect_graph.operations[add_id].output, 0, 0, {} }
     };
     ggml::hrx::Invocation writer_invocation;
     writer_invocation.kernel = { "test", "writer", {}, ggml::hrx::KernelSpecialization::ExecutionKind::Native, {} };
     writer_invocation.covered_operations = { set_rows_id };
     writer_invocation.inputs             = {
-        { "rows",        operation.inputs[0] },
-        { "indices",     operation.inputs[1] },
-        { "destination", operation.inputs[2] }
+        { "rows",        operation.inputs[0], 0, 0, {} },
+        { "indices",     operation.inputs[1], 0, 0, {} },
+        { "destination", operation.inputs[2], 0, 0, {} }
     };
     writer_invocation.outputs = {
-        { "updated", operation.output }
+        { "updated", operation.output, 0, 0, {} }
     };
     reversed.invocations = { std::move(consumer), std::move(writer_invocation) };
     REQUIRE(!ggml::hrx::verify_schedule(effect_graph, reversed).valid());
@@ -274,14 +300,26 @@ static void test_reactive_cache_and_bindings() {
     REQUIRE(first_frame.values.size() == second_frame.values.size());
     REQUIRE(first_frame.values.front() == second_frame.values.front());
 
+    Fixture structural_twin;
+    build_arithmetic_graph(structural_twin, "first-runtime");
+    structural_twin.graph->uid = 105;
+    const ggml::hrx::ExecutionFrame structural_twin_frame =
+        cache.prepare(structural_twin.graph, "test-target");
+    REQUIRE(structural_twin_frame.valid());
+    REQUIRE(structural_twin_frame.plan == first_frame.plan);
+    REQUIRE(structural_twin_frame.values.size() == first_frame.values.size());
+    REQUIRE(structural_twin_frame.values.front() != first_frame.values.front());
+    REQUIRE(cache.stats().builds == 1);
+    REQUIRE(cache.stats().hits == 2);
+
     Fixture same_semantics;
     build_arithmetic_graph(same_semantics, "renamed-runtime");
     same_semantics.graph->uid                            = 102;
     const ggml::hrx::ExecutionFrame same_semantics_frame = cache.prepare(same_semantics.graph, "test-target");
     REQUIRE(same_semantics_frame.valid());
-    REQUIRE(same_semantics_frame.plan != first_frame.plan);
-    REQUIRE(cache.stats().builds == 2);
-    REQUIRE(cache.stats().hits == 1);
+    REQUIRE(same_semantics_frame.plan == first_frame.plan);
+    REQUIRE(cache.stats().builds == 1);
+    REQUIRE(cache.stats().hits == 3);
 
     const ggml::hrx::ExecutionFrame wrong_target = cache.prepare(first.graph, "different-target");
     REQUIRE(!wrong_target.valid());
@@ -294,14 +332,14 @@ static void test_reactive_cache_and_bindings() {
     REQUIRE(missing_uid.graph->uid == 0);
     const ggml::hrx::ExecutionFrame missing_uid_frame = cache.prepare(missing_uid.graph, "test-target");
     REQUIRE(missing_uid_frame.valid());
-    REQUIRE(cache.stats().builds == 3);
-    REQUIRE(cache.stats().hits == 1);
+    REQUIRE(cache.stats().builds == 2);
+    REQUIRE(cache.stats().hits == 3);
     REQUIRE(cache.stats().failures == 2);
     const ggml::hrx::ExecutionFrame repeated_missing_uid_frame = cache.prepare(missing_uid.graph, "test-target");
     REQUIRE(repeated_missing_uid_frame.valid());
     REQUIRE(repeated_missing_uid_frame.plan != missing_uid_frame.plan);
-    REQUIRE(cache.stats().builds == 4);
-    REQUIRE(cache.stats().hits == 1);
+    REQUIRE(cache.stats().builds == 3);
+    REQUIRE(cache.stats().hits == 3);
     REQUIRE(cache.stats().failures == 2);
 
     Fixture       changed;
@@ -314,7 +352,7 @@ static void test_reactive_cache_and_bindings() {
     ggml_build_forward_expand(changed.graph, add);
     changed.graph->uid = 103;
     REQUIRE(cache.prepare(changed.graph, "test-target").valid());
-    REQUIRE(cache.stats().builds == 5);
+    REQUIRE(cache.stats().builds == 4);
 
     ggml::hrx::ReactivePlanCache concurrent_cache;
     first.graph->uid                      = 104;
@@ -341,10 +379,15 @@ static void test_eager_capabilities_and_resource_verification() {
              GGML_OP_ADD,
              GGML_OP_ARGSORT,
              GGML_OP_CLAMP,
+             GGML_OP_CONCAT,
+             GGML_OP_CONT,
+             GGML_OP_CPY,
              GGML_OP_DIV,
              GGML_OP_FLASH_ATTN_EXT,
+             GGML_OP_GATED_DELTA_NET,
              GGML_OP_GET_ROWS,
              GGML_OP_GLU,
+             GGML_OP_L2_NORM,
              GGML_OP_MUL,
              GGML_OP_MUL_MAT,
              GGML_OP_MUL_MAT_ID,
@@ -352,9 +395,13 @@ static void test_eager_capabilities_and_resource_verification() {
              GGML_OP_RESHAPE,
              GGML_OP_RMS_NORM,
              GGML_OP_ROPE,
+             GGML_OP_SCALE,
              GGML_OP_SET_ROWS,
              GGML_OP_SOFT_MAX,
+             GGML_OP_SSM_CONV,
              GGML_OP_SUM_ROWS,
+             GGML_OP_TRANSPOSE,
+             GGML_OP_UNARY,
              GGML_OP_VIEW,
          }) {
         REQUIRE(ggml::hrx::eager_capability_declared(op));
@@ -507,6 +554,13 @@ static void test_command_program_and_diagnostics() {
         snapshot.bindings.push_back({ resource.storage, identity++, 1, resource.size, 0, resource.size });
     }
     REQUIRE(ggml::hrx::verify_binding_snapshot(plan, snapshot).valid());
+    ggml::hrx::ProgramPlan empty_boundary_plan = plan;
+    const ggml::hrx::StorageId empty_boundary_storage = snapshot.bindings.front().storage;
+    empty_boundary_plan.graph.storages[empty_boundary_storage].size = 0;
+    empty_boundary_plan.resources.resources[empty_boundary_storage].size = 0;
+    ggml::hrx::BindingSnapshot empty_boundary_snapshot = snapshot;
+    empty_boundary_snapshot.bindings.erase(empty_boundary_snapshot.bindings.begin());
+    REQUIRE(ggml::hrx::verify_binding_snapshot(empty_boundary_plan, empty_boundary_snapshot).valid());
     const ggml::hrx::AllocationFingerprint first = ggml::hrx::fingerprint_bindings(snapshot);
     REQUIRE(!first.value.empty());
     REQUIRE(ggml::hrx::format_binding_snapshot(snapshot).find("buffer=<runtime>") != std::string::npos);
@@ -559,9 +613,27 @@ static void test_command_program_and_diagnostics() {
 static void test_pinned_kernel_corpus_manifest() {
     const ggml::hrx::kernel_corpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
     REQUIRE(ggml::hrx::verify_kernel_corpus(corpus).valid());
-    REQUIRE(std::string(corpus.upstream_revision) == "c09218e7ca354654b6c66dddaf80f6294e4748bb");
-    REQUIRE(corpus.kernels.size() == 57);
+    REQUIRE(std::string(corpus.upstream_revision) ==
+            "c09218e7ca354654b6c66dddaf80f6294e4748bb+e809fd673bc46d47da5b07f59c0415fe379c4816");
+    REQUIRE(corpus.kernels.size() == 121);
+    REQUIRE(corpus.storage_transforms.size() == 4);
     REQUIRE(corpus.plan_case_count == 32);
+
+    const std::array<int64_t, GGML_MAX_DIMS> q5_shape = { 512, 2048, 256, 1 };
+    const ggml::hrx::kernel_storage_transform * q5_transform = ggml::hrx::match_kernel_storage_transform(
+        corpus, "gfx1151", GGML_TYPE_Q5_K, q5_shape, true, "blk.0.ffn_down_exps.weight");
+    REQUIRE(q5_transform != nullptr);
+    REQUIRE(std::string(q5_transform->name) == "q5_k_expert_down_group4");
+    REQUIRE(ggml::hrx::match_kernel_storage_transform(
+                corpus, "gfx1151", GGML_TYPE_Q5_K, q5_shape, true, "blk.00.ffn_down_exps.weight") == nullptr);
+    REQUIRE(ggml::hrx::match_kernel_storage_transform(
+                corpus, "gfx1151", GGML_TYPE_Q5_K, q5_shape, true, "ffn_down_exps.weight") == nullptr);
+
+    const std::array<int64_t, GGML_MAX_DIMS> q8_shape = { 4096, 2048, 1, 1 };
+    const ggml::hrx::kernel_storage_transform * q8_transform = ggml::hrx::match_kernel_storage_transform(
+        corpus, "gfx1151", GGML_TYPE_Q8_0, q8_shape, true, "");
+    REQUIRE(q8_transform != nullptr);
+    REQUIRE(std::string(q8_transform->name) == "q8_0_tile64_k64");
     const char *                           family  = "qwen3_moe";
     const char *                           name    = "ggml_linear_q6k_q8_1_x4";
     const uint64_t                         id      = ggml::hrx::kernel_catalog_id(family, name);
@@ -886,6 +958,7 @@ int main(int argc, char ** argv) {
     }
     REQUIRE(argc == 1);
     test_deterministic_import_and_schedule();
+    test_strided_and_empty_view_spans();
     test_set_rows_effects_and_views();
     test_reactive_cache_and_bindings();
     test_eager_capabilities_and_resource_verification();

@@ -1,0 +1,2147 @@
+{
+  "exports": [
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/add/f16_f32/non_contiguous.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "add_f32_non_contiguous_4d",
+      "source": "legacy/sources/generic/add/f16_f32/non_contiguous.loom",
+      "symbol": "add_f32_non_contiguous",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_tile64.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_tile64",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_tile64.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64_tile64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "q_weight",
+        "k_weight",
+        "v_weight",
+        "input",
+        "input_hi",
+        "v_index",
+        "q_dst",
+        "k_dst",
+        "v_cache"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/attention_qkv_direct_v_cache_decode.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "attention_qkv_direct_v_cache_decode",
+      "source": "legacy/sources/gfx1151/graph/attention_qkv_direct_v_cache_decode.loom",
+      "symbol": "hrx2_attention_qkv_direct_v_cache_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "packed_qact"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_packed_qact_tile64.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_packed_qact_tile64",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_packed_qact_tile64.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64_packed_qact_tile64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "state",
+        "x",
+        "filt",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/ssm_conv/f32/channels_first_concat_silu_regblock_wg1024.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "concat_window_tail_ssm_silu_regblock_wg1024",
+      "source": "legacy/sources/gfx1151/ssm_conv/f32/channels_first_concat_silu_regblock_wg1024.loom",
+      "symbol": "hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "state",
+        "x",
+        "dst",
+        "cache"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/concat_window_tail.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "concat_window_tail_wg256",
+      "source": "legacy/sources/gfx1151/graph/concat_window_tail.loom",
+      "symbol": "hrx2_concat_window_tail",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/copy/f32_f32/contiguous_1d.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "copy_f32_f32_contiguous_1d",
+      "source": "legacy/sources/generic/copy/f32_f32/contiguous_1d.loom",
+      "symbol": "copy_f32_f32_contiguous_1d",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "mask",
+        "gate",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx11-generic/flash_attn_ext/f32_f16/direct_kv64_f32acc_gate.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "flash_attn_ext_f32_f16_direct_kv64_f32acc_gate",
+      "source": "legacy/sources/gfx11-generic/flash_attn_ext/f32_f16/direct_kv64_f32acc_gate.loom",
+      "symbol": "hrx2_flash_attn_ext_f32_f16_direct_kv64_f32acc_gate",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "mask",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/flash_attn_ext/f32_f16/wave_token1_f32.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "flash_attn_ext_f32_f16_wave256_token1",
+      "source": "legacy/sources/gfx1151/flash_attn_ext/f32_f16/wave_token1_f32.loom",
+      "symbol": "hrx2_flash_attn_ext_f32_f16_wave_token1",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "fa",
+        "gate",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/flash_attn_gate_pointwise_f32.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "flash_attn_gate_pointwise_f32",
+      "source": "legacy/sources/gfx1151/graph/flash_attn_gate_pointwise_f32.loom",
+      "symbol": "hrx2_flash_attn_gate_pointwise_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "g",
+        "beta",
+        "state_io",
+        "qk_scales",
+        "attn_dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/gated_delta_net/f32/state_cache_decode_token1_signedpad_qk_scaled.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "gated_delta_net_f32_state_cache_decode_token1_signedpad_qk_scaled",
+      "source": "legacy/sources/gfx1151/gated_delta_net/f32/state_cache_decode_token1_signedpad_qk_scaled.loom",
+      "symbol": "hrx2_gated_delta_net_f32_sv128_state_cache_decode_token1_signedpad_qk_scaled",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "g",
+        "beta",
+        "state_in",
+        "dst",
+        "rms_scales"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused_wg256",
+      "source": "legacy/sources/gfx1151/graph/gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused.loom",
+      "symbol": "hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/get_rows/f32/n2048_r1_64_wg256.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "get_rows_f32_n2048_r1_64_wg256",
+      "source": "legacy/sources/gfx1151/get_rows/f32/n2048_r1_64_wg256.loom",
+      "symbol": "hrx2_get_rows_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/get_rows/q8_0_f32/n2048_rany.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "get_rows_q8_0_n2048_rany",
+      "source": "legacy/sources/gfx1151/get_rows/q8_0_f32/n2048_rany.loom",
+      "symbol": "hrx2_get_rows_q8_0_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/get_rows/f32/wide_wg256.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "get_rows_wide_f32_wg256",
+      "source": "legacy/sources/gfx1151/get_rows/f32/wide_wg256.loom",
+      "symbol": "hrx2_get_rows_wide_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "idx",
+        "table"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/mmid_table.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mmid_table",
+      "source": "legacy/sources/gfx1151/prepass/mmid_table.loom",
+      "symbol": "hrx2_mmid_table",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "router_source",
+        "snapshot"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/sum_slices_f32_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "moe_router_snapshot_pp512",
+      "source": "legacy/sources/gfx1151/graph/sum_slices_f32_pp512.loom",
+      "symbol": "hrx2_moe_router_snapshot_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/generic/mul/f16_f32/non_contiguous.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_f32_non_contiguous_4d",
+      "source": "legacy/sources/generic/mul/f16_f32/non_contiguous.loom",
+      "symbol": "mul_f32_non_contiguous",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_f32_rhs_row_broadcast_2d_r64_1048576_wg256",
+      "source": "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom",
+      "symbol": "hrx2_mul_f32_rhs_row_broadcast_2d",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/f32_f32/decode_vec8_k2048_r256_c1_wg256.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_f32_f32_decode_vec8_k2048_r256_c1_wg256",
+      "source": "legacy/sources/gfx1151/mul_mat/f32_f32/decode_vec8_k2048_r256_c1_wg256.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_decode_vec8",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "alpha_weight",
+        "beta_weight",
+        "input",
+        "bias",
+        "a_scale",
+        "gate_dst",
+        "beta_dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_pp_gdn_dual_projection_epilogue.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_f32_f32_pp_gdn_dual_projection_epilogue",
+      "source": "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_pp_gdn_dual_projection_epilogue.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_pp_gdn_dual_projection_epilogue",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_tiled.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_f32_f32_tiled",
+      "source": "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_tiled.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_tiled32x32x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/mul_mat_id_q4_k_f32_mmqt_pre.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q4_k_f32_mmq_gfx1151_wg256_pre_tbl",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/mul_mat_id_q4_k_f32_mmqt_pre.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/mul_mat_id_q4_k_f32_mmqt_pre.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q4_k_f32_mmq_gfx1151_wg256_pre_tbl_decode_topk_qact_table",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/mul_mat_id_q4_k_f32_mmqt_pre.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "gate",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/mul_mat_id_q4_k_f32_mmqt_pre_swiglu.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q4_k_f32_swiglu",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/mul_mat_id_q4_k_f32_mmqt_pre_swiglu.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_swiglu_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q5_k_f32/mul_mat_id_q5_k_f32_mmqt_pre.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q5_k_f32_mmq_gfx1151_wg256_pre_tbl",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q5_k_f32/mul_mat_id_q5_k_f32_mmqt_pre.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "gate",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q5_k_f32/mul_mat_id_q5_k_f32_mmqt_pre_swiglu.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q5_k_f32_swiglu",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q5_k_f32/mul_mat_id_q5_k_f32_mmqt_pre_swiglu.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_swiglu_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q6_k_f32/mul_mat_id_q6_k_f32_mmqt.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q6_k_f32_mmq_gfx1151_wg256_tbl",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q6_k_f32/mul_mat_id_q6_k_f32_mmqt.loom",
+      "symbol": "hrx2_mul_mat_id_q6_k_f32_mmqt_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "gate_weights",
+        "up_weights",
+        "shared_gate_weight",
+        "src1",
+        "dst",
+        "raw_gate"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_gate",
+        "addend",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_decode_shared_terminal_epilogue.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_decode_shared_terminal_epilogue",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_decode_shared_terminal_epilogue.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_decode_shared_terminal_epilogue",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "src1_hi",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_static_packed_2trip",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_decode_k4096_wg256_scfunroll4",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_static_packed_scf_unroll",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "qkv_weight",
+        "raw_gate_weight",
+        "input",
+        "input_hi",
+        "qkv_dst",
+        "raw_gate_dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/recurrent_pair_chunked.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_recurrent_pair_chunked",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/recurrent_pair_chunked.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_recurrent_pair_k2048_chunk256_128",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_side",
+        "norm_weight",
+        "dst",
+        "rms_scale",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_gdn_rms_side_epilogue.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_gdn_rms_side_epilogue",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_gdn_rms_side_epilogue.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_gdn_rms_side_epilogue",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "packed_qact"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_packed_qact.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_packed_qact",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_packed_qact.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64_packed_qact",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_gate",
+        "addend",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_shared_expert_terminal_epilogue.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_shared_expert_terminal_epilogue",
+      "source": "legacy/sources/gfx1151/mul_mat/q8_0_f32/mul_mat_q8_0_f32_wmmai8_shared_expert_terminal_epilogue.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_shared_expert_terminal_epilogue",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "gatew",
+        "packed",
+        "down_qact"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/q4_dual_gate_up_swiglu_q5qact_tableless_packed_decode.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q4_dual_gate_up_swiglu_q5qact_tableless_packed_decode",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q4_k_f32/q4_dual_gate_up_swiglu_q5qact_tableless_packed_decode.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_dual_gate_up_swiglu_q5_qact_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/q4_gate_packed_meta_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q4_gate_packed_meta_pp512",
+      "source": "legacy/sources/gfx1151/graph/q4_gate_packed_meta_pp512.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_static_packed_meta",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "gate",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/q4_up_swiglu_q5_qact_packed_meta_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q4_up_swiglu_q5_qact_packed_meta_pp512",
+      "source": "legacy/sources/gfx1151/graph/q4_up_swiglu_q5_qact_packed_meta_pp512.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_swiglu_q5_down_qact_packed_meta",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "tbl"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/q5_down_f16_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q5_down_f16_pp512",
+      "source": "legacy/sources/gfx1151/graph/q5_down_f16_pp512.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_down_terminal_qact_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst",
+        "qact"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat_id/q5_k_f32/q5_down_tableless_compact_qact_decode.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q5_down_tableless_compact_qact_decode",
+      "source": "legacy/sources/gfx1151/mul_mat_id/q5_k_f32/q5_down_tableless_compact_qact_decode.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_down_tableless_compact_qact_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "qa_src",
+        "qa_qs",
+        "qa_meta",
+        "mm_idx",
+        "prepass_mmid",
+        "ss_router_source"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/qact_mmid_router_snapshot_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "qact_mmid_router_snapshot_pp512",
+      "source": "legacy/sources/gfx1151/graph/qact_mmid_router_snapshot_pp512.loom",
+      "symbol": "hrx2_qact_mmid_router_snapshot_pp512",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "qs",
+        "ds",
+        "sums"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/quant_act_q8.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "quant_act_q8",
+      "source": "legacy/sources/gfx1151/prepass/quant_act_q8.loom",
+      "symbol": "hrx2_quant_act_q8",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "packed"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/quant_act_q8_packed.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "quant_act_q8_packed",
+      "source": "legacy/sources/gfx1151/prepass/quant_act_q8_packed.loom",
+      "symbol": "hrx2_quant_act_q8_packed",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "weight",
+        "raw_gate",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/recurrent_rms_raw_gate_silu_mul.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "recurrent_rms_raw_gate_silu_mul",
+      "source": "legacy/sources/gfx1151/graph/recurrent_rms_raw_gate_silu_mul.loom",
+      "symbol": "hrx2_recurrent_rms_raw_gate_silu_mul_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read_write",
+        "read",
+        "read",
+        "write",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "state_io",
+        "x",
+        "filt",
+        "dst",
+        "qk_scales",
+        "alpha_weight",
+        "beta_weight",
+        "projection_input",
+        "bias",
+        "a_scale",
+        "gate",
+        "beta"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/recurrent_ssm_gdn_full_producer.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "recurrent_ssm_gdn_full_producer",
+      "source": "legacy/sources/gfx1151/graph/recurrent_ssm_gdn_full_producer.loom",
+      "symbol": "hrx2_ssm_conv_f32_state_cache_decode_full_producer",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/rms_norm/f32/strided_wide_wg256.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "rms_norm_strided_f32_wide_wg256",
+      "source": "legacy/sources/gfx1151/rms_norm/f32/strided_wide_wg256.loom",
+      "symbol": "hrx2_rms_norm_strided_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "weight",
+        "pos",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/rms_norm_strided_mul_rope_f32.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        },
+        {
+          "name": "freq_base",
+          "type": "f32"
+        },
+        {
+          "name": "freq_scale",
+          "type": "f32"
+        },
+        {
+          "name": "attn_factor",
+          "type": "f32"
+        }
+      ],
+      "name": "rms_norm_strided_mul_rope_f32",
+      "source": "legacy/sources/gfx1151/graph/rms_norm_strided_mul_rope_f32.loom",
+      "symbol": "hrx2_rms_norm_strided_mul_rope_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        },
+        {
+          "name": "bias",
+          "type": "f32"
+        }
+      ],
+      "name": "scale_f32_generic_wg256",
+      "source": "legacy/sources/gfx1151/pointwise/f32/production_pp512.loom",
+      "symbol": "hrx2_scale_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "set_rows_f32_f16_generic",
+      "source": "legacy/sources/gfx1151/set_rows/f32_f16/generic.loom",
+      "symbol": "hrx2_set_rows_f32_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_gate",
+        "selected",
+        "router_weights",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/shared_moe_terminal_decode.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "shared_moe_terminal_decode",
+      "source": "legacy/sources/gfx1151/graph/shared_moe_terminal_decode.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_decode_shared_moe_terminal",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "selected",
+        "dst",
+        "snapshot"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/sum_slices_f16_exact_mmid_snapshot_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "sum_slices_f16_exact_mmid_snapshot_pp512",
+      "source": "legacy/sources/gfx1151/graph/sum_slices_f16_exact_mmid_snapshot_pp512.loom",
+      "symbol": "hrx2_sum_slices_f16_exact_mmid_snapshot",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "selected",
+        "dst",
+        "router_source"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/sum_slices_f32_decode_nosnapshot.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "sum_slices_f32_decode_nosnapshot",
+      "source": "legacy/sources/gfx1151/graph/sum_slices_f32_decode_nosnapshot.loom",
+      "symbol": "hrx2_sum_slices_f32_decode_nosnapshot",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "selected",
+        "dst",
+        "router_source_unused",
+        "snapshot"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/sum_slices_f32_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "sum_slices_f32_pp512",
+      "source": "legacy/sources/gfx1151/graph/sum_slices_f32_pp512.loom",
+      "symbol": "hrx2_sum_slices_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "logits",
+        "ids",
+        "weights"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/topk_moe_softmax_norm_decode.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_moe_softmax_norm_decode",
+      "source": "legacy/sources/gfx1151/graph/topk_moe_softmax_norm_decode.loom",
+      "symbol": "hrx2_topk_moe_softmax_norm_decode_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "ids",
+        "weights"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/topk_moe_softmax_norm_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_moe_softmax_norm_pp512",
+      "source": "legacy/sources/gfx1151/graph/topk_moe_softmax_norm_pp512.loom",
+      "symbol": "hrx2_topk_moe_weights_copy_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "logits",
+        "ids"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/topk_moe_softmax_norm_pp512.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_moe_softmax_norm_stage_pp512",
+      "source": "legacy/sources/gfx1151/graph/topk_moe_softmax_norm_pp512.loom",
+      "symbol": "hrx2_topk_moe_softmax_norm_stage_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "read",
+        "write",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "tk_logits",
+        "tk_ids",
+        "tk_weights",
+        "qa_src",
+        "qa_qs",
+        "qa_ds",
+        "qa_sums",
+        "sp_table"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/prepass/topk_qact_mmid_table_decode.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_qact_mmid_table_decode",
+      "source": "legacy/sources/gfx1151/prepass/topk_qact_mmid_table_decode.loom",
+      "symbol": "hrx2_topk_qact_mmid_table_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "tk_logits",
+        "tk_ids",
+        "tk_weights",
+        "src1",
+        "qa_packed",
+        "gate_weights",
+        "up_weights",
+        "shared_gate_weight",
+        "shared_dst",
+        "raw_gate"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/topk_qact_shared_producer_decode.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_qact_shared_producer_decode",
+      "source": "legacy/sources/gfx1151/graph/topk_qact_shared_producer_decode.loom",
+      "symbol": "hrx2_topk_qact_shared_producer_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "add_dst",
+        "weight",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/add_rms_norm_mul_f32.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "wide_add_rms_norm_mul_f32",
+      "source": "legacy/sources/gfx1151/graph/add_rms_norm_mul_f32.loom",
+      "symbol": "hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/swiglu/f32/wide_split.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "wide_glu_swiglu_split",
+      "source": "legacy/sources/gfx1151/swiglu/f32/wide_split.loom",
+      "symbol": "hrx2_swiglu_f32_split",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/f32_f32/wide_mul_mat_f32_f32.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "wide_mul_mat_f32_f32",
+      "source": "legacy/sources/gfx1151/mul_mat/f32_f32/wide_mul_mat_f32_f32.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "weight",
+        "dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/rms_norm_mul_f32.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "wide_rms_norm_mul_f32",
+      "source": "legacy/sources/gfx1151/graph/rms_norm_mul_f32.loom",
+      "symbol": "hrx2_rms_norm_mul_f32_static_vector_tail",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    }
+  ],
+  "plan_cases": [],
+  "resources": [
+    "native-recipes.json"
+  ],
+  "storage_transforms": [
+    {
+      "name": "q5_k_expert_down_group4",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q5_K",
+        "shape": [512, 2048, 256, 1],
+        "contiguous": true,
+        "name": {
+          "prefix": "blk.",
+          "middle": "decimal",
+          "suffix": ".ffn_down_exps.weight"
+        }
+      },
+      "transform": {
+        "kind": "row_group_field_interleave",
+        "outer_count": 256,
+        "row_count": 2048,
+        "block_count": 2,
+        "field_count": 11,
+        "unit_bytes": 16,
+        "row_group": 16,
+        "field_order": [0, 1, 3, 5, 7, 9, 2, 4, 6, 8, 10]
+      }
+    },
+    {
+      "name": "q8_0_tile64_k64",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q8_0",
+        "shape": [2048, 8192, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "row_group_block_group_header_payload",
+        "outer_count": 1,
+        "row_count": 8192,
+        "block_count": 64,
+        "field_count": 17,
+        "unit_bytes": 2,
+        "row_group": 64,
+        "block_group": 2,
+        "header_fields": 1
+      }
+    },
+    {
+      "name": "q8_0_tile64_k64",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q8_0",
+        "shape": [4096, 2048, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "row_group_block_group_header_payload",
+        "outer_count": 1,
+        "row_count": 2048,
+        "block_count": 128,
+        "field_count": 17,
+        "unit_bytes": 2,
+        "row_group": 64,
+        "block_group": 2,
+        "header_fields": 1
+      }
+    },
+    {
+      "name": "q8_0_tile64_k64",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q8_0",
+        "shape": [2048, 248320, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "row_group_block_group_header_payload",
+        "outer_count": 1,
+        "row_count": 248320,
+        "block_count": 64,
+        "field_count": 17,
+        "unit_bytes": 2,
+        "row_group": 64,
+        "block_group": 2,
+        "header_fields": 1
+      }
+    }
+  ],
+  "schema": "ggml-hrx-qwen36-native-kernel-corpus-v1",
+  "source_subdirectory": "ggml/src/ggml-hrx/loom-catalog",
+  "upstream_repository": "https://github.com/ROCm/llama-cpp-temp-fork.git",
+  "upstream_revision": "e809fd673bc46d47da5b07f59c0415fe379c4816"
+}

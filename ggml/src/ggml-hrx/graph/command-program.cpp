@@ -1,6 +1,8 @@
 #include "command-program.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -20,9 +22,12 @@ static size_t align_up(size_t value, size_t alignment) {
 }
 
 static size_t value_span(const Value & value) {
+    if (std::any_of(value.access.shape.begin(), value.access.shape.end(), [](int64_t extent) { return extent == 0; })) {
+        return 0;
+    }
     const size_t blocks = (static_cast<size_t>(value.access.shape[0]) + ggml_blck_size(value.type) - 1) /
         ggml_blck_size(value.type);
-    size_t result = blocks * value.access.strides[0];
+    size_t result = ggml_type_size(value.type) + (blocks - 1) * value.access.strides[0];
     for (int i = 1; i < GGML_MAX_DIMS; ++i) {
         if (value.access.shape[i] > 0) result += static_cast<size_t>(value.access.shape[i] - 1) * value.access.strides[i];
     }
@@ -149,16 +154,22 @@ static std::vector<Command> expand_synthetic_commands(const std::vector<Command>
     return result;
 }
 
-static std::string stable_hash(const std::string & text) {
-    // FNV-1a is used only as an in-process cache witness.
-    uint64_t hash = UINT64_C(1469598103934665603);
-    for (unsigned char byte : text) {
+static void stable_hash_append(uint64_t & hash, const char * data, size_t length) {
+    for (size_t i = 0; i < length; ++i) {
+        const unsigned char byte = static_cast<unsigned char>(data[i]);
         hash ^= byte;
         hash *= UINT64_C(1099511628211);
     }
-    std::ostringstream out;
-    out << std::hex << std::setw(16) << std::setfill('0') << hash;
-    return out.str();
+}
+
+static std::string stable_hash_format(uint64_t hash) {
+    std::array<char, 16> result;
+    result.fill('0');
+    std::array<char, 16> digits;
+    const auto converted = std::to_chars(digits.data(), digits.data() + digits.size(), hash, 16);
+    const size_t length = static_cast<size_t>(converted.ptr - digits.data());
+    std::copy_n(digits.data(), length, result.end() - length);
+    return std::string(result.data(), result.size());
 }
 
 struct TransientExecutionOrder {
@@ -600,19 +611,20 @@ VerificationResult verify_command_program(const ProgramPlan & plan, const kernel
 VerificationResult verify_binding_snapshot(const ProgramPlan & plan, const BindingSnapshot & snapshot) {
     VerificationResult result;
     if (snapshot.device_identity.empty()) result.errors.push_back("binding snapshot has no device identity");
-    std::set<StorageId> storages;
+    std::vector<uint8_t> storages(plan.graph.storages.size(), 0);
     for (const ConcreteBinding & binding : snapshot.bindings) {
-        if (binding.storage >= plan.graph.storages.size() || !storages.insert(binding.storage).second) {
+        if (binding.storage >= plan.graph.storages.size() || storages[binding.storage] != 0) {
             result.errors.push_back("binding snapshot has invalid or duplicate storage");
             continue;
         }
+        storages[binding.storage] = 1;
         if (binding.buffer_identity == 0 || binding.generation == 0 || binding.length == 0 ||
             binding.offset + binding.length > binding.capacity || binding.length < plan.graph.storages[binding.storage].size) {
             result.errors.push_back("binding snapshot range or identity is invalid");
         }
     }
     for (const ResourceContract & resource : plan.resources.resources) {
-        if (!resource.elidable && storages.count(resource.storage) == 0) {
+        if (!resource.elidable && resource.size != 0 && storages[resource.storage] == 0) {
             result.errors.push_back("binding snapshot omits pinned storage " + std::to_string(resource.storage));
         }
     }
@@ -620,17 +632,40 @@ VerificationResult verify_binding_snapshot(const ProgramPlan & plan, const Bindi
 }
 
 AllocationFingerprint fingerprint_bindings(const BindingSnapshot & snapshot) {
-    std::ostringstream witness;
-    witness << snapshot.device_identity << '\n';
-    std::vector<ConcreteBinding> bindings = snapshot.bindings;
-    std::sort(bindings.begin(), bindings.end(), [](const ConcreteBinding & a, const ConcreteBinding & b) {
+    const auto storage_less = [](const ConcreteBinding & a, const ConcreteBinding & b) {
         return a.storage < b.storage;
-    });
-    for (const ConcreteBinding & binding : bindings) {
-        witness << binding.storage << ':' << binding.buffer_identity << ':' << binding.generation << ':'
-                << binding.capacity << ':' << binding.offset << ':' << binding.length << '\n';
+    };
+    const std::vector<ConcreteBinding> * ordered = &snapshot.bindings;
+    std::vector<ConcreteBinding> sorted;
+    if (!std::is_sorted(snapshot.bindings.begin(), snapshot.bindings.end(), storage_less)) {
+        sorted = snapshot.bindings;
+        std::sort(sorted.begin(), sorted.end(), storage_less);
+        ordered = &sorted;
     }
-    return { stable_hash(witness.str()) };
+
+    uint64_t hash = UINT64_C(1469598103934665603);
+    stable_hash_append(hash, snapshot.device_identity.data(), snapshot.device_identity.size());
+    stable_hash_append(hash, "\n", 1);
+    std::array<char, 32> number;
+    const auto append_number = [&](uint64_t value) {
+        const auto converted = std::to_chars(number.data(), number.data() + number.size(), value);
+        stable_hash_append(hash, number.data(), static_cast<size_t>(converted.ptr - number.data()));
+    };
+    for (const ConcreteBinding & binding : *ordered) {
+        append_number(binding.storage);
+        stable_hash_append(hash, ":", 1);
+        append_number(binding.buffer_identity);
+        stable_hash_append(hash, ":", 1);
+        append_number(binding.generation);
+        stable_hash_append(hash, ":", 1);
+        append_number(binding.capacity);
+        stable_hash_append(hash, ":", 1);
+        append_number(binding.offset);
+        stable_hash_append(hash, ":", 1);
+        append_number(binding.length);
+        stable_hash_append(hash, "\n", 1);
+    }
+    return { stable_hash_format(hash) };
 }
 
 std::string format_resource_program(const ResourceProgram & resources) {
@@ -643,7 +678,9 @@ std::string format_resource_program(const ResourceProgram & resources) {
         else out << resource.first_invocation << ".." << resource.last_invocation;
         out << " flags=" << (resource.imported ? "I" : "-") << (resource.weight ? "W" : "-")
             << (resource.mutable_state ? "M" : "-") << (resource.exported ? "E" : "-")
-            << (resource.elidable ? "T" : "-") << " aliases=" << resource.aliases.size() << '\n';
+            << (resource.elidable ? "T" : "-") << " aliases=" << resource.aliases.size();
+        if (resource.weight) out << " layout=" << resource.layout;
+        out << '\n';
     }
     return out.str();
 }

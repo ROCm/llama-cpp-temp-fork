@@ -36,21 +36,7 @@ int main(int argc, char ** argv) {
         }
 
         const ggml::hrx::ProgramPlan plan = ggml::hrx::build_reactive_plan(graph, target);
-        if (!plan.valid()) {
-            throw std::runtime_error("cannot recover program: " +
-                                     (plan.errors.empty() ? std::string("unknown error") : plan.errors.front()));
-        }
-
-        const ggml::hrx::kernel_corpus &    corpus       = ggml::hrx::get_qwen_kernel_corpus();
-        const ggml::hrx::CommandProgram     commands     = ggml::hrx::build_command_program(plan, corpus);
-        const ggml::hrx::VerificationResult verification = ggml::hrx::verify_command_program(plan, corpus, commands);
-
         std::filesystem::create_directories(output_directory);
-        const std::string & readable_program = plan.semantic_witness;
-        write_file(output_directory / "program.txt", readable_program);
-        write_file(output_directory / "program-summary.txt", readable_program);
-        write_file(output_directory / "semantic-witness.txt", plan.semantic_witness);
-        write_file(output_directory / "program.json", ggml::hrx::serialize_schedule_json(plan.schedule));
         if (!plan.fusion_search_text.empty()) {
             write_file(output_directory / "fusion-search.txt", plan.fusion_search_text);
             write_file(output_directory / "fusion-search.json", plan.fusion_search_json);
@@ -61,6 +47,20 @@ int main(int argc, char ** argv) {
             write_file(output_directory / "logical-program.json", plan.logical_program_json);
             write_file(output_directory / "logical-program.dot", plan.logical_program_dot);
         }
+        if (!plan.valid()) {
+            throw std::runtime_error("cannot recover program: " +
+                                     (plan.errors.empty() ? std::string("unknown error") : plan.errors.front()));
+        }
+
+        const ggml::hrx::kernel_corpus &    corpus       = ggml::hrx::get_qwen_kernel_corpus();
+        const ggml::hrx::CommandProgram     commands     = ggml::hrx::build_command_program(plan, corpus);
+        const ggml::hrx::VerificationResult verification = ggml::hrx::verify_command_program(plan, corpus, commands);
+
+        const std::string & readable_program = plan.semantic_witness;
+        write_file(output_directory / "program.txt", readable_program);
+        write_file(output_directory / "program-summary.txt", readable_program);
+        write_file(output_directory / "semantic-witness.txt", plan.semantic_witness);
+        write_file(output_directory / "program.json", ggml::hrx::serialize_schedule_json(plan.schedule));
         write_file(output_directory / "resources.txt", ggml::hrx::format_resource_program(plan.resources));
         write_file(output_directory / "kernels.txt", ggml::hrx::format_kernel_corpus(corpus));
         write_file(output_directory / "kernels.json", ggml::hrx::serialize_kernel_corpus_json(corpus));

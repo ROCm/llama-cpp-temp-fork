@@ -64,15 +64,18 @@ static const kernel_source_record_entry kernel_source_records[] = {{
 """
 
 CORPUS_DATA_TEMPLATE = """{kernel_arrays}
+{transform_arrays}
 static const kernel_definition qwen_kernel_definitions[] = {{
 {kernel_records}
 }};
+{transform_table}
 
 static const kernel_corpus qwen_kernel_corpus = {{
     "ggml-hrx-kernel-corpus-v2",
     {upstream_revision},
     {plan_case_count},
     {{ qwen_kernel_definitions, {kernel_count} }},
+    {transform_span},
 }};
 """
 
@@ -115,10 +118,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-output", type=pathlib.Path, required=True)
     parser.add_argument("--corpus-output", type=pathlib.Path, required=True)
     parser.add_argument("--catalog-output", type=pathlib.Path, required=True)
-    parser.add_argument("--manifest", type=pathlib.Path, required=True)
+    parser.add_argument("--manifest", type=pathlib.Path, action="append", required=True)
     parser.add_argument("--corpus-dir", type=pathlib.Path, required=True)
     parser.add_argument("--depfile", type=pathlib.Path)
     return parser.parse_args()
+
+
+def qualify_path(prefix: pathlib.Path, value: str) -> str:
+    return (prefix / value).as_posix()
+
+
+def merged_manifest(manifest_paths: List[pathlib.Path], corpus_dir: pathlib.Path) -> dict:
+    manifests = []
+    for manifest_path in manifest_paths:
+        manifest = json.loads(read_text(manifest_path))
+        try:
+            prefix = manifest_path.resolve().parent.relative_to(corpus_dir.resolve())
+        except ValueError as exc:
+            raise RuntimeError(f"manifest {manifest_path} is outside corpus directory {corpus_dir}") from exc
+        manifest["resources"] = [qualify_path(prefix, path) for path in manifest.get("resources", [])]
+        for export in manifest.get("exports", []):
+            export["source"] = qualify_path(prefix, export["source"])
+            export["compile_dependencies"] = [
+                qualify_path(prefix, path) for path in export.get("compile_dependencies", [])
+            ]
+            recipe = export.get("compile_recipe", {})
+            recipe["primary_sources"] = [
+                qualify_path(prefix, path) for path in recipe.get("primary_sources", [])
+            ]
+            recipe["library_sources"] = [
+                qualify_path(prefix, path) for path in recipe.get("library_sources", [])
+            ]
+        manifests.append(manifest)
+
+    exports = {}
+    plan_cases = []
+    resources = set()
+    storage_transforms = {}
+    for manifest in manifests:
+        for export in manifest.get("exports", []):
+            key = (
+                export.get("family", DEFAULT_KERNEL_FAMILY),
+                export["name"],
+                export.get("target_selector", ""),
+            )
+            if key in exports:
+                raise RuntimeError(f"duplicate kernel export {key[0]}:{key[1]}:{key[2]}")
+            exports[key] = export
+        plan_cases.extend(manifest.get("plan_cases", []))
+        resources.update(manifest.get("resources", []))
+        for transform in manifest.get("storage_transforms", []):
+            match = transform.get("match", {})
+            name_match = match.get("name", {})
+            key = (
+                transform["name"],
+                transform.get("target_selector", ""),
+                match.get("type", ""),
+                tuple(match.get("shape", [])),
+                match.get("contiguous", False),
+                name_match.get("prefix", ""),
+                name_match.get("middle", ""),
+                name_match.get("suffix", ""),
+            )
+            if key in storage_transforms:
+                raise RuntimeError(f"duplicate storage transform {key[0]}:{key[1]}:{key[2]}:{key[3]}")
+            storage_transforms[key] = transform
+
+    return {
+        "upstream_revision": "+".join(manifest.get("upstream_revision", "unknown") for manifest in manifests),
+        "exports": [exports[key] for key in sorted(exports)],
+        "plan_cases": plan_cases,
+        "resources": sorted(resources),
+        "storage_transforms": [storage_transforms[key] for key in sorted(storage_transforms)],
+    }
 
 
 def read_text(path: pathlib.Path) -> str:
@@ -250,6 +322,8 @@ def collect_sources(manifest: dict) -> Tuple[List[str], Dict[str, List[str]]]:
         all_sources.add(primary)
         all_sources.update(dependencies)
 
+    all_sources.update(manifest.get("resources", []))
+
     return sorted(all_sources), source_dependencies
 
 
@@ -310,6 +384,71 @@ def generate_corpus_records(manifest: dict, source_records: Dict[str, str]) -> T
             )
         )
     return "\n".join(arrays), "\n".join(records), len(exports)
+
+
+def storage_transform_kind(value: str) -> str:
+    if value == "row_group_field_interleave":
+        return "kernel_storage_transform_kind::RowGroupFieldInterleave"
+    if value == "row_group_block_group_header_payload":
+        return "kernel_storage_transform_kind::RowGroupBlockGroupHeaderPayload"
+    raise RuntimeError(f"unsupported storage transform kind: {value}")
+
+
+def storage_transform_type(value: str) -> str:
+    if re.fullmatch(r"[A-Z][A-Z0-9_]*", value) is None:
+        raise RuntimeError(f"unsupported storage transform type: {value}")
+    return f"GGML_TYPE_{value}"
+
+
+def generate_storage_transforms(manifest: dict) -> Tuple[str, str, str]:
+    arrays = []
+    records = []
+    transforms = manifest.get("storage_transforms", [])
+    for index, encoded in enumerate(transforms):
+        shape = list(encoded["match"]["shape"])
+        transform = encoded["transform"]
+        field_order = list(transform.get("field_order", []))
+        if len(shape) != 4 or (transform["kind"] == "row_group_field_interleave" and not field_order):
+            raise RuntimeError(f"invalid storage transform {encoded['name']}")
+        if field_order:
+            field_array, field_span = typed_array(
+                f"storage_transform_field_order_{index}",
+                "const uint32_t",
+                [str(value) for value in field_order],
+            )
+            arrays.append(field_array)
+        else:
+            field_span = "{ nullptr, 0 }"
+        match = encoded["match"]
+        name_match = match.get("name", {})
+        records.append(
+            "    { "
+            + ", ".join([
+                cpp_string(encoded["name"]),
+                cpp_string(encoded.get("target_selector", "")),
+                storage_transform_type(match["type"]),
+                "{ " + ", ".join(str(value) for value in shape) + " }",
+                "true" if match.get("contiguous", False) else "false",
+                cpp_string(name_match.get("prefix", "")),
+                cpp_string(name_match.get("suffix", "")),
+                "true" if name_match.get("middle") == "decimal" else "false",
+                storage_transform_kind(transform["kind"]),
+                str(transform["outer_count"]),
+                str(transform["row_count"]),
+                str(transform["block_count"]),
+                str(transform["field_count"]),
+                str(transform["unit_bytes"]),
+                str(transform["row_group"]),
+                str(transform.get("block_group", 0)),
+                str(transform.get("header_fields", 0)),
+                field_span,
+            ])
+            + " },"
+        )
+    if not records:
+        return "", "", "{ nullptr, 0 }"
+    table = "static const kernel_storage_transform qwen_storage_transforms[] = {\n" + "\n".join(records) + "\n};"
+    return "\n".join(arrays), table, "{ qwen_storage_transforms, " + str(len(records)) + " }"
 
 
 def generate_catalog_verifier(manifest: dict) -> str:
@@ -392,6 +531,7 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
         lookup_entries.append(f"    {{ {cpp_string(source)}, &{record} }},")
 
     kernel_arrays, kernel_records, kernel_count = generate_corpus_records(manifest, source_record_symbols)
+    transform_arrays, transform_table, transform_span = generate_storage_transforms(manifest)
     return (
         SOURCE_DATA_TEMPLATE.format(
             source_arrays="\n".join(source_arrays),
@@ -401,7 +541,10 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
         ),
         CORPUS_DATA_TEMPLATE.format(
             kernel_arrays=kernel_arrays,
+            transform_arrays=transform_arrays,
             kernel_records=kernel_records,
+            transform_table=transform_table,
+            transform_span=transform_span,
             upstream_revision=cpp_string(manifest["upstream_revision"]),
             plan_case_count=len(manifest["plan_cases"]),
             kernel_count=kernel_count,
@@ -421,7 +564,7 @@ def write_depfile(path: pathlib.Path, outputs: List[pathlib.Path], inputs: List[
 def main() -> int:
     args = parse_args()
     try:
-        manifest = json.loads(read_text(args.manifest))
+        manifest = merged_manifest(args.manifest, args.corpus_dir)
         source_include, corpus_include, catalog_include, input_files, byte_count = generate_includes(args, manifest)
         args.source_output.parent.mkdir(parents=True, exist_ok=True)
         args.corpus_output.parent.mkdir(parents=True, exist_ok=True)
@@ -432,7 +575,7 @@ def main() -> int:
         if args.depfile is not None:
             args.depfile.parent.mkdir(parents=True, exist_ok=True)
             write_depfile(args.depfile, [args.source_output, args.corpus_output, args.catalog_output],
-                          [args.manifest, *input_files])
+                          [*args.manifest, *input_files])
     except Exception as exc:
         print(f"generate_kernel_corpus.py: {exc}", file=sys.stderr)
         return 1

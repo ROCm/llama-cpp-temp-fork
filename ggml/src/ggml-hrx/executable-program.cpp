@@ -42,6 +42,8 @@ executable_artifact_repository::~executable_artifact_repository() = default;
 
 namespace {
 
+constexpr size_t direct_host_input_max_bytes = 512;
+
 ggml_hrx_loom_jit_source_format to_jit_source_format(kernel_source_format format) {
     switch (format) {
         case KERNEL_SOURCE_FORMAT_TEXT:
@@ -90,9 +92,19 @@ packed_kernel_constants pack_kernel_constants(const kernel_definition & definiti
                                     std::string(parameter.name != nullptr ? parameter.name : ""));
             continue;
         }
-        if (std::strcmp(parameter.type != nullptr ? parameter.type : "", "index") != 0) {
-            result.errors.push_back("unsupported launch scalar type " +
-                                    std::string(parameter.type != nullptr ? parameter.type : "") + " for " +
+        const char * type = parameter.type != nullptr ? parameter.type : "";
+        if (std::strcmp(type, "f32") == 0) {
+            if (value->second < 0 || static_cast<uint64_t>(value->second) > std::numeric_limits<uint32_t>::max()) {
+                result.errors.push_back("launch scalar " +
+                                        std::string(parameter.name != nullptr ? parameter.name : "") +
+                                        " does not contain an f32 ABI payload");
+                continue;
+            }
+            append_u32(result.bytes, static_cast<uint32_t>(value->second));
+            continue;
+        }
+        if (std::strcmp(type, "index") != 0) {
+            result.errors.push_back("unsupported launch scalar type " + std::string(type) + " for " +
                                     std::string(parameter.name != nullptr ? parameter.name : ""));
             continue;
         }
@@ -158,13 +170,15 @@ static const char * binding_class_name(const executable_buffer_binding & binding
 
 struct prepared_executable_program::impl {
     struct host_staging_binding {
-        StorageId    storage    = kInvalidId;
-        hrx_buffer_t buffer     = nullptr;
-        void *       host_data  = nullptr;
-        size_t       length     = 0;
-        bool         upload     = false;
-        bool         initialize = false;
-        bool         download   = false;
+        StorageId    storage       = kInvalidId;
+        hrx_buffer_t buffer        = nullptr;
+        void *       host_data     = nullptr;
+        void *       mapped_data   = nullptr;
+        size_t       length        = 0;
+        bool         upload        = false;
+        bool         initialize    = false;
+        bool         download      = false;
+        bool         direct_mapped = false;
     };
 
     struct debug_binding {
@@ -216,11 +230,12 @@ prepared_executable_program::~prepared_executable_program()                     
 prepared_executable_program::prepared_executable_program(prepared_executable_program &&) noexcept             = default;
 prepared_executable_program & prepared_executable_program::operator=(prepared_executable_program &&) noexcept = default;
 
-error_result prepared_executable_program::rebind(const executable_bindings & bindings) {
+error_result prepared_executable_program::rebind(const executable_bindings &   bindings,
+                                                 const AllocationFingerprint & fingerprint) {
     if (!valid()) {
         return "cannot rebind an invalid prepared executable";
     }
-    if (fingerprint_bindings(bindings.snapshot) != allocation_fingerprint_) {
+    if (fingerprint != allocation_fingerprint_) {
         return "live allocation fingerprint does not match prepared executable";
     }
     for (impl::host_staging_binding & staging : impl_->host_staging) {
@@ -245,9 +260,21 @@ error_result prepared_executable_program::launch(hrx_stream_t stream) {
     if (impl_->transfers == nullptr) {
         return "prepared executable has no transfer manager";
     }
-    const bool has_uploads = std::any_of(impl_->host_staging.begin(), impl_->host_staging.end(),
-                                         [](const impl::host_staging_binding & staging) { return staging.upload; });
-    if (impl_->launch_in_flight && has_uploads) {
+    const bool has_direct_uploads =
+        std::any_of(impl_->host_staging.begin(), impl_->host_staging.end(),
+                    [](const impl::host_staging_binding & staging) { return staging.upload && staging.direct_mapped; });
+    if (impl_->launch_in_flight && has_direct_uploads) {
+        if (error_result synchronize_error = take_status(hrx_stream_synchronize(stream))) {
+            return "synchronize reusable direct host bindings: " + *synchronize_error;
+        }
+        if (error_result completion_error = complete_after_synchronize()) {
+            return "complete reusable direct host bindings: " + *completion_error;
+        }
+    }
+    const bool has_transfer_uploads = std::any_of(
+        impl_->host_staging.begin(), impl_->host_staging.end(),
+        [](const impl::host_staging_binding & staging) { return staging.upload && !staging.direct_mapped; });
+    if (impl_->launch_in_flight && has_transfer_uploads) {
         std::string error = impl_->transfers->wait_for_producer(stream);
         if (!error.empty()) {
             return "order reusable launch bindings: " + error;
@@ -255,6 +282,10 @@ error_result prepared_executable_program::launch(hrx_stream_t stream) {
     }
     for (const impl::host_staging_binding & staging : impl_->host_staging) {
         if (!staging.upload) {
+            continue;
+        }
+        if (staging.direct_mapped) {
+            std::memcpy(staging.mapped_data, staging.host_data, staging.length);
             continue;
         }
         std::string error = impl_->transfers->upload(staging.host_data, staging.buffer, 0, staging.length);
@@ -500,7 +531,6 @@ bool executable_program_preparer::compile_artifacts() {
         result.errors_.push_back("create Loom JIT: " + *error);
         return false;
     }
-
     // Serialize compilation and publication per device; steady execution only queries retained artifacts.
     std::unique_lock<std::mutex> artifact_lock(artifact_repository.impl_->mutex);
     auto &                       artifact_cache = artifact_repository.impl_->artifacts;
@@ -737,6 +767,7 @@ bool executable_program_preparer::bind_storage() {
                 source.offset                    = binding.offset;
                 source.length                    = binding.length;
                 source.layout                    = binding.layout;
+                source.transform                 = binding.transform;
                 weight_residency_result resident = weights.acquire(stream, transfers, source);
                 if (!resident.valid()) {
                     result.errors_.push_back("materialize host weight storage " + std::to_string(binding.storage) +
@@ -749,15 +780,36 @@ bool executable_program_preparer::bind_storage() {
                 impl.resident_weights.push_back(std::move(resident.lease));
             } else {
                 prepared_executable_program::impl::host_staging_binding staging;
-                staging.storage    = binding.storage;
-                staging.host_data  = static_cast<uint8_t *>(binding.host_data) + binding.offset;
-                staging.length     = binding.length;
-                staging.upload     = binding.upload_before_launch;
-                staging.initialize = binding.initialize_from_host;
-                staging.download   = binding.download_after_completion;
-                error = take_status(hrx_buffer_allocate(stream, binding.length, HRX_MEMORY_TYPE_DEVICE_LOCAL,
-                                                        HRX_BUFFER_USAGE_DEFAULT, &staging.buffer));
+                staging.storage       = binding.storage;
+                staging.host_data     = static_cast<uint8_t *>(binding.host_data) + binding.offset;
+                staging.length        = binding.length;
+                staging.upload        = binding.upload_before_launch;
+                staging.initialize    = binding.initialize_from_host;
+                staging.download      = binding.download_after_completion;
+                staging.direct_mapped = staging.upload && !staging.initialize && !staging.download &&
+                                        staging.length <= direct_host_input_max_bytes;
+                if (staging.direct_mapped) {
+                    const hrx_buffer_params_t params = {
+                        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+                        HRX_MEMORY_ACCESS_ALL,
+                        HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED |
+                            HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
+                        0,
+                    };
+                    error = take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(device), params,
+                                                                      binding.length, &staging.buffer));
+                    if (!error) {
+                        error = take_status(
+                            hrx_buffer_map(staging.buffer, HRX_MAP_WRITE, 0, staging.length, &staging.mapped_data));
+                    }
+                } else {
+                    error = take_status(hrx_buffer_allocate(stream, binding.length, HRX_MEMORY_TYPE_DEVICE_LOCAL,
+                                                            HRX_BUFFER_USAGE_DEFAULT, &staging.buffer));
+                }
                 if (error) {
+                    if (staging.buffer != nullptr) {
+                        hrx_buffer_release(staging.buffer);
+                    }
                     result.errors_.push_back("allocate host staging for storage " + std::to_string(binding.storage) +
                                              ": " + *error);
                     return false;

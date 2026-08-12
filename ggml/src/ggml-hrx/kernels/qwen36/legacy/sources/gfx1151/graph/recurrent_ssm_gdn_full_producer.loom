@@ -1,0 +1,252 @@
+// Decode convolution with direct recurrent-cache access.
+// Exact trace shape: d_conv=4, d_inner=8192, n_t=1, n_s=1. One workitem owns
+// one channel. It loads old cache rows 0/1/2 and x before any store, computes
+// the accepted four-tap FMA order, then performs the in-place shift
+// [old0,old1,old2] -> [old1,old2,x]. No workitem reads another workitem's
+// channel, so no inter-workgroup barrier or copy is required.
+//
+// Exact x/dst alias proof: each workitem loads x[channel] into %new_x before
+// storing dst[channel], and no other workitem reads or writes that channel.
+// Therefore dst may be either disjoint from x or the exact same physical span.
+
+kernel.def export("hrx2_ssm_conv_f32_state_cache_decode_full_producer") @hrx2_ssm_conv_f32_state_cache_decode_full_producer() {
+  %groups = index.constant 96 : index
+  %threads = index.constant 256 : index
+  %one = index.constant 1 : index
+  kernel.launch.config workgroups(%groups, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(
+    %eps: f32,
+    %state_io: buffer,
+    %x: buffer,
+    %filt: buffer,
+    %dst: buffer,
+    %scales_dst: buffer,
+    %alpha_weight: buffer,
+    %beta_weight: buffer,
+    %projection_input: buffer,
+    %bias: buffer,
+    %a_scale: buffer,
+    %gate_dst: buffer,
+    %beta_dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %eight = index.constant 8 : index
+  %sixteen_groups = index.constant 16 : index
+  %one_twenty_eight = index.constant 128 : index
+  %sixteen = index.constant 16 : index
+  %thirty_two = index.constant 32 : index
+  %threads = index.constant 256 : index
+  %channels = index.constant 8192 : index
+  %projection_k = index.constant 2048 : index
+  %row1_delta = index.constant 8192 : index
+  %row2_delta = index.constant 16384 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+
+  %wg0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %wg = index.assume %wg0 [range(%wg0, 0, 95)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+
+  %state_g = buffer.assume.memory_space<global> %state_io : buffer
+  %x_g = buffer.assume.memory_space<global> %x : buffer
+  %filt_g = buffer.assume.memory_space<global> %filt : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %scales_g = buffer.assume.memory_space<global> %scales_dst : buffer
+  %alpha_weight_g = buffer.assume.memory_space<global> %alpha_weight : buffer
+  %beta_weight_g = buffer.assume.memory_space<global> %beta_weight : buffer
+  %projection_input_g =
+      buffer.assume.memory_space<global> %projection_input : buffer
+  %bias_g = buffer.assume.memory_space<global> %bias : buffer
+  %a_scale_g = buffer.assume.memory_space<global> %a_scale : buffer
+  %gate_dst_g = buffer.assume.memory_space<global> %gate_dst : buffer
+  %beta_dst_g = buffer.assume.memory_space<global> %beta_dst : buffer
+  // dst deliberately does not participate: its physical span may equal x.
+  %state_na, %x_na, %filt_na, %scales_na, %alpha_weight_na,
+      %beta_weight_na, %projection_input_na, %bias_na, %a_scale_na,
+      %gate_dst_na, %beta_dst_na = buffer.assume.noalias
+      %state_g, %x_g, %filt_g, %scales_g, %alpha_weight_g,
+      %beta_weight_g, %projection_input_g, %bias_g, %a_scale_g,
+      %gate_dst_g, %beta_dst_g : buffer, buffer, buffer, buffer, buffer,
+      buffer, buffer, buffer, buffer, buffer, buffer
+  %state_view = buffer.view %state_na[%base] :
+      buffer -> view<24576xf32>
+  %x_view = buffer.view %x_na[%base] : buffer -> view<8192xf32>
+  %dst_view = buffer.view %dst_g[%base] : buffer -> view<8192xf32>
+  %scales_view = buffer.view %scales_na[%base] : buffer -> view<32xf32>
+  %alpha_weight_view = buffer.view %alpha_weight_na[%base] :
+      buffer -> view<65536xf32>
+  %beta_weight_view = buffer.view %beta_weight_na[%base] :
+      buffer -> view<65536xf32>
+  %projection_input_view = buffer.view %projection_input_na[%base] :
+      buffer -> view<2048xf32>
+  %bias_view = buffer.view %bias_na[%base] :
+      buffer -> view<32xf32>
+  %a_scale_view = buffer.view %a_scale_na[%base] :
+      buffer -> view<32xf32>
+  %gate_dst_view = buffer.view %gate_dst_na[%base] :
+      buffer -> view<32xf32>
+  %beta_dst_view = buffer.view %beta_dst_na[%base] :
+      buffer -> view<32xf32>
+
+  %is_ssm = index.cmp ult, %wg, %thirty_two : index
+  scf.if %is_ssm {
+  %group = index.assume %wg [range(%wg, 0, 31)] : index
+  %channel_base = index.mul %group, %threads : index
+  %channel0 = index.add %channel_base, %lane : index
+  %channel = index.assume %channel0 [range(%channel0, 0, 8191)] : index
+
+  %row1_0 = index.add %channel, %row1_delta : index
+  %row1 = index.assume %row1_0 [range(%row1_0, 8192, 16383)] : index
+  %row2_0 = index.add %channel, %row2_delta : index
+  %row2 = index.assume %row2_0 [range(%row2_0, 16384, 24575)] : index
+
+  // Mandatory alias ordering: all four data values are registers before the
+  // first state_io store.
+  %old0 = view.load %state_view[%channel] :
+      view<24576xf32> -> f32
+  %old1 = view.load %state_view[%row1] :
+      view<24576xf32> -> f32
+  %old2 = view.load %state_view[%row2] :
+      view<24576xf32> -> f32
+  %new_x = view.load %x_view[%channel] : view<8192xf32> -> f32
+
+  // buffer.view offsets are bytes. Each channel owns four contiguous f32
+  // filter taps, so its row begins at channel * 4 * sizeof(f32).
+  %weight_byte0 = index.mul %channel, %sixteen : index
+  %weight_byte = index.assume %weight_byte0
+      [range(%weight_byte0, 0, 131056)] : index
+  %weight_offset = index.cast %weight_byte : index to offset
+  %weight_view = buffer.view %filt_na[%weight_offset] :
+      buffer -> view<4xf32>
+  %weights = vector.load %weight_view[%zero] :
+      view<4xf32> -> vector<4xf32>
+  %w0 = vector.extract %weights[%zero] : vector<4xf32> -> f32
+  %w1 = vector.extract %weights[%one] : vector<4xf32> -> f32
+  %w2 = vector.extract %weights[%two] : vector<4xf32> -> f32
+  %w3 = vector.extract %weights[%three] : vector<4xf32> -> f32
+
+  %p0 = scalar.mulf<nnan|ninf|nsz> %old0, %w0 : f32
+  %p1 = scalar.fmaf<nnan|ninf|nsz> %old1, %w1, %p0 : f32
+  %p2 = scalar.fmaf<nnan|ninf|nsz> %old2, %w2, %p1 : f32
+  %acc = scalar.fmaf<nnan|ninf|nsz> %new_x, %w3, %p2 : f32
+
+  %activated = scalar.siluf<afn> %acc : f32
+  view.store %activated, %dst_view[%channel] : f32, view<8192xf32>
+  view.store %old1, %state_view[%channel] : f32, view<24576xf32>
+  view.store %old2, %state_view[%row1] : f32, view<24576xf32>
+  view.store %new_x, %state_view[%row2] : f32, view<24576xf32>
+
+  // Q and K occupy the first 4096 activated channels. Each SSM workgroup
+  // owns two complete 128-element heads, so the accepted WG256 L2 tree can
+  // be reproduced after the convolution/state values are dead.
+  %is_qk_group = index.cmp ult, %group, %sixteen_groups : index
+  scf.if %is_qk_group {
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz>
+        %activated, %activated : f32
+    %is_lower_head = index.cmp ult, %lane, %one_twenty_eight : index
+    %lower_value = scf.select %is_lower_head, %square, %zero_f32 : f32
+    %upper_value = scf.select %is_lower_head, %zero_f32, %square : f32
+    %lower_sum = kernel.workgroup.reduce<addf> %lower_value : f32
+    %upper_sum = kernel.workgroup.reduce<addf> %upper_value : f32
+    %eps_sq = scalar.mulf<nnan|ninf|nsz> %eps, %eps : f32
+    %lower_clamped = scalar.maxnumf %lower_sum, %eps_sq : f32
+    %upper_clamped = scalar.maxnumf %upper_sum, %eps_sq : f32
+    %lower_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %lower_clamped : f32
+    %upper_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %upper_clamped : f32
+
+    %pair_group = index.rem %group, %eight : index
+    %head0 = index.mul %pair_group, %two : index
+    %scale0_base = index.mul %head0, %two : index
+    %is_k_group = index.cmp uge, %group, %eight : index
+    %kind_offset = scf.select %is_k_group, %one, %zero : index
+    %scale0 = index.add %scale0_base, %kind_offset : index
+    %scale1 = index.add %scale0, %two : index
+    %is_lane0 = index.cmp eq, %lane, %zero : index
+    scf.if %is_lane0 {
+      view.store %lower_scale, %scales_view[%scale0] :
+          f32, view<32xf32>
+      view.store %upper_scale, %scales_view[%scale1] :
+          f32, view<32xf32>
+    }
+  }
+  } else {
+    // The remaining 64 workgroups preserve the accepted alpha and beta
+    // projection arithmetic exactly. They share only the launch with SSM;
+    // the following GDN state-update dispatch remains the grid barrier.
+    %projection_wg0 = index.sub %wg, %thirty_two : index
+    %projection_wg = index.assume %projection_wg0
+        [range(%projection_wg0, 0, 63)] : index
+    %is_alpha = index.cmp ult, %projection_wg, %thirty_two : index
+    %head0 = index.rem %projection_wg, %thirty_two : index
+    %head = index.assume %head0 [range(%head0, 0, 31)] : index
+    %weight_row_base = index.mul %head, %projection_k : index
+    %dot = scf.if %is_alpha -> (f32) {
+      %sum = scf.for %i = [%lane to %projection_k step %threads](
+          %acc = %zero_f32 : f32) -> (f32) {
+        %weight_index = index.add %weight_row_base, %i : index
+        %weight = view.load %alpha_weight_view[%weight_index] :
+            view<65536xf32> -> f32
+        %input_value = view.load %projection_input_view[%i] :
+            view<2048xf32> -> f32
+        %product = scalar.mulf<reassoc|nnan|ninf|nsz>
+            %weight, %input_value : f32
+        %next = scalar.addf<reassoc|nnan|ninf|nsz>
+            %acc, %product : f32
+        scf.yield %next : f32
+      }
+      %reduced = kernel.workgroup.reduce<addf> %sum : f32
+      scf.yield %reduced : f32
+    } else {
+      %sum = scf.for %i = [%lane to %projection_k step %threads](
+          %acc = %zero_f32 : f32) -> (f32) {
+        %weight_index = index.add %weight_row_base, %i : index
+        %weight = view.load %beta_weight_view[%weight_index] :
+            view<65536xf32> -> f32
+        %input_value = view.load %projection_input_view[%i] :
+            view<2048xf32> -> f32
+        %product = scalar.mulf<reassoc|nnan|ninf|nsz>
+            %weight, %input_value : f32
+        %next = scalar.addf<reassoc|nnan|ninf|nsz>
+            %acc, %product : f32
+        scf.yield %next : f32
+      }
+      %reduced = kernel.workgroup.reduce<addf> %sum : f32
+      scf.yield %reduced : f32
+    }
+
+    %is_lane0 = index.cmp eq, %lane, %zero : index
+    scf.if %is_lane0 {
+      scf.if %is_alpha {
+        %bias_value = view.load %bias_view[%head] :
+            view<32xf32> -> f32
+        %biased = scalar.addf<nnan|ninf|nsz>
+            %dot, %bias_value : f32
+        %abs_x = scalar.absf %biased : f32
+        %neg_abs_x = scalar.negf %abs_x : f32
+        %exp_term = scalar.expf<afn> %neg_abs_x : f32
+        %one_plus = scalar.addf<nnan|ninf|nsz>
+            %one_f32, %exp_term : f32
+        %log_term = scalar.logf<afn> %one_plus : f32
+        %pos_part = scalar.maxnumf %biased, %zero_f32 : f32
+        %softplus = scalar.addf<nnan|ninf|nsz>
+            %pos_part, %log_term : f32
+        %a_value = view.load %a_scale_view[%head] :
+            view<32xf32> -> f32
+        %gate = scalar.mulf<nnan|ninf|nsz>
+            %softplus, %a_value : f32
+        view.store %gate, %gate_dst_view[%head] :
+            f32, view<32xf32>
+      } else {
+        %beta = scalar.logisticf<afn> %dot : f32
+        view.store %beta, %beta_dst_view[%head] :
+            f32, view<32xf32>
+      }
+    }
+  }
+  kernel.return
+}

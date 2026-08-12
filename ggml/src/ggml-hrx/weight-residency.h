@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hrx-interop-utils.h"
+#include "storage-transform.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,7 @@ struct weight_source {
     size_t       offset          = 0;
     size_t       length          = 0;
     std::string  layout          = "ggml-native";
+    const kernel_storage_transform * transform = nullptr;
 };
 
 struct weight_residency_stats {
