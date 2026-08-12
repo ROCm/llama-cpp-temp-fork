@@ -3268,6 +3268,1987 @@
       "symbol": "hrx2_flash_attn_ext_f32_f16_wave_token1",
       "target_selector": "gfx1151",
       "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_gate_up_swiglu_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q4_k_f32_mmq_gfx1151_wg256_pre_tbl",
+      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_gate_up_swiglu_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q4_k_f32_mmq_gfx1151_wg256_pre_tbl_decode_topk_qact_table",
+      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "gate",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_gate_up_swiglu_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q4_k_f32_swiglu",
+      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_swiglu_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q5_k_f32_mmq_gfx1151_wg256_pre_tbl",
+      "source": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "gate",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_id_q5_k_f32_swiglu",
+      "source": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_swiglu_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "gatew",
+        "packed",
+        "down_qact"
+      ],
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_gate_up_swiglu_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q4_dual_gate_up_swiglu_q5qact_tableless_packed_decode",
+      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_dual_gate_up_swiglu_q5_qact_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_gate_up_swiglu_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q4_gate_packed_meta_pp512",
+      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_static_packed_meta",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "gate",
+        "aq",
+        "as",
+        "asum",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_gate_up_swiglu_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q4_up_swiglu_q5_qact_packed_meta_pp512",
+      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "symbol": "hrx2_mul_mat_id_q4_k_f32_mmqt_swiglu_q5_down_qact_packed_meta",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "idx",
+        "dst",
+        "tbl"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q5_down_f16_pp512",
+      "source": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_down_terminal_qact_f16",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "idx",
+        "dst",
+        "qact"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "q5_down_tableless_compact_qact_decode",
+      "source": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_id_q5_k_f32_mmqt_down_tableless_compact_qact_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_tile64",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64_tile64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "packed_qact"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_packed_qact_tile64",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64_packed_qact_tile64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_side",
+        "norm_weight",
+        "dst",
+        "rms_scale",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_gdn_rms_side_epilogue",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_gdn_rms_side_epilogue",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "packed_qact"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_packed_qact",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_64x64x64_packed_qact",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_gate",
+        "addend",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_wmmai8_shared_expert_terminal_epilogue",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_wmmai8_shared_expert_terminal_epilogue",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "q_weight",
+        "k_weight",
+        "v_weight",
+        "input",
+        "input_hi",
+        "v_index",
+        "q_dst",
+        "k_dst",
+        "v_cache"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/attention_postprocess_f32_f16.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/attention_qkv_quantized.loom",
+        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_qkv_postprocess_fused_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_qkv_postprocess_fused.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/attention_postprocess_f32_f16.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/attention_qkv_quantized.loom",
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "attention_qkv_direct_v_cache_decode",
+      "source": "qwen3_moe/attention_qkv_postprocess_fused.loom",
+      "symbol": "hrx2_attention_qkv_direct_v_cache_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "fa",
+        "gate",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "qwen3_moe/flash_attention_f32_f16_wmma.loom"
+        ],
+        "library_sources": []
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "flash_attn_gate_pointwise_f32",
+      "source": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
+      "symbol": "hrx2_flash_attn_gate_pointwise_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "idx",
+        "table"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "expert_table_partition_fused_linked",
+        "primary_sources": [
+          "qwen3_moe/expert_table_partition_fused.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mmid_table",
+      "source": "qwen3_moe/expert_table_partition_fused.loom",
+      "symbol": "hrx2_mmid_table",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "qa_src",
+        "qa_qs",
+        "qa_meta",
+        "mm_idx",
+        "prepass_mmid",
+        "ss_router_source"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_top8_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_top8_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "qact_mmid_router_snapshot_pp512",
+      "source": "qwen3_moe/router_top8_f32.loom",
+      "symbol": "hrx2_qact_mmid_router_snapshot_pp512",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "qs",
+        "ds",
+        "sums"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ],
+        "library_sources": []
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "quant_act_q8",
+      "source": "ggml/quantize_q8_1_x4.loom",
+      "symbol": "hrx2_quant_act_q8",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "packed"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ],
+        "library_sources": []
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "quant_act_q8_packed",
+      "source": "ggml/quantize_q8_1_x4.loom",
+      "symbol": "hrx2_quant_act_q8_packed",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "logits",
+        "ids",
+        "weights"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_top8_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_top8_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_moe_softmax_norm_decode",
+      "source": "qwen3_moe/router_top8_f32.loom",
+      "symbol": "hrx2_topk_moe_softmax_norm_decode_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "ids",
+        "weights"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_top8_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_top8_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_moe_softmax_norm_pp512",
+      "source": "qwen3_moe/router_top8_f32.loom",
+      "symbol": "hrx2_topk_moe_weights_copy_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "logits",
+        "ids"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_top8_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_top8_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_moe_softmax_norm_stage_pp512",
+      "source": "qwen3_moe/router_top8_f32.loom",
+      "symbol": "hrx2_topk_moe_softmax_norm_stage_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "read",
+        "write",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "tk_logits",
+        "tk_ids",
+        "tk_weights",
+        "qa_src",
+        "qa_qs",
+        "qa_ds",
+        "qa_sums",
+        "sp_table"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_top8_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_top8_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_qact_mmid_table_decode",
+      "source": "qwen3_moe/router_top8_f32.loom",
+      "symbol": "hrx2_topk_qact_mmid_table_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "tk_logits",
+        "tk_ids",
+        "tk_weights",
+        "src1",
+        "qa_packed",
+        "gate_weights",
+        "up_weights",
+        "shared_gate_weight",
+        "shared_dst",
+        "raw_gate"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_top8_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_top8_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "topk_qact_shared_producer_decode",
+      "source": "qwen3_moe/router_top8_f32.loom",
+      "symbol": "hrx2_topk_qact_shared_producer_decode",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "router_source",
+        "snapshot"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "moe_router_snapshot_pp512",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_moe_router_snapshot_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_projection_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_projection_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_f32_f32_decode_vec8_k2048_r256_c1_wg256",
+      "source": "qwen3_moe/router_projection_f32.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_decode_vec8",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_projection_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_projection_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_f32_f32_tiled",
+      "source": "qwen3_moe/router_projection_f32.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_tiled32x32x64",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "gate_weights",
+        "up_weights",
+        "shared_gate_weight",
+        "src1",
+        "dst",
+        "raw_gate"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_gate",
+        "addend",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_decode_shared_terminal_epilogue",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_decode_shared_terminal_epilogue",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "src1_hi",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_decode_k2048_wg256_scfunroll2",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_static_packed_2trip",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_packed_decode_k4096_wg256_scfunroll4",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_static_packed_scf_unroll",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "qkv_weight",
+        "raw_gate_weight",
+        "input",
+        "input_hi",
+        "qkv_dst",
+        "raw_gate_dst"
+      ],
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "mul_mat_q8_0_f32_recurrent_pair_chunked",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_recurrent_pair_k2048_chunk256_128",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "rms_norm_strided_f32_wide_wg256",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_rms_norm_strided_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "weight",
+        "pos",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "attention_postprocess_f32_f16_linked",
+        "primary_sources": [
+          "qwen3_moe/attention_postprocess_f32_f16.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        },
+        {
+          "name": "freq_base",
+          "type": "f32"
+        },
+        {
+          "name": "freq_scale",
+          "type": "f32"
+        },
+        {
+          "name": "attn_factor",
+          "type": "f32"
+        }
+      ],
+      "name": "rms_norm_strided_mul_rope_f32",
+      "source": "qwen3_moe/attention_postprocess_f32_f16.loom",
+      "symbol": "hrx2_rms_norm_strided_mul_rope_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "raw_gate",
+        "selected",
+        "router_weights",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "shared_moe_terminal_decode",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_mul_mat_q8_0_f32_decode_shared_moe_terminal",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "selected",
+        "dst",
+        "snapshot"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "sum_slices_f16_exact_mmid_snapshot_pp512",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_sum_slices_f16_exact_mmid_snapshot",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "read"
+      ],
+      "bindings": [
+        "selected",
+        "dst",
+        "router_source"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "sum_slices_f32_decode_nosnapshot",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_sum_slices_f32_decode_nosnapshot",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "read",
+        "read"
+      ],
+      "bindings": [
+        "selected",
+        "dst",
+        "router_source_unused",
+        "snapshot"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "sum_slices_f32_pp512",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_sum_slices_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "add_dst",
+        "weight",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "wide_add_rms_norm_mul_f32",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_gate_up_swiglu_q4k_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ],
+        "library_sources": [
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "wide_glu_swiglu_split",
+      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "symbol": "hrx2_swiglu_f32_split",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/model_config.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "router_projection_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/router_projection_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/model_config.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "wide_mul_mat_f32_f32",
+      "source": "qwen3_moe/router_projection_f32.loom",
+      "symbol": "hrx2_mul_mat_f32_f32_static",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "weight",
+        "dst"
+      ],
+      "compile_dependencies": [
+        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_down_q4k.loom",
+        "qwen3_moe/routed_down_q6k.loom",
+        "qwen3_moe/routed_down_next_q8.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ],
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
+        "primary_sources": [
+          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_down_q4k.loom",
+          "qwen3_moe/routed_down_q6k.loom",
+          "qwen3_moe/routed_down_next_q8.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "eps",
+          "type": "f32"
+        }
+      ],
+      "name": "wide_rms_norm_mul_f32",
+      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "symbol": "hrx2_rms_norm_mul_f32_static_vector_tail",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
     }
   ],
   "link_modules": [
