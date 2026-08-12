@@ -1,5 +1,6 @@
 #include "reactive-plan.h"
 
+#include "qwen-hybrid-transformer.h"
 #include "routed-transformer-bindings.h"
 #include "routed-transformer-program.h"
 
@@ -38,10 +39,10 @@ static Schedule atom_schedule(const Graph & graph) {
         invocation.kernel.execution_kind = KernelSpecialization::ExecutionKind::NativeEager;
         const RegionBoundary boundary = index.boundary(invocation.covered_operations);
         for (size_t i = 0; i < boundary.inputs.size(); ++i) {
-            invocation.inputs.push_back({ "arg" + std::to_string(i), boundary.inputs[i] });
+            invocation.inputs.push_back({ "arg" + std::to_string(i), boundary.inputs[i], 0, 0, {} });
         }
         for (size_t i = 0; i < boundary.outputs.size(); ++i) {
-            invocation.outputs.push_back({ "result" + std::to_string(i), boundary.outputs[i] });
+            invocation.outputs.push_back({ "result" + std::to_string(i), boundary.outputs[i], 0, 0, {} });
         }
         Dispatch dispatch;
         dispatch.kernel = invocation.kernel;
@@ -69,10 +70,15 @@ bool eager_capability_declared(enum ggml_op op) {
         case GGML_OP_ADD:
         case GGML_OP_ARGSORT:
         case GGML_OP_CLAMP:
+        case GGML_OP_CONCAT:
+        case GGML_OP_CONT:
+        case GGML_OP_CPY:
         case GGML_OP_DIV:
         case GGML_OP_FLASH_ATTN_EXT:
+        case GGML_OP_GATED_DELTA_NET:
         case GGML_OP_GET_ROWS:
         case GGML_OP_GLU:
+        case GGML_OP_L2_NORM:
         case GGML_OP_MUL:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
@@ -80,9 +86,13 @@ bool eager_capability_declared(enum ggml_op op) {
         case GGML_OP_RESHAPE:
         case GGML_OP_RMS_NORM:
         case GGML_OP_ROPE:
+        case GGML_OP_SCALE:
         case GGML_OP_SET_ROWS:
         case GGML_OP_SOFT_MAX:
+        case GGML_OP_SSM_CONV:
         case GGML_OP_SUM_ROWS:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_UNARY:
         case GGML_OP_VIEW:
             return true;
         default:
@@ -148,6 +158,16 @@ ResourceProgram build_resource_program(const Graph & graph, const Schedule & sch
             for (const TensorBinding & binding : dispatch.bindings) {
                 if (binding.value >= graph.values.size()) continue;
                 const Value & value = graph.values[binding.value];
+                ResourceContract & resource = result.resources[value.access.storage];
+                if (resource.weight) {
+                    const std::string required =
+                        binding.layout.empty() || binding.layout == "canonical" ? "ggml-native" : binding.layout;
+                    if (resource.layout.empty()) {
+                        resource.layout = required;
+                    } else if (resource.layout != required) {
+                        resource.layout_conflict = true;
+                    }
+                }
                 if (value.name.rfind("hrx.synthetic.", 0) == 0) {
                     merge_use(value.access.storage, 0, 0, ResourceAccess::ReadWrite);
                 }
@@ -158,6 +178,11 @@ ResourceProgram build_resource_program(const Graph & graph, const Schedule & sch
             resource.first_invocation = std::min(resource.first_invocation, invocation_id);
             resource.last_invocation = std::max(resource.last_invocation, invocation_id);
             result.uses.push_back(item.second);
+        }
+    }
+    for (ResourceContract & resource : result.resources) {
+        if (resource.weight && resource.layout.empty()) {
+            resource.layout = "ggml-native";
         }
     }
     return result;
@@ -178,6 +203,10 @@ VerificationResult verify_resource_program(const Graph & graph, const Schedule &
         if (storage.external && !resource.imported) append_error(result, "external storage is not imported");
         if (storage.mutable_state && !resource.exported) append_error(result, "mutable storage is not exported");
         if (resource.elidable && (resource.imported || resource.exported)) append_error(result, "boundary storage is marked elidable");
+        if (resource.weight && (resource.layout.empty() || resource.layout_conflict)) {
+            append_error(result, resource.layout_conflict ? "weight storage has conflicting physical layouts" :
+                                                           "weight storage has no physical layout");
+        }
         for (ValueId alias : resource.aliases) {
             if (alias >= graph.values.size() || graph.values[alias].access.storage != i) append_error(result, "resource alias escapes its storage root");
         }
@@ -235,6 +264,10 @@ std::string schedule_semantic_witness(const Graph & graph, const Schedule & sche
             out << ':';
             for (uint32_t dependency : dispatch.dependencies) out << dependency << ',';
             out << '\n';
+            for (const TensorBinding & binding : dispatch.bindings) {
+                out << "bind:" << binding.role << ':' << value_witness(binding.value) << ':' << binding.offset << ':'
+                    << binding.length << ':' << binding.layout << '\n';
+            }
         }
     }
     for (const RootContract & root : schedule.roots) out << "root:" << root_disposition_name(root.disposition) << ':' << root.replacement << '\n';
@@ -256,47 +289,65 @@ ProgramPlan build_reactive_plan(const Graph & graph, const std::string & target)
     }
     if (!result.errors.empty()) return result;
 
-    RoutedTransformerProgramProof structural = RoutedTransformerProgramProof::recover(graph);
-    if (structural.structurally_recognized) {
-        if (!structural.valid()) {
-            result.errors = structural.errors;
-            result.errors.insert(result.errors.end(), structural.search.errors.begin(), structural.search.errors.end());
+    QwenHybridTransformerProgramProof hybrid =
+        QwenHybridTransformerProgramProof::recover(result.graph, target);
+    if (hybrid.structurally_recognized) {
+        result.logical_program_text = QwenHybridTransformerModel::format(*hybrid.logical_program);
+        result.logical_program_json = QwenHybridTransformerModel::serialize_json(*hybrid.logical_program);
+        result.logical_program_dot = QwenHybridTransformerModel::dot(*hybrid.logical_program);
+        result.fusion_search_text = SearchResult::format_report(hybrid.search);
+        result.fusion_search_json = SearchResult::serialize_report_json(hybrid.search);
+        result.fusion_regions_dot = SearchResult::region_dot(GraphIndex(result.graph), hybrid.search);
+        if (!hybrid.valid()) {
+            result.errors = hybrid.errors;
+            result.errors.insert(result.errors.end(), hybrid.search.errors.begin(), hybrid.search.errors.end());
             return result;
         }
-        result.schedule = std::move(structural.schedule);
-        result.atom_fallback_count = std::count_if(
-            result.schedule.invocations.begin(), result.schedule.invocations.end(),
-            [](const Invocation & invocation) { return invocation.recipe.rfind("atom.", 0) == 0; });
-        for (const Invocation & invocation : result.schedule.invocations) {
-            if (invocation.recipe.rfind("atom.", 0) == 0) {
-                result.warnings.push_back("unoptimized routed-transformer fallback: " + invocation.recipe);
-            }
-        }
-        result.planner_identity = RoutedTransformerProvider::make_planner().identity();
-        result.fusion_search_text = SearchResult::format_report(structural.search);
-        result.fusion_search_json = SearchResult::serialize_report_json(structural.search);
-        result.fusion_regions_dot = SearchResult::region_dot(GraphIndex(graph), structural.search);
-        result.logical_program_text = RoutedTransformerModel::format(*structural.logical_program);
-        result.logical_program_json = RoutedTransformerModel::serialize_json(*structural.logical_program);
-        result.logical_program_dot = RoutedTransformerModel::dot(*structural.logical_program);
-        const VerificationResult bindings = RoutedTransformerProgramProof::materialize_dispatch_bindings(
-            result.graph, result.schedule, *structural.logical_program);
-        result.errors.insert(result.errors.end(), bindings.errors.begin(), bindings.errors.end());
-        const VerificationResult bound_schedule = verify_schedule(result.graph, result.schedule);
-        result.errors.insert(result.errors.end(), bound_schedule.errors.begin(), bound_schedule.errors.end());
-        if (!result.errors.empty()) return result;
-
+        result.schedule = std::move(hybrid.schedule);
+        result.planner_identity = QwenHybridTransformerProvider::make_planner().identity();
     } else {
-        result.schedule = atom_schedule(graph);
-        result.planner_identity = "atom-recipes-v1";
-        result.atom_fallback_count = graph.operations.size();
-        for (const std::string & error : structural.errors) {
-            result.warnings.push_back("routed-transformer recognition rejected: " + error);
+        RoutedTransformerProgramProof structural = RoutedTransformerProgramProof::recover(graph);
+        if (structural.structurally_recognized) {
+            if (!structural.valid()) {
+                result.errors = structural.errors;
+                result.errors.insert(result.errors.end(), structural.search.errors.begin(), structural.search.errors.end());
+                return result;
+            }
+            result.schedule = std::move(structural.schedule);
+            result.atom_fallback_count = std::count_if(
+                result.schedule.invocations.begin(), result.schedule.invocations.end(),
+                [](const Invocation & invocation) { return invocation.recipe.rfind("atom.", 0) == 0; });
+            for (const Invocation & invocation : result.schedule.invocations) {
+                if (invocation.recipe.rfind("atom.", 0) == 0) {
+                    result.warnings.push_back("unoptimized routed-transformer fallback: " + invocation.recipe);
+                }
+            }
+            result.planner_identity   = RoutedTransformerProvider::make_planner().identity();
+            result.fusion_search_text = SearchResult::format_report(structural.search);
+            result.fusion_search_json = SearchResult::serialize_report_json(structural.search);
+            result.fusion_regions_dot = SearchResult::region_dot(GraphIndex(graph), structural.search);
+            result.logical_program_text = RoutedTransformerModel::format(*structural.logical_program);
+            result.logical_program_json = RoutedTransformerModel::serialize_json(*structural.logical_program);
+            result.logical_program_dot  = RoutedTransformerModel::dot(*structural.logical_program);
+            const VerificationResult bindings = RoutedTransformerProgramProof::materialize_dispatch_bindings(
+                result.graph, result.schedule, *structural.logical_program);
+            result.errors.insert(result.errors.end(), bindings.errors.begin(), bindings.errors.end());
+            const VerificationResult bound_schedule = verify_schedule(result.graph, result.schedule);
+            result.errors.insert(result.errors.end(), bound_schedule.errors.begin(), bound_schedule.errors.end());
+            if (!result.errors.empty()) return result;
+        } else {
+            result.schedule            = atom_schedule(graph);
+            result.planner_identity    = "atom-recipes-v1";
+            result.atom_fallback_count = graph.operations.size();
+            for (const std::string & error : structural.errors) {
+                result.warnings.push_back("routed-transformer recognition rejected: " + error);
+            }
+            result.warnings.push_back("routed-transformer structure not recognized; the plan contains " +
+                                      std::to_string(result.atom_fallback_count) + " native-eager atom recipes");
+            const VerificationResult schedule_verification = verify_schedule(graph, result.schedule);
+            result.errors.insert(result.errors.end(), schedule_verification.errors.begin(),
+                                 schedule_verification.errors.end());
         }
-        result.warnings.push_back("routed-transformer structure not recognized; the plan contains " +
-                                  std::to_string(result.atom_fallback_count) + " native-eager atom recipes");
-        const VerificationResult schedule_verification = verify_schedule(graph, result.schedule);
-        result.errors.insert(result.errors.end(), schedule_verification.errors.begin(), schedule_verification.errors.end());
     }
     if (!result.errors.empty()) return result;
     result.resources = build_resource_program(result.graph, result.schedule);
@@ -382,16 +433,28 @@ ExecutionFrame ReactivePlanCache::prepare(const ggml_cgraph * cgraph, const std:
         return frame;
     }
 
-    ProgramPlan plan = build_reactive_plan(imported.graph, target);
-    ++stats_.builds;
-    if (!plan.valid()) {
-        ++stats_.failures;
-        frame.errors = plan.errors;
-        return frame;
+    std::string structural_key = target;
+    structural_key.push_back('\0');
+    structural_key += imported.graph.fingerprint;
+    std::shared_ptr<const ProgramPlan> shared_plan;
+    const auto structural = structural_plans_.find(structural_key);
+    if (structural != structural_plans_.end()) {
+        shared_plan = structural->second;
+        ++stats_.hits;
+    } else {
+        ProgramPlan plan = build_reactive_plan(imported.graph, target);
+        ++stats_.builds;
+        if (!plan.valid()) {
+            ++stats_.failures;
+            frame.errors = plan.errors;
+            return frame;
+        }
+        shared_plan = std::make_shared<const ProgramPlan>(std::move(plan));
+        structural_plans_.emplace(std::move(structural_key), shared_plan);
     }
     UidPlanEntry entry;
     entry.target = target;
-    entry.plan = std::make_shared<const ProgramPlan>(std::move(plan));
+    entry.plan = std::move(shared_plan);
     entry.values = std::move(imported.value_tensors);
     entry.storage_roots = std::move(imported.storage_roots);
     entry.values.resize(entry.plan->graph.values.size(), nullptr);

@@ -88,6 +88,18 @@ ggml::hrx::kernel_definition unsupported_definition() {
     return result;
 }
 
+ggml::hrx::kernel_definition floating_definition() {
+    static ggml::hrx::kernel_scalar_definition launch_parameters[2];
+    launch_parameters[0].name = "scale";
+    launch_parameters[0].type = "f32";
+    launch_parameters[1].name = "bias";
+    launch_parameters[1].type = "f32";
+
+    ggml::hrx::kernel_definition result = definition();
+    result.launch_parameters            = { launch_parameters, 2 };
+    return result;
+}
+
 void test_constant_packing() {
     const ggml::hrx::kernel_definition kernel = definition();
     ggml::hrx::Command                 command;
@@ -114,6 +126,24 @@ void test_constant_packing() {
 
     command.kernel.integer_parameters["columns"] = 1;
     REQUIRE(!ggml::hrx::pack_kernel_constants(unsupported_definition(), command).valid());
+
+    command.kernel.integer_parameters = {
+        { "scale", 0x3f000000 },
+        { "bias",  0xbf800000 },
+    };
+    const ggml::hrx::packed_kernel_constants floating =
+        ggml::hrx::pack_kernel_constants(floating_definition(), command);
+    REQUIRE(floating.valid());
+    REQUIRE(floating.bytes.size() == 8);
+    float scale = 0.0f;
+    float bias  = 0.0f;
+    std::memcpy(&scale, floating.bytes.data(), sizeof(scale));
+    std::memcpy(&bias, floating.bytes.data() + sizeof(scale), sizeof(bias));
+    REQUIRE(scale == 0.5f);
+    REQUIRE(bias == -1.0f);
+
+    command.kernel.integer_parameters["scale"] = -1;
+    REQUIRE(!ggml::hrx::pack_kernel_constants(floating_definition(), command).valid());
 }
 
 void test_artifact_key_uses_only_compilation_facts() {
@@ -163,7 +193,8 @@ void test_binding_diagnostics_are_explicit() {
 }
 
 void test_kernel_source_lookup() {
-    const ggml::hrx::kernel_source * source = ggml::hrx::get_kernel_source("ggml/linear_q6k_f32.loom");
+    const ggml::hrx::kernel_source * source =
+        ggml::hrx::get_kernel_source("qwen_moe/ggml/linear_q6k_f32.loom");
     REQUIRE(source != nullptr);
     REQUIRE(source->source.data != nullptr);
     REQUIRE(source->source.length != 0);
@@ -174,7 +205,8 @@ void test_kernel_source_lookup() {
     REQUIRE(source->dependencies[0].length != 0);
     REQUIRE(source->dependencies[0].format == ggml::hrx::KERNEL_SOURCE_FORMAT_TEXT);
 
-    const ggml::hrx::kernel_source * dependency_only = ggml::hrx::get_kernel_source("qwen3_moe/model_config.loom");
+    const ggml::hrx::kernel_source * dependency_only =
+        ggml::hrx::get_kernel_source("qwen_moe/qwen3_moe/model_config.loom");
     REQUIRE(dependency_only != nullptr);
     REQUIRE(dependency_only->dependency_count == 0);
     REQUIRE(ggml::hrx::get_kernel_source("missing.loom") == nullptr);

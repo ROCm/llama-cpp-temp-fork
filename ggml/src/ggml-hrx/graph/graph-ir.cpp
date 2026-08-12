@@ -30,8 +30,11 @@ static const ggml_tensor * storage_root(const ggml_tensor * tensor) {
 }
 
 static size_t access_span(const AccessPath & access, enum ggml_type type) {
+    if (std::any_of(access.shape.begin(), access.shape.end(), [](int64_t extent) { return extent == 0; })) {
+        return 0;
+    }
     const size_t blocks = (static_cast<size_t>(access.shape[0]) + ggml_blck_size(type) - 1) / ggml_blck_size(type);
-    size_t result = blocks * access.strides[0];
+    size_t result = ggml_type_size(type) + (blocks - 1) * access.strides[0];
     for (int i = 1; i < GGML_MAX_DIMS; ++i) {
         if (access.shape[i] > 0) {
             result += static_cast<size_t>(access.shape[i] - 1) * access.strides[i];

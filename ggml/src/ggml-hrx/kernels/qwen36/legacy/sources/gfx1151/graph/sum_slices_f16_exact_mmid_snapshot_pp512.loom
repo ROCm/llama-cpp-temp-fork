@@ -1,0 +1,166 @@
+// Ordered PP512 weighted reduction from compact F16 selected output.
+// Values widen immediately to F32; MUL and ADD retain the accepted slot order.
+
+config.decl @hrx2_shape_sumslices_ntokens : %value: index where [range(%value, 1, 512)]
+config.decl @hrx2_tuning_sumslices_workgroup_size : %value: index where [range(%value, 256, 256), mul(%value, 256)]
+
+kernel.def export("hrx2_sum_slices_f16_exact_mmid_snapshot") @hrx2_sum_slices_f16_exact_mmid_snapshot() {
+  %one = index.constant 1 : index
+  %groups = config.get @hrx2_shape_sumslices_ntokens : index
+  %threads = config.get @hrx2_tuning_sumslices_workgroup_size : index
+  kernel.launch.config workgroups(%groups, %one, %one)
+      workgroup_size(%threads, %one, %one) : index
+} launch(%selected: buffer, %dst: buffer, %snapshot: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %eight = index.constant 8 : index
+  %rows = index.constant 2048 : index
+  %selected_token_stride = index.constant 16384 : index
+  %lds_bytes = index.constant 32 : offset
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %token = index.assume %token0 [range(%token0, 0, 511)] : index
+  %row0 = index.mul %lane, %eight : index
+  %row = index.assume %row0
+      [range(%row0, 0, 2040), mul(%row0, 8)] : index
+  %snapshot_base0 = index.mul %token, %eight : index
+  %snapshot_base = index.assume %snapshot_base0
+      [range(%snapshot_base0, 0, 4088), mul(%snapshot_base0, 8)] : index
+  %selected_base0 = index.mul %token, %selected_token_stride : index
+  %selected_base = index.assume %selected_base0
+      [range(%selected_base0, 0, 8372224),
+       mul(%selected_base0, 16384)] : index
+  %dst_base0 = index.mul %token, %rows : index
+  %dst_base = index.assume %dst_base0
+      [range(%dst_base0, 0, 1046528),
+       mul(%dst_base0, 2048)] : index
+  %dst_index0 = index.add %dst_base, %row : index
+  %dst_index = index.assume %dst_index0
+      [range(%dst_index0, 0, 1048568)] : index
+
+  %selected_g = buffer.assume.memory_space<global> %selected : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %snapshot_g = buffer.assume.memory_space<global> %snapshot : buffer
+  %selected_na, %dst_na, %snapshot_na = buffer.assume.noalias
+      %selected_g, %dst_g, %snapshot_g : buffer, buffer, buffer
+  %selected_v = buffer.view %selected_na[%base] :
+      buffer -> view<8388608xf16>
+  %dst_v = buffer.view %dst_na[%base] :
+      buffer -> view<1048576xf32>
+  %snapshot_v = buffer.view %snapshot_na[%base] :
+      buffer -> view<4096xf32>
+  %scratch = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
+  %weights_lds = buffer.view %scratch[%base] :
+      buffer -> view<8xf32>
+
+  %is_owner = index.cmp eq, %lane, %zero : index
+  scf.if %is_owner {
+    %snapshot_weights = vector.load %snapshot_v[%snapshot_base] :
+        view<4096xf32> -> vector<8xf32>
+    vector.store %snapshot_weights, %weights_lds[%zero] :
+        vector<8xf32>, view<8xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %weights = vector.load %weights_lds[%zero] :
+      view<8xf32> -> vector<8xf32>
+
+  %slot0_offset = index.constant 0 : index
+  %x0_base0 = index.add %selected_base, %slot0_offset : index
+  %x0_index0 = index.add %x0_base0, %row : index
+  %x0_index = index.assume %x0_index0
+      [range(%x0_index0, 0, 8388600)] : index
+  %x0_f16 = vector.load %selected_v[%x0_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x0 = vector.extf %x0_f16 : vector<8xf16> to vector<8xf32>
+  %w0 = vector.extract %weights[0] : vector<8xf32> -> f32
+  %wv0 = vector.splat %w0 : vector<8xf32>
+  %p0 = vector.mulf<nnan|ninf|nsz> %x0, %wv0 : vector<8xf32>
+  %slot1_offset = index.constant 2048 : index
+  %x1_base0 = index.add %selected_base, %slot1_offset : index
+  %x1_index0 = index.add %x1_base0, %row : index
+  %x1_index = index.assume %x1_index0
+      [range(%x1_index0, 0, 8388600)] : index
+  %x1_f16 = vector.load %selected_v[%x1_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x1 = vector.extf %x1_f16 : vector<8xf16> to vector<8xf32>
+  %w1 = vector.extract %weights[1] : vector<8xf32> -> f32
+  %wv1 = vector.splat %w1 : vector<8xf32>
+  %p1 = vector.mulf<nnan|ninf|nsz> %x1, %wv1 : vector<8xf32>
+  %a1 = vector.addf<nnan|ninf|nsz> %p0, %p1 : vector<8xf32>
+  %slot2_offset = index.constant 4096 : index
+  %x2_base0 = index.add %selected_base, %slot2_offset : index
+  %x2_index0 = index.add %x2_base0, %row : index
+  %x2_index = index.assume %x2_index0
+      [range(%x2_index0, 0, 8388600)] : index
+  %x2_f16 = vector.load %selected_v[%x2_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x2 = vector.extf %x2_f16 : vector<8xf16> to vector<8xf32>
+  %w2 = vector.extract %weights[2] : vector<8xf32> -> f32
+  %wv2 = vector.splat %w2 : vector<8xf32>
+  %p2 = vector.mulf<nnan|ninf|nsz> %x2, %wv2 : vector<8xf32>
+  %a2 = vector.addf<nnan|ninf|nsz> %a1, %p2 : vector<8xf32>
+  %slot3_offset = index.constant 6144 : index
+  %x3_base0 = index.add %selected_base, %slot3_offset : index
+  %x3_index0 = index.add %x3_base0, %row : index
+  %x3_index = index.assume %x3_index0
+      [range(%x3_index0, 0, 8388600)] : index
+  %x3_f16 = vector.load %selected_v[%x3_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x3 = vector.extf %x3_f16 : vector<8xf16> to vector<8xf32>
+  %w3 = vector.extract %weights[3] : vector<8xf32> -> f32
+  %wv3 = vector.splat %w3 : vector<8xf32>
+  %p3 = vector.mulf<nnan|ninf|nsz> %x3, %wv3 : vector<8xf32>
+  %a3 = vector.addf<nnan|ninf|nsz> %a2, %p3 : vector<8xf32>
+  %slot4_offset = index.constant 8192 : index
+  %x4_base0 = index.add %selected_base, %slot4_offset : index
+  %x4_index0 = index.add %x4_base0, %row : index
+  %x4_index = index.assume %x4_index0
+      [range(%x4_index0, 0, 8388600)] : index
+  %x4_f16 = vector.load %selected_v[%x4_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x4 = vector.extf %x4_f16 : vector<8xf16> to vector<8xf32>
+  %w4 = vector.extract %weights[4] : vector<8xf32> -> f32
+  %wv4 = vector.splat %w4 : vector<8xf32>
+  %p4 = vector.mulf<nnan|ninf|nsz> %x4, %wv4 : vector<8xf32>
+  %a4 = vector.addf<nnan|ninf|nsz> %a3, %p4 : vector<8xf32>
+  %slot5_offset = index.constant 10240 : index
+  %x5_base0 = index.add %selected_base, %slot5_offset : index
+  %x5_index0 = index.add %x5_base0, %row : index
+  %x5_index = index.assume %x5_index0
+      [range(%x5_index0, 0, 8388600)] : index
+  %x5_f16 = vector.load %selected_v[%x5_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x5 = vector.extf %x5_f16 : vector<8xf16> to vector<8xf32>
+  %w5 = vector.extract %weights[5] : vector<8xf32> -> f32
+  %wv5 = vector.splat %w5 : vector<8xf32>
+  %p5 = vector.mulf<nnan|ninf|nsz> %x5, %wv5 : vector<8xf32>
+  %a5 = vector.addf<nnan|ninf|nsz> %a4, %p5 : vector<8xf32>
+  %slot6_offset = index.constant 12288 : index
+  %x6_base0 = index.add %selected_base, %slot6_offset : index
+  %x6_index0 = index.add %x6_base0, %row : index
+  %x6_index = index.assume %x6_index0
+      [range(%x6_index0, 0, 8388600)] : index
+  %x6_f16 = vector.load %selected_v[%x6_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x6 = vector.extf %x6_f16 : vector<8xf16> to vector<8xf32>
+  %w6 = vector.extract %weights[6] : vector<8xf32> -> f32
+  %wv6 = vector.splat %w6 : vector<8xf32>
+  %p6 = vector.mulf<nnan|ninf|nsz> %x6, %wv6 : vector<8xf32>
+  %a6 = vector.addf<nnan|ninf|nsz> %a5, %p6 : vector<8xf32>
+  %slot7_offset = index.constant 14336 : index
+  %x7_base0 = index.add %selected_base, %slot7_offset : index
+  %x7_index0 = index.add %x7_base0, %row : index
+  %x7_index = index.assume %x7_index0
+      [range(%x7_index0, 0, 8388600)] : index
+  %x7_f16 = vector.load %selected_v[%x7_index] :
+      view<8388608xf16> -> vector<8xf16>
+  %x7 = vector.extf %x7_f16 : vector<8xf16> to vector<8xf32>
+  %w7 = vector.extract %weights[7] : vector<8xf32> -> f32
+  %wv7 = vector.splat %w7 : vector<8xf32>
+  %p7 = vector.mulf<nnan|ninf|nsz> %x7, %wv7 : vector<8xf32>
+  %a7 = vector.addf<nnan|ninf|nsz> %a6, %p7 : vector<8xf32>
+  vector.store %a7, %dst_v[%dst_index] :
+      vector<8xf32>, view<1048576xf32>
+  kernel.return
+}

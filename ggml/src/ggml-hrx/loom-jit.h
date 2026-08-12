@@ -42,7 +42,6 @@ struct ggml_hrx_loom_jit_launch_config {
     uint32_t                subgroup_size           = 0;
     uint64_t                workgroup_storage_bytes = 0;
     size_t                  workload_argument_count = 0;
-    uint32_t                fields                  = 0;
 };
 
 struct ggml_hrx_loom_jit_compile_options {

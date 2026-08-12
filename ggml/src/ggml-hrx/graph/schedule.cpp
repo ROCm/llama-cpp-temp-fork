@@ -41,6 +41,16 @@ static RootDisposition parse_root_disposition(const std::string & value) {
     throw std::runtime_error("unknown root disposition");
 }
 
+static bool no_dispatch_operation(const Graph & graph, OperationId operation_id) {
+    if (operation_id >= graph.operations.size()) return false;
+    const Operation & operation = graph.operations[operation_id];
+    if (operation.op == GGML_OP_VIEW || operation.op == GGML_OP_RESHAPE ||
+        operation.op == GGML_OP_PERMUTE || operation.op == GGML_OP_TRANSPOSE) return true;
+    const Value & output = graph.values[operation.output];
+    return std::any_of(output.access.shape.begin(), output.access.shape.end(),
+        [](int64_t extent) { return extent == 0; });
+}
+
 } // namespace
 
 VerificationResult verify_schedule(const Graph & graph, const Schedule & schedule) {
@@ -96,7 +106,10 @@ VerificationResult verify_schedule(const Graph & graph, const Schedule & schedul
         };
         check_bindings(invocation.inputs, "input");
         check_bindings(invocation.outputs, "output");
-        if (invocation.dispatches.empty()) {
+        const bool no_dispatch_invocation = invocation.kernel.family == "hrx_metadata" &&
+            std::all_of(invocation.covered_operations.begin(), invocation.covered_operations.end(),
+                [&](OperationId operation) { return no_dispatch_operation(graph, operation); });
+        if (invocation.dispatches.empty() && !no_dispatch_invocation) {
             error(result, "invocation " + std::to_string(invocation_id) + " has no concrete dispatches");
         }
         for (const Dispatch & dispatch : invocation.dispatches) {
@@ -241,7 +254,7 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
     try {
         const nlohmann::json root = nlohmann::json::parse(text);
         const int version = root.at("version").get<int>();
-        if (version < 1 || version > 4) {
+        if (version < 1 || version > 5) {
             errors.emplace_back("unsupported schedule manifest version");
             return schedule;
         }
@@ -279,7 +292,8 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
                 std::vector<TensorBinding> result;
                 for (const nlohmann::json & binding : bindings) {
                     result.push_back({ binding.at("role").get<std::string>(), binding.at("value").get<ValueId>(),
-                                       binding.value("offset", size_t{0}), binding.value("length", size_t{0}) });
+                                       binding.value("offset", size_t{0}), binding.value("length", size_t{0}),
+                                       binding.value("layout", std::string()) });
                 }
                 return result;
             };
@@ -317,7 +331,7 @@ Schedule deserialize_schedule_json(const std::string & text, std::vector<std::st
 
 std::string serialize_schedule_json(const Schedule & schedule) {
     std::ostringstream out;
-    out << "{\"version\":4,\"graph_fingerprint\":\"" << escape_json(schedule.graph_fingerprint)
+    out << "{\"version\":5,\"graph_fingerprint\":\"" << escape_json(schedule.graph_fingerprint)
         << "\",\"workload\":\"" << escape_json(schedule.workload) << "\",\"oracle_revision\":\""
         << escape_json(schedule.oracle_revision) << "\",\"expected_dispatch_count\":" << schedule.expected_dispatch_count
         << ",\"roots\":[";
@@ -355,7 +369,8 @@ std::string serialize_schedule_json(const Schedule & schedule) {
             out << "],\"" << name << "\":[";
             for (size_t j = 0; j < bindings.size(); ++j) {
                 if (j != 0) out << ',';
-                out << "{\"role\":\"" << escape_json(bindings[j].role) << "\",\"value\":" << bindings[j].value << '}';
+                out << "{\"role\":\"" << escape_json(bindings[j].role) << "\",\"value\":" << bindings[j].value
+                    << ",\"layout\":\"" << escape_json(bindings[j].layout) << "\"}";
             }
         };
         write_bindings("inputs", invocation.inputs);
@@ -383,7 +398,8 @@ std::string serialize_schedule_json(const Schedule & schedule) {
             for (size_t k = 0; k < dispatch.bindings.size(); ++k) {
                 if (k != 0) out << ',';
                 out << "{\"role\":\"" << escape_json(dispatch.bindings[k].role) << "\",\"value\":" << dispatch.bindings[k].value
-                    << ",\"offset\":" << dispatch.bindings[k].offset << ",\"length\":" << dispatch.bindings[k].length << '}';
+                    << ",\"offset\":" << dispatch.bindings[k].offset << ",\"length\":" << dispatch.bindings[k].length
+                    << ",\"layout\":\"" << escape_json(dispatch.bindings[k].layout) << "\"}";
             }
             out << "],\"dependencies\":[";
             for (size_t k = 0; k < dispatch.dependencies.size(); ++k) {

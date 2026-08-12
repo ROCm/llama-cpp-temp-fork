@@ -30,6 +30,8 @@ struct ResourceContract {
     bool mutable_state = false;
     bool exported = false;
     bool elidable = false;
+    std::string layout;
+    bool layout_conflict = false;
     uint32_t final_version = 0;
     uint32_t first_invocation = UINT32_MAX;
     uint32_t last_invocation = 0;
@@ -101,6 +103,7 @@ private:
 
     mutable std::mutex mutex_;
     std::unordered_map<uint64_t, UidPlanEntry> plans_;
+    std::unordered_map<std::string, std::shared_ptr<const ProgramPlan>> structural_plans_;
     PlanCacheStats stats_;
 };
 

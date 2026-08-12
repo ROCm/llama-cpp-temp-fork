@@ -6,6 +6,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace ggml::hrx {
 namespace {
@@ -142,6 +143,10 @@ weight_residency_result weight_residency_cache::acquire(hrx_stream_t          st
         result.lease = weight_residency_lease(found->second);
         return result;
     }
+    if ((source.layout == "ggml-native") != (source.transform == nullptr)) {
+        result.error = "host weight source layout and transform disagree";
+        return result;
+    }
 
     auto entry         = std::make_shared<weight_residency_lease::entry>();
     entry->length      = source.length;
@@ -152,7 +157,22 @@ weight_residency_result weight_residency_cache::acquire(hrx_stream_t          st
         result.error = "allocate resident weight: " + *error;
         return result;
     }
-    if (std::string transfer_error = transfers.upload(static_cast<const uint8_t *>(source.host_data) + source.offset,
+    const void * upload_source = static_cast<const uint8_t *>(source.host_data) + source.offset;
+    std::vector<uint8_t> transformed;
+    if (source.transform != nullptr) {
+        if (kernel_storage_transform_size(*source.transform) != source.length) {
+            result.error = "resident weight transform size disagrees with source";
+            return result;
+        }
+        transformed.resize(source.length);
+        if (!kernel_storage_transform_pack(*source.transform, upload_source, source.length,
+                                           transformed.data(), transformed.size())) {
+            result.error = "resident weight transform failed";
+            return result;
+        }
+        upload_source = transformed.data();
+    }
+    if (std::string transfer_error = transfers.upload(upload_source,
                                                       entry->buffer, 0, source.length);
         !transfer_error.empty()) {
         result.error = "initialize resident weight: " + transfer_error;

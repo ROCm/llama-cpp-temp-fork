@@ -3,7 +3,9 @@
 #include "graph/resource-access.h"
 #include "graph/schedule.h"
 #include "kernel-corpus-catalog.h"
+#include "storage-transform.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -95,6 +97,7 @@ struct kernel_corpus {
     const char *                   upstream_revision = "";
     size_t                         plan_case_count   = 0;
     kernel_span<kernel_definition> kernels;
+    kernel_span<kernel_storage_transform> storage_transforms;
 };
 
 enum class kernel_resolve_status : uint8_t {
@@ -116,6 +119,14 @@ struct kernel_resolve_result {
 
 const kernel_source * get_kernel_source(const char * source_path);
 const kernel_corpus & get_qwen_kernel_corpus();
+const kernel_storage_transform * match_kernel_storage_transform(
+    const kernel_corpus & corpus, const std::string & target,
+    enum ggml_type type, const std::array<int64_t, GGML_MAX_DIMS> & shape, bool contiguous,
+    const std::string & tensor_name);
+const kernel_storage_transform * resolve_kernel_storage_transform(
+    const kernel_corpus & corpus, const std::string & target, const std::string & layout,
+    enum ggml_type type, const std::array<int64_t, GGML_MAX_DIMS> & shape, bool contiguous,
+    const std::string & tensor_name);
 kernel_resolve_result resolve_kernel_definition(const kernel_corpus &               corpus,
                                                 const std::string &                 target,
                                                 const std::string &                 family,

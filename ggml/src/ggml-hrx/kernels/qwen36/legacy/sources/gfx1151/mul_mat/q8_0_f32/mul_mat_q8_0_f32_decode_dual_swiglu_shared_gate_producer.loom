@@ -1,0 +1,206 @@
+// Co-dispatch the shared-expert raw gate projection with the native packed-Q8
+// gate/up SwiGLU producer.
+//
+// Workgroups 0..rows-1 execute the existing dual-Q8 arithmetic with the
+// existing workgroup-to-row map. The one additional workgroup at ID rows
+// executes the existing WG256 F32 dot-product arithmetic. Outputs are
+// independent and have no ordering relationship; the purpose of the extra
+// workgroup is solely to remove one
+// dispatch boundary from every shared-expert decode layer.
+
+config.decl @hrx2_shape_k : %value: index where [range(%value, 32, 32768), mul(%value, 32)]
+config.decl @hrx2_shape_rows : %value: index where [range(%value, 1, 262144)]
+config.decl @hrx2_shape_cols : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2_tuning_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @hrx2_tuning_q8_0_f32_unroll_factor : %value: index where [range(%value, 0, 16)]
+
+kernel.def export("hrx2_mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer")
+    @hrx2_mul_mat_q8_0_f32_decode_dual_swiglu_shared_gate_producer() {
+  %unit = index.constant 1 : index
+  %rows = config.get @hrx2_shape_rows : index
+  %workgroups = index.add %rows, %unit : index
+  %cols = config.get @hrx2_shape_cols : index
+  %workgroup_size = config.get @hrx2_tuning_workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %cols, %unit)
+      workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%gate_weights: buffer, %up_weights: buffer,
+         %shared_gate_weight: buffer, %src1: buffer, %dst: buffer,
+         %raw_gate: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %qk = index.constant 32 : index
+  %block_bytes = index.constant 34 : index
+  %block_f16s = index.constant 17 : index
+  %qs_offset = index.constant 2 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %k = config.get @hrx2_shape_k : index
+  %rows = config.get @hrx2_shape_rows : index
+  %cols = config.get @hrx2_shape_cols : index
+  %workgroup_size = config.get @hrx2_tuning_workgroup_size : index
+  %unroll = config.get @hrx2_tuning_q8_0_f32_unroll_factor : index
+  %k_bounded = index.assume %k [range(%k, 32, 32768)] : index
+  %rows_bounded = index.assume %rows [range(%rows, 1, 262144)] : index
+  %cols_bounded = index.assume %cols [range(%cols, 1, 4096)] : index
+
+  %wg0 = kernel.workgroup.id<x> : index
+  %wg = index.assume %wg0 [range(%wg0, 0, 262144)] : index
+  %col0 = kernel.workgroup.id<y> : index
+  %col = index.assume %col0 [range(%col0, 0, 4095)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+
+  %gate_global =
+      buffer.assume.memory_space<global> %gate_weights : buffer
+  %up_global = buffer.assume.memory_space<global> %up_weights : buffer
+  %shared_gate_global =
+      buffer.assume.memory_space<global> %shared_gate_weight : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %raw_gate_global = buffer.assume.memory_space<global> %raw_gate : buffer
+  %gate_noalias, %up_noalias, %shared_gate_noalias, %src1_noalias,
+      %dst_noalias, %raw_gate_noalias = buffer.assume.noalias
+          %gate_global, %up_global, %shared_gate_global, %src1_global,
+          %dst_global, %raw_gate_global :
+          buffer, buffer, buffer, buffer, buffer, buffer
+
+  %is_scalar = index.cmp eq, %wg, %rows_bounded : index
+  scf.if %is_scalar {
+    // This branch is operation-for-operation identical to the accepted
+    // hrx2_mul_mat_f32_f32_static K2048/R1/C1/WG256 projection.
+    %shared_gate_view = buffer.view %shared_gate_noalias[%base] :
+        buffer -> view<[%k_bounded]xf32>
+    %scalar_src_view = buffer.view %src1_noalias[%base] :
+        buffer -> view<[%k_bounded]xf32>
+    %raw_gate_view = buffer.view %raw_gate_noalias[%base] :
+        buffer -> view<1xf32>
+    %sum = scf.for
+        %i = [%lane to %k_bounded step %workgroup_size](
+            %acc = %zero_f32 : f32) -> (f32) {
+      %a = view.load %shared_gate_view[%i] :
+          view<[%k_bounded]xf32> -> f32
+      %b = view.load %scalar_src_view[%i] :
+          view<[%k_bounded]xf32> -> f32
+      %product = scalar.mulf<reassoc|nnan|ninf|nsz> %a, %b : f32
+      %next =
+          scalar.addf<reassoc|nnan|ninf|nsz> %acc, %product : f32
+      scf.yield %next : f32
+    }
+    %dot = kernel.workgroup.reduce<addf> %sum : f32
+    %lane_i32 = index.cast %lane : index to i32
+    %zero_i32 = scalar.constant 0 : i32
+    %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+    scf.if %is_lane0 {
+      view.store %dot, %raw_gate_view[%zero] :
+          f32, view<1xf32>
+    }
+  } else {
+    // This branch is operation-for-operation identical to the accepted dual
+    // Q8 producer; only the logical row issue order differs.
+    %three = index.constant 3 : index
+    %rows_mod3 = index.rem %rows_bounded, %three : index
+    %unsafe_affine3 = index.cmp eq, %rows_mod3, %zero : index
+    %row_product = index.mul %wg, %three : index
+    %row_affine3 = index.rem %row_product, %rows_bounded : index
+    %row_raw = scf.select %unsafe_affine3, %wg, %row_affine3 : index
+    %row = index.assume %row_raw [range(%row_raw, 0, 262143)] : index
+    %blocks_per_row = index.div %k_bounded, %qk : index
+    %total_blocks = index.mul %rows_bounded, %blocks_per_row : index
+    %weight_i8_count = index.mul %total_blocks, %block_bytes : index
+    %weight_f16_count = index.mul %total_blocks, %block_f16s : index
+    %src1_count = index.mul %cols_bounded, %k_bounded : index
+    %dst_count = index.mul %cols_bounded, %rows_bounded : index
+
+    %block_lane = index.rem %lane, %eight : index
+    %block_slot = index.div %lane, %eight : index
+    %in_block_base = index.mul %block_lane, %four : index
+    %block_step = index.div %workgroup_size, %eight : index
+    %trip_count = index.div %blocks_per_row, %block_step : index
+
+    %gate_f16 = buffer.view %gate_noalias[%base] :
+        buffer -> view<[%weight_f16_count]xf16>
+    %up_f16 = buffer.view %up_noalias[%base] :
+        buffer -> view<[%weight_f16_count]xf16>
+    %src1_view = buffer.view %src1_noalias[%base] :
+        buffer -> view<[%src1_count]xf32>
+    %dst_view = buffer.view %dst_noalias[%base] :
+        buffer -> view<[%dst_count]xf32>
+
+    %row_block_base = index.mul %row, %blocks_per_row : index
+    %src1_col_base = index.mul %col, %k_bounded : index
+    %gate_sum, %up_sum = scf.for
+        %iter = [%zero to %trip_count step %one](
+            %gate_acc = %zero_f32 : f32,
+            %up_acc = %zero_f32 : f32) -> (f32, f32) unroll(%unroll) {
+      %iter_step = index.mul %iter, %block_step : index
+      %block_raw = index.add %block_slot, %iter_step : index
+      %block = index.assume %block_raw [range(%block_raw, 0, 255)] : index
+      %src_base_block = index.mul %block, %qk : index
+      %src_base = index.add %src_base_block, %in_block_base : index
+      %src1_index = index.add %src1_col_base, %src_base : index
+      %rhs = vector.load %src1_view[%src1_index] :
+          view<[%src1_count]xf32> -> vector<4xf32>
+
+      %linear_block = index.add %row_block_base, %block : index
+      %block_byte_base = index.mul %linear_block, %block_bytes : index
+      %q_payload = index.add %block_byte_base, %qs_offset : index
+      %q_index = index.add %q_payload, %in_block_base : index
+      %q_offset = index.cast %q_index : index to offset
+
+      %gate_q_view = buffer.view %gate_noalias[%q_offset] :
+          buffer -> view<1xi32>
+      %gate_packed = vector.load %gate_q_view[%zero] :
+          view<1xi32> -> vector<1xi32>
+      %gate_i32 = vector.bitunpacks<8> %gate_packed :
+          vector<1xi32> -> vector<4xi32>
+      %gate_f32 = vector.sitofp %gate_i32 :
+          vector<4xi32> to vector<4xf32>
+      %block_f16_base = index.mul %linear_block, %block_f16s : index
+      %gate_d_f16 = view.load %gate_f16[%block_f16_base] :
+          view<[%weight_f16_count]xf16> -> f16
+      %gate_d = scalar.extf %gate_d_f16 : f16 to f32
+      %gate_d_vec = vector.splat %gate_d : vector<4xf32>
+      %gate_scaled = vector.mulf<reassoc|nnan|ninf|nsz|contract>
+          %gate_f32, %gate_d_vec : vector<4xf32>
+      %gate_next = vector.dotf %gate_scaled, %rhs, %gate_acc :
+          vector<4xf32>, vector<4xf32>, f32
+
+      %up_q_view = buffer.view %up_noalias[%q_offset] :
+          buffer -> view<1xi32>
+      %up_packed = vector.load %up_q_view[%zero] :
+          view<1xi32> -> vector<1xi32>
+      %up_i32 = vector.bitunpacks<8> %up_packed :
+          vector<1xi32> -> vector<4xi32>
+      %up_f32 = vector.sitofp %up_i32 :
+          vector<4xi32> to vector<4xf32>
+      %up_d_f16 = view.load %up_f16[%block_f16_base] :
+          view<[%weight_f16_count]xf16> -> f16
+      %up_d = scalar.extf %up_d_f16 : f16 to f32
+      %up_d_vec = vector.splat %up_d : vector<4xf32>
+      %up_scaled = vector.mulf<reassoc|nnan|ninf|nsz|contract>
+          %up_f32, %up_d_vec : vector<4xf32>
+      %up_next = vector.dotf %up_scaled, %rhs, %up_acc :
+          vector<4xf32>, vector<4xf32>, f32
+      scf.yield %gate_next, %up_next : f32, f32
+    }
+
+    %gate_dot = kernel.workgroup.reduce<addf> %gate_sum : f32
+    %up_dot = kernel.workgroup.reduce<addf> %up_sum : f32
+    %dst_col_base = index.mul %col, %rows_bounded : index
+    %dst_index = index.add %dst_col_base, %row : index
+    %lane_i32 = index.cast %lane : index to i32
+    %zero_i32 = scalar.constant 0 : i32
+    %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+    scf.if %is_lane0 {
+      %silu = scalar.siluf %gate_dot : f32
+      %result =
+          scalar.mulf<nnan|ninf|nsz> %silu, %up_dot : f32
+      view.store %result, %dst_view[%dst_index] :
+          f32, view<[%dst_count]xf32>
+    }
+  }
+  kernel.return
+}

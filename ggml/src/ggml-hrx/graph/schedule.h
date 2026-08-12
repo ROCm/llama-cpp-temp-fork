@@ -30,9 +30,11 @@ struct TensorBinding {
     ValueId value = kInvalidId;
     size_t offset = 0;
     size_t length = 0;
+    std::string layout;
 
     bool operator==(const TensorBinding & other) const {
-        return role == other.role && value == other.value && offset == other.offset && length == other.length;
+        return role == other.role && value == other.value && offset == other.offset && length == other.length &&
+               layout == other.layout;
     }
     bool operator!=(const TensorBinding & other) const { return !(*this == other); }
 };
