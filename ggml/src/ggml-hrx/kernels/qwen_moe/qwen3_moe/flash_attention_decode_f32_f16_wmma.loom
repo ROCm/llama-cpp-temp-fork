@@ -614,6 +614,288 @@ kernel.def target(@qwen3_moe_attention_decode_gfx11_wave64) @qwen3_moe_flash_att
   kernel.return
 }
 
+// D256 token-one specialization. Selective compilation keeps this wave32
+// direct schedule independent from the D128 WMMA root above.
+// FLASH_ATTN_EXT for head dim 256: 4 independent wave(s) per head, 1-query tile with f16 dot2 QK.
+// Online softmax consumes 2 key position(s) per loop iteration, 2-key online-softmax blocks.
+//
+// This is the token-one specialization of wave_f32.loom. Every one-wave
+// workgroup repeats the accepted lane-blocked QK reduction over
+// all 256 dimensions. Wave S owns the contiguous output interval
+// [S*64, (S+1)*64), 2 adjacent elements per lane.
+//   - k[d,s] and v[d,s] stay unit-stride in d and every load is coalesced;
+//   - the q.k reduction is within a single wave, so it lowers to cross-lane
+//     shuffles with no workgroup barrier;
+//   - the running softmax max and denominator are scalars, identical in every
+//     lane, so there is no reduction for them at all.
+// The waves write disjoint output dimensions and require no atomics or
+// cross-workgroup synchronization.
+// Four workgroups per head expose 64 independent waves across the 16-head
+// decode shape while preserving each output element's arithmetic order.
+
+config.decl @hrx2_shape_fa_d : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @hrx2_shape_fa_ntokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_fa_nheads : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2_shape_fa_nkv : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2_shape_fa_gqa : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2_shape_fa_q_stride_token : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_fa_q_stride_head : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_fa_k_stride_pos : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_fa_k_stride_head : %value: index where [range(%value, 0, 16777216)]
+config.decl @hrx2_shape_fa_v_stride_pos : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_fa_v_stride_head : %value: index where [range(%value, 0, 16777216)]
+config.decl @hrx2_shape_fa_mask_stride_token : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_fa_dst_stride_head : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_fa_dst_stride_token : %value: index where [range(%value, 1, 16777216)]
+
+kernel.def export("hrx2_flash_attn_ext_f32_f16_wave_token1") @hrx2_flash_attn_ext_f32_f16_wave_token1() {
+  %unit = index.constant 1 : index
+  %wave = index.constant 32 : index
+  %waves_per_head = index.constant 4 : index
+  %br = index.constant 1 : index
+  %br_m1 = index.constant 0 : index
+  %ntokens = config.get @hrx2_shape_fa_ntokens : index
+  %nheads = config.get @hrx2_shape_fa_nheads : index
+  %nt_up = index.add %ntokens, %br_m1 : index
+  %ntiles = index.div %nt_up, %br : index
+  %nheads_b = index.assume %nheads [range(%nheads, 1, 1024)] : index
+  %head_waves = index.mul %nheads_b, %waves_per_head : index
+  kernel.launch.config workgroups(%ntiles, %head_waves, %unit) workgroup_size(%wave, %unit, %unit) : index
+} launch(%scale: f32, %q: buffer, %k: buffer, %v: buffer, %mask: buffer, %out: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %br = index.constant 1 : index
+  %waves_per_head = index.constant 4 : index
+  %split_width = index.constant 64 : index
+  %k_d1 = index.constant 1 : index
+  %k_d2 = index.constant 2 : index
+  %k_d3 = index.constant 3 : index
+  %k_d4 = index.constant 4 : index
+  %k_d5 = index.constant 5 : index
+  %k_d6 = index.constant 6 : index
+  %k_d7 = index.constant 7 : index
+
+  %ntokens = config.get @hrx2_shape_fa_ntokens : index
+  %nkv = config.get @hrx2_shape_fa_nkv : index
+  %gqa = config.get @hrx2_shape_fa_gqa : index
+  %q_st = config.get @hrx2_shape_fa_q_stride_token : index
+  %q_sh = config.get @hrx2_shape_fa_q_stride_head : index
+  %k_sp = config.get @hrx2_shape_fa_k_stride_pos : index
+  %k_sh = config.get @hrx2_shape_fa_k_stride_head : index
+  %v_sp = config.get @hrx2_shape_fa_v_stride_pos : index
+  %v_sh = config.get @hrx2_shape_fa_v_stride_head : index
+  %m_st = config.get @hrx2_shape_fa_mask_stride_token : index
+  %o_sh = config.get @hrx2_shape_fa_dst_stride_head : index
+  %o_st = config.get @hrx2_shape_fa_dst_stride_token : index
+
+  %ntokens_b = index.assume %ntokens [range(%ntokens, 1, 1048576)] : index
+  %nkv_b = index.assume %nkv [range(%nkv, 1, 1048576)] : index
+  %gqa_b = index.assume %gqa [range(%gqa, 1, 1024)] : index
+
+  %tile0 = kernel.workgroup.id<x> : index
+  %tile = index.assume %tile0 [range(%tile0, 0, 1048575)] : index
+  %head_wave0 = kernel.workgroup.id<y> : index
+  %head_wave = index.assume %head_wave0 [range(%head_wave0, 0, 8191)] : index
+  %head0 = index.div %head_wave, %waves_per_head : index
+  %head = index.assume %head0 [range(%head0, 0, 1023)] : index
+  %split = index.rem %head_wave, %waves_per_head : index
+  %split_dim_base = index.mul %split, %split_width : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %lane_dpl = index.constant 8 : index
+  %lane_blk0 = index.mul %lane, %lane_dpl : index
+  %lane_blk = index.assume %lane_blk0 [range(%lane_blk0, 0, 248)] : index
+  %lane_out_width = index.constant 2 : index
+  %lane_out = index.mul %lane, %lane_out_width : index
+  %owned_dim_base = index.add %split_dim_base, %lane_out : index
+
+  // A masked position must contribute exactly zero. The mask carries -inf, which
+  // would poison the fast-math arithmetic, so clamp it to a value that is finite
+  // but still underflows exp() against any real score. A causal row always has
+  // at least one unmasked position, so the denominator cannot come out zero.
+  %neg_big = scalar.constant -10000.0 : f32
+  %zero_f32 = scalar.constant 0.0 : f32
+  %zero_dot2 = vector.splat %zero_f32 : vector<4xf32>
+
+
+  %q_global = buffer.assume.memory_space<global> %q : buffer
+  %k_global = buffer.assume.memory_space<global> %k : buffer
+  %v_global = buffer.assume.memory_space<global> %v : buffer
+  %m_global = buffer.assume.memory_space<global> %mask : buffer
+  %o_global = buffer.assume.memory_space<global> %out : buffer
+  %q_na, %k_na, %v_na, %m_na, %o_na = buffer.assume.noalias %q_global, %k_global, %v_global, %m_global, %o_global : buffer, buffer, buffer, buffer, buffer
+  %q_view = buffer.view %q_na[%base] : buffer -> view<1073741824xf32>
+  %k_view = buffer.view %k_na[%base] : buffer -> view<1073741824xf16>
+  %v_view = buffer.view %v_na[%base] : buffer -> view<1073741824xf16>
+  %m_view = buffer.view %m_na[%base] : buffer -> view<1073741824xf16>
+  %o_view = buffer.view %o_na[%base] : buffer -> view<1073741824xf32>
+
+  %kvhead = index.div %head, %gqa_b : index
+  %tok_base = index.mul %tile, %br : index
+  %q_hoff = index.mul %head, %q_sh : index
+  %o_hoff = index.mul %head, %o_sh : index
+  %k_b0 = index.mul %kvhead, %k_sh : index
+  %k_bs = index.add %k_b0, %lane_blk : index
+  %v_b0 = index.mul %kvhead, %v_sh : index
+  %v_bs = index.add %v_b0, %owned_dim_base : index
+
+  %t0_raw = index.add %tok_base, %zero : index
+  %t0_ok = index.cmp ult, %t0_raw, %ntokens_b : index
+  %t0 = index.rem %t0_raw, %ntokens_b : index
+  %qo0_0 = index.mul %t0, %q_st : index
+  %qo0_1 = index.add %qo0_0, %q_hoff : index
+  %qb0 = index.add %qo0_1, %lane_blk : index
+  %mb0 = index.mul %t0, %m_st : index
+  %qi0_0_0 = index.add %qb0, %zero : index
+  %qi0_0 = index.assume %qi0_0_0 [range(%qi0_0_0, 0, 1073741823)] : index
+  %qf0_0 = view.load %q_view[%qi0_0] : view<1073741824xf32> -> f32
+  %qs0_0 = scalar.mulf<reassoc|nnan|nsz> %qf0_0, %scale : f32
+  %qd0_0 = scalar.fptrunc %qs0_0 : f32 to f16
+  %qi0_1_0 = index.add %qb0, %k_d1 : index
+  %qi0_1 = index.assume %qi0_1_0 [range(%qi0_1_0, 0, 1073741823)] : index
+  %qf0_1 = view.load %q_view[%qi0_1] : view<1073741824xf32> -> f32
+  %qs0_1 = scalar.mulf<reassoc|nnan|nsz> %qf0_1, %scale : f32
+  %qd0_1 = scalar.fptrunc %qs0_1 : f32 to f16
+  %qi0_2_0 = index.add %qb0, %k_d2 : index
+  %qi0_2 = index.assume %qi0_2_0 [range(%qi0_2_0, 0, 1073741823)] : index
+  %qf0_2 = view.load %q_view[%qi0_2] : view<1073741824xf32> -> f32
+  %qs0_2 = scalar.mulf<reassoc|nnan|nsz> %qf0_2, %scale : f32
+  %qd0_2 = scalar.fptrunc %qs0_2 : f32 to f16
+  %qi0_3_0 = index.add %qb0, %k_d3 : index
+  %qi0_3 = index.assume %qi0_3_0 [range(%qi0_3_0, 0, 1073741823)] : index
+  %qf0_3 = view.load %q_view[%qi0_3] : view<1073741824xf32> -> f32
+  %qs0_3 = scalar.mulf<reassoc|nnan|nsz> %qf0_3, %scale : f32
+  %qd0_3 = scalar.fptrunc %qs0_3 : f32 to f16
+  %qi0_4_0 = index.add %qb0, %k_d4 : index
+  %qi0_4 = index.assume %qi0_4_0 [range(%qi0_4_0, 0, 1073741823)] : index
+  %qf0_4 = view.load %q_view[%qi0_4] : view<1073741824xf32> -> f32
+  %qs0_4 = scalar.mulf<reassoc|nnan|nsz> %qf0_4, %scale : f32
+  %qd0_4 = scalar.fptrunc %qs0_4 : f32 to f16
+  %qi0_5_0 = index.add %qb0, %k_d5 : index
+  %qi0_5 = index.assume %qi0_5_0 [range(%qi0_5_0, 0, 1073741823)] : index
+  %qf0_5 = view.load %q_view[%qi0_5] : view<1073741824xf32> -> f32
+  %qs0_5 = scalar.mulf<reassoc|nnan|nsz> %qf0_5, %scale : f32
+  %qd0_5 = scalar.fptrunc %qs0_5 : f32 to f16
+  %qi0_6_0 = index.add %qb0, %k_d6 : index
+  %qi0_6 = index.assume %qi0_6_0 [range(%qi0_6_0, 0, 1073741823)] : index
+  %qf0_6 = view.load %q_view[%qi0_6] : view<1073741824xf32> -> f32
+  %qs0_6 = scalar.mulf<reassoc|nnan|nsz> %qf0_6, %scale : f32
+  %qd0_6 = scalar.fptrunc %qs0_6 : f32 to f16
+  %qi0_7_0 = index.add %qb0, %k_d7 : index
+  %qi0_7 = index.assume %qi0_7_0 [range(%qi0_7_0, 0, 1073741823)] : index
+  %qf0_7 = view.load %q_view[%qi0_7] : view<1073741824xf32> -> f32
+  %qs0_7 = scalar.mulf<reassoc|nnan|nsz> %qf0_7, %scale : f32
+  %qd0_7 = scalar.fptrunc %qs0_7 : f32 to f16
+  %qv0 = vector.from_elements %qd0_0, %qd0_1, %qd0_2, %qd0_3, %qd0_4, %qd0_5, %qd0_6, %qd0_7 : vector<8xf16>
+
+  %two = index.constant 2 : index
+  %mf0, %lf0, %of0_0, %of0_1 = scf.for %s = [%zero to %nkv_b step %two](
+      %mr0 = %neg_big : f32,
+      %lr0 = %zero_f32 : f32,
+      %or0_0 = %zero_f32 : f32,
+      %or0_1 = %zero_f32 : f32) -> (f32, f32, f32, f32) {
+    %s1_raw = index.add %s, %one : index
+    %s1_ok = index.cmp ult, %s1_raw, %nkv_b : index
+    // nkv is at least one. Wrapping the odd tail makes its memory accesses
+    // safe; its mask is separately forced to neg_big so it contributes zero.
+    %s1 = index.rem %s1_raw, %nkv_b : index
+    %k0_o = index.mul %s, %k_sp : index
+    %v0_o = index.mul %s, %v_sp : index
+    %k1_o = index.mul %s1, %k_sp : index
+    %v1_o = index.mul %s1, %v_sp : index
+    %k0_r = index.add %k_bs, %k0_o : index
+    %v0_r = index.add %v_bs, %v0_o : index
+    %k1_r = index.add %k_bs, %k1_o : index
+    %v1_r = index.add %v_bs, %v1_o : index
+    %m0_i0_0 = index.add %mb0, %s : index
+    %m0_i0 = index.assume %m0_i0_0 [range(%m0_i0_0, 0, 1073741823)] : index
+    %m0_h0 = view.load %m_view[%m0_i0] : view<1073741824xf16> -> f16
+    %m0_raw0 = scalar.extf %m0_h0 : f16 to f32
+    %m0_val0 = scalar.maxnumf %m0_raw0, %neg_big : f32
+    %m1_i0_0 = index.add %mb0, %s1 : index
+    %m1_i0 = index.assume %m1_i0_0 [range(%m1_i0_0, 0, 1073741823)] : index
+    %m1_h0 = view.load %m_view[%m1_i0] : view<1073741824xf16> -> f16
+    %m1_raw0 = scalar.extf %m1_h0 : f16 to f32
+    %m1_clamp0 = scalar.maxnumf %m1_raw0, %neg_big : f32
+    %m1_val0 = scf.if %s1_ok -> (f32) {
+      scf.yield %m1_clamp0 : f32
+    } else {
+      scf.yield %neg_big : f32
+    }
+    %pair_m0 = scalar.maxnumf %m0_val0, %m1_val0 : f32
+    %active = scalar.cmpf ogt, %pair_m0, %neg_big : f32
+    %sm0, %sl0, %so0_0, %so0_1 = scf.if %active -> (f32, f32, f32, f32) {
+      // Repeat the admitted BR1 QK packet shape in every split.
+      %k0_iv = index.assume %k0_r [range(%k0_r, 0, 1073741816)] : index
+      %k0_vec = vector.load %k_view[%k0_iv] : view<1073741824xf16> -> vector<8xf16>
+      %k1_iv = index.assume %k1_r [range(%k1_r, 0, 1073741816)] : index
+      %k1_vec = vector.load %k_view[%k1_iv] : view<1073741824xf16> -> vector<8xf16>
+      %dp0_0 = vector.dot2f %qv0, %k0_vec, %zero_dot2 : vector<8xf16>, vector<8xf16>, vector<4xf32>
+      %pp0_0 = vector.reduce<addf, reassoc|nnan|ninf|nsz> %dp0_0, %zero_f32 : vector<4xf32>, f32
+      %dot0_0 = kernel.workgroup.reduce<addf> %pp0_0 : f32
+      %score0_0 = scalar.addf<reassoc|nnan|nsz> %dot0_0, %m0_val0 : f32
+      %dp1_0 = vector.dot2f %qv0, %k1_vec, %zero_dot2 : vector<8xf16>, vector<8xf16>, vector<4xf32>
+      %pp1_0 = vector.reduce<addf, reassoc|nnan|ninf|nsz> %dp1_0, %zero_f32 : vector<4xf32>, f32
+      %dot1_0 = kernel.workgroup.reduce<addf> %pp1_0 : f32
+      %score1_0 = scalar.addf<reassoc|nnan|nsz> %dot1_0, %m1_val0 : f32
+      %block_m0 = scalar.maxnumf %score0_0, %score1_0 : f32
+      %mn0 = scalar.maxnumf %mr0, %block_m0 : f32
+      %old_delta0 = scalar.subf<nnan|nsz> %mr0, %mn0 : f32
+      %cr0 = scalar.expf<afn> %old_delta0 : f32
+      %p0_delta0 = scalar.subf<nnan|nsz> %score0_0, %mn0 : f32
+      %p0_0 = scalar.expf<afn> %p0_delta0 : f32
+      %p1_delta0 = scalar.subf<nnan|nsz> %score1_0, %mn0 : f32
+      %p1_0 = scalar.expf<afn> %p1_delta0 : f32
+      %l01_0 = scalar.fmaf<reassoc|nnan|nsz> %lr0, %cr0, %p0_0 : f32
+      %ln0 = scalar.addf<reassoc|nnan|nsz> %l01_0, %p1_0 : f32
+      %v0_i0_0 = index.add %v0_r, %zero : index
+      %v0_i0 = index.assume %v0_i0_0 [range(%v0_i0_0, 0, 1073741823)] : index
+      %v0_h0 = view.load %v_view[%v0_i0] : view<1073741824xf16> -> f16
+      %v0_f0 = scalar.extf %v0_h0 : f16 to f32
+      %v1_i0_0 = index.add %v1_r, %zero : index
+      %v1_i0 = index.assume %v1_i0_0 [range(%v1_i0_0, 0, 1073741823)] : index
+      %v1_h0 = view.load %v_view[%v1_i0] : view<1073741824xf16> -> f16
+      %v1_f0 = scalar.extf %v1_h0 : f16 to f32
+      %v0_i1_0 = index.add %v0_r, %k_d1 : index
+      %v0_i1 = index.assume %v0_i1_0 [range(%v0_i1_0, 0, 1073741823)] : index
+      %v0_h1 = view.load %v_view[%v0_i1] : view<1073741824xf16> -> f16
+      %v0_f1 = scalar.extf %v0_h1 : f16 to f32
+      %v1_i1_0 = index.add %v1_r, %k_d1 : index
+      %v1_i1 = index.assume %v1_i1_0 [range(%v1_i1_0, 0, 1073741823)] : index
+      %v1_h1 = view.load %v_view[%v1_i1] : view<1073741824xf16> -> f16
+      %v1_f1 = scalar.extf %v1_h1 : f16 to f32
+      %os0_0 = scalar.mulf<reassoc|nnan|nsz> %or0_0, %cr0 : f32
+      %op0_0_0 = scalar.fmaf<reassoc|nnan|nsz> %p0_0, %v0_f0, %os0_0 : f32
+      %on0_0 = scalar.fmaf<reassoc|nnan|nsz> %p1_0, %v1_f0, %op0_0_0 : f32
+      %os0_1 = scalar.mulf<reassoc|nnan|nsz> %or0_1, %cr0 : f32
+      %op0_0_1 = scalar.fmaf<reassoc|nnan|nsz> %p0_0, %v0_f1, %os0_1 : f32
+      %on0_1 = scalar.fmaf<reassoc|nnan|nsz> %p1_0, %v1_f1, %op0_0_1 : f32
+      scf.yield %mn0, %ln0, %on0_0, %on0_1 : f32, f32, f32, f32
+    } else {
+      scf.yield %mr0, %lr0, %or0_0, %or0_1 : f32, f32, f32, f32
+    }
+    scf.yield %sm0, %sl0, %so0_0, %so0_1 : f32, f32, f32, f32
+  }
+
+  %oo0_0 = index.mul %t0, %o_st : index
+  %oo0_1 = index.add %oo0_0, %o_hoff : index
+  %ob0 = index.add %oo0_1, %owned_dim_base : index
+  %res0_0 = scalar.divf<reassoc|nnan|nsz|arcp> %of0_0, %lf0 : f32
+  %oi0_0_0 = index.add %ob0, %zero : index
+  %oi0_0 = index.assume %oi0_0_0 [range(%oi0_0_0, 0, 1073741823)] : index
+  scf.if %t0_ok {
+    view.store %res0_0, %o_view[%oi0_0] : f32, view<1073741824xf32>
+  }
+  %res0_1 = scalar.divf<reassoc|nnan|nsz|arcp> %of0_1, %lf0 : f32
+  %oi0_1_0 = index.add %ob0, %k_d1 : index
+  %oi0_1 = index.assume %oi0_1_0 [range(%oi0_1_0, 0, 1073741823)] : index
+  scf.if %t0_ok {
+    view.store %res0_1, %o_view[%oi0_1] : f32, view<1073741824xf32>
+  }
+  kernel.return
+}
+
 // The mask selects the first KV row exactly. QK, F16 probability conversion,
 // and P*V all execute, while the expected result remains an auditable iota.
 check.case public @qwen3_moe_flash_attention_decode_f32_f16_wmma_selected_row_case {
