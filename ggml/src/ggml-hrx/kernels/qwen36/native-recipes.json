@@ -5509,6 +5509,11 @@
                 "name": "hrx2_shape_fa_gate_stride_token",
                 "source": "tensor.raw_gate.element_strides.2",
                 "type": "i64"
+              },
+              {
+                "name": "hrx2_fa_apply_gate",
+                "type": "i64",
+                "value": 1
               }
             ],
             "mode": "compile"

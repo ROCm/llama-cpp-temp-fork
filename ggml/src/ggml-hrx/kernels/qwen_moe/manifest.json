@@ -3194,6 +3194,80 @@
         "library_sources": []
       },
       "compile_dependencies": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "mask",
+        "gate",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "qwen3_moe/flash_attention_f32_f16_wmma.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "flash_attn_ext_f32_f16_direct_kv64_f32acc_gate",
+      "source": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
+      "symbol": "hrx2_flash_attn_ext_f32_f16_direct_kv64_f32acc_gate",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "mask",
+        "out"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "flash_attn_ext_f32_f16_wave256_token1",
+      "source": "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom",
+      "symbol": "hrx2_flash_attn_ext_f32_f16_wave_token1",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
     }
   ],
   "link_modules": [
