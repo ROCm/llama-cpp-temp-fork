@@ -1961,7 +1961,8 @@
             "type": "f32"
           }
         },
-        "zero_view": {}
+        "zero_view": {},
+        "transpose": {}
       },
       "derived": {
         "concat_snapshot_elements": {
@@ -2037,6 +2038,13 @@
             "shape.zero_state_scaled.zero_d1",
             "shape.zero_state_scaled.zero_d2",
             "shape.zero_state_scaled.zero_d3"
+          ],
+          "type": "i64"
+        },
+        "concat_snapshot_bytes": {
+          "product": [
+            "derived.concat_snapshot_elements",
+            4
           ],
           "type": "i64"
         }
@@ -2137,8 +2145,7 @@
               "kind": "output",
               "name": "dst",
               "position": 2,
-              "storage": "graph_transient",
-              "tensor": "window"
+              "transient": "channel_window"
             },
             {
               "kind": "output",
@@ -2171,7 +2178,7 @@
               },
               {
                 "name": "hrx2_shape_concat_tail_state_row_stride",
-                "source": "tensor.state.element_strides.1",
+                "source": "tensor.state.element_strides.0",
                 "type": "i64"
               },
               {
@@ -2181,18 +2188,28 @@
               },
               {
                 "name": "hrx2_shape_concat_tail_dst_row_stride",
-                "source": "tensor.window.element_strides.1",
+                "source": "shape.x.channels",
                 "type": "i64"
               },
               {
                 "name": "hrx2_shape_concat_tail_cache_row_stride",
-                "source": "shape.x.channels",
+                "source": "tensor.state.element_strides.0",
                 "type": "i64"
               },
               {
                 "name": "hrx2_tuning_concat_tail_workgroup_size",
                 "type": "i64",
                 "value": 256
+              },
+              {
+                "name": "hrx2_shape_concat_tail_state_channel_stride",
+                "source": "tensor.state.element_strides.1",
+                "type": "i64"
+              },
+              {
+                "name": "hrx2_shape_concat_tail_cache_channel_stride",
+                "source": "tensor.state.element_strides.1",
+                "type": "i64"
               }
             ],
             "mode": "compile"
@@ -2219,8 +2236,7 @@
               "kind": "input",
               "name": "state",
               "position": 0,
-              "storage": "graph_transient",
-              "tensor": "window"
+              "transient": "channel_window"
             },
             {
               "kind": "input",
@@ -2265,7 +2281,7 @@
               },
               {
                 "name": "hrx2_shape_ssm_conv_state_row_stride",
-                "source": "tensor.window.element_strides.1",
+                "source": "shape.x.channels",
                 "type": "i64"
               },
               {
@@ -2392,11 +2408,11 @@
             },
             "concat": {
               "op": "CONCAT",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "window",
                 "src0": "state",
-                "src1": "x"
+                "src1": "x_transposed"
               }
             },
             "copy": {
@@ -2426,7 +2442,7 @@
             },
             "ssm": {
               "op": "SSM_CONV",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "ssm_dst",
                 "src0": "window",
@@ -2444,7 +2460,7 @@
             },
             "state_view": {
               "op": "VIEW",
-              "params": "00000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "state_tail",
                 "src0": "window"
@@ -2464,6 +2480,14 @@
               "tensors": {
                 "dst": "zero_state_view",
                 "src0": "gdn_cache_read"
+              }
+            },
+            "transpose": {
+              "op": "TRANSPOSE",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "tensors": {
+                "dst": "x_transposed",
+                "src0": "x"
               }
             }
           },
@@ -2631,30 +2655,30 @@
             "state": {
               "offset": 0,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                12,
                 98304,
                 98304
               ],
               "type": "f32"
             },
             "state_tail": {
-              "offset": 16777216,
+              "offset": 2048,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                2060,
                 16875520,
                 16875520
               ],
@@ -2663,14 +2687,14 @@
             "window": {
               "offset": 0,
               "shape": [
-                8192,
                 515,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                2060,
                 16875520,
                 16875520
               ],
@@ -2721,6 +2745,22 @@
                 0,
                 0,
                 0
+              ],
+              "type": "f32"
+            },
+            "x_transposed": {
+              "offset": 0,
+              "shape": [
+                512,
+                8192,
+                1,
+                1
+              ],
+              "strides": [
+                32768,
+                4,
+                16777216,
+                16777216
               ],
               "type": "f32"
             }
@@ -2738,11 +2778,11 @@
             },
             "concat": {
               "op": "CONCAT",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "window",
                 "src0": "state",
-                "src1": "x"
+                "src1": "x_transposed"
               }
             },
             "copy": {
@@ -2772,7 +2812,7 @@
             },
             "ssm": {
               "op": "SSM_CONV",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "ssm_dst",
                 "src0": "window",
@@ -2790,7 +2830,7 @@
             },
             "state_view": {
               "op": "VIEW",
-              "params": "00000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "state_tail",
                 "src0": "window"
@@ -2810,6 +2850,14 @@
               "tensors": {
                 "dst": "zero_state_view",
                 "src0": "gdn_cache_read"
+              }
+            },
+            "transpose": {
+              "op": "TRANSPOSE",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "tensors": {
+                "dst": "x_transposed",
+                "src0": "x"
               }
             }
           },
@@ -2977,30 +3025,30 @@
             "state": {
               "offset": 0,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                12,
                 98304,
                 98304
               ],
               "type": "f32"
             },
             "state_tail": {
-              "offset": 16777216,
+              "offset": 2048,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                2060,
                 16875520,
                 16875520
               ],
@@ -3009,14 +3057,14 @@
             "window": {
               "offset": 0,
               "shape": [
-                8192,
                 515,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                2060,
                 16875520,
                 16875520
               ],
@@ -3067,6 +3115,22 @@
                 2097152,
                 2097152,
                 2097152
+              ],
+              "type": "f32"
+            },
+            "x_transposed": {
+              "offset": 0,
+              "shape": [
+                512,
+                8192,
+                1,
+                1
+              ],
+              "strides": [
+                32768,
+                4,
+                16777216,
+                16777216
               ],
               "type": "f32"
             }
@@ -3142,8 +3206,8 @@
         },
         "state": {
           "shape": [
-            "state_channels",
             "state_rows",
+            "state_channels",
             "state_sequences",
             "state_outer"
           ],
@@ -3151,8 +3215,8 @@
         },
         "state_tail": {
           "shape": [
-            "tail_channels",
             "tail_rows",
+            "tail_channels",
             "tail_sequences",
             "tail_outer"
           ],
@@ -3160,8 +3224,8 @@
         },
         "window": {
           "shape": [
-            "window_channels",
             "window_rows",
+            "window_channels",
             "window_sequences",
             "window_outer"
           ],
@@ -3193,9 +3257,22 @@
             "zero_d3"
           ],
           "type": "F32"
+        },
+        "x_transposed": {
+          "shape": [
+            "tokens",
+            "channels",
+            "sequences",
+            "outer"
+          ],
+          "type": "F32"
         }
       },
-      "transient_buffers": {}
+      "transient_buffers": {
+        "channel_window": {
+          "size": "derived.concat_snapshot_bytes"
+        }
+      }
     },
     {
       "attributes": {
@@ -16272,7 +16349,8 @@
           }
         },
         "terminal_mul": {},
-        "v_view": {}
+        "v_view": {},
+        "conv_transpose": {}
       },
       "derived": {
         "attention_elements": {
@@ -16996,11 +17074,11 @@
             },
             "conv_concat": {
               "op": "CONCAT",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "conv_window",
                 "src0": "conv_state_input",
-                "src1": "conv_x"
+                "src1": "conv_x_transposed"
               }
             },
             "conv_state_reshape": {
@@ -17013,7 +17091,7 @@
             },
             "conv_state_view": {
               "op": "VIEW",
-              "params": "00800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "04000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "conv_state_tail",
                 "src0": "conv_window"
@@ -17240,7 +17318,7 @@
             },
             "ssm": {
               "op": "SSM_CONV",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "conv_ssm_dst",
                 "src0": "conv_window",
@@ -17270,6 +17348,14 @@
               "tensors": {
                 "dst": "v",
                 "src0": "conv_dst"
+              }
+            },
+            "conv_transpose": {
+              "op": "TRANSPOSE",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "tensors": {
+                "dst": "conv_x_transposed",
+                "src0": "conv_x"
               }
             }
           },
@@ -17581,14 +17667,14 @@
             "conv_state_input": {
               "offset": 0,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                12,
                 98304,
                 98304
               ],
@@ -17611,16 +17697,16 @@
               "type": "f32"
             },
             "conv_state_tail": {
-              "offset": 32768,
+              "offset": 4,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                16,
                 131072,
                 131072
               ],
@@ -17629,14 +17715,14 @@
             "conv_window": {
               "offset": 0,
               "shape": [
-                8192,
                 4,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                16,
                 131072,
                 131072
               ],
@@ -18121,6 +18207,22 @@
                 32768
               ],
               "type": "f32"
+            },
+            "conv_x_transposed": {
+              "offset": 0,
+              "shape": [
+                1,
+                8192,
+                1,
+                1
+              ],
+              "strides": [
+                32768,
+                4,
+                32768,
+                32768
+              ],
+              "type": "f32"
             }
           }
         }
@@ -18293,10 +18395,10 @@
         },
         "conv_state_input": {
           "shape": [
-            "conv_channels",
             "conv_state_rows",
-            1,
-            1
+            "conv_channels",
+            "conv_state_sequences",
+            "conv_state_outer"
           ],
           "type": "F32"
         },
@@ -18311,19 +18413,19 @@
         },
         "conv_state_tail": {
           "shape": [
+            "conv_tail_rows",
             "conv_channels",
-            "conv_state_rows",
-            1,
-            1
+            "conv_tail_sequences",
+            "conv_tail_outer"
           ],
           "type": "F32"
         },
         "conv_window": {
           "shape": [
-            "conv_channels",
             "conv_window_rows",
-            1,
-            1
+            "conv_channels",
+            "conv_window_sequences",
+            "conv_window_outer"
           ],
           "type": "F32"
         },
@@ -18590,6 +18692,15 @@
             "sequences"
           ],
           "type": "F32"
+        },
+        "conv_x_transposed": {
+          "shape": [
+            "conv_tokens",
+            "conv_channels",
+            "conv_sequences",
+            "conv_outer"
+          ],
+          "type": "F32"
         }
       },
       "transient_buffers": {
@@ -18693,7 +18804,8 @@
           }
         },
         "terminal_mul": {},
-        "v_view": {}
+        "v_view": {},
+        "conv_transpose": {}
       },
       "derived": {
         "attention_elements": {
@@ -19318,11 +19430,11 @@
             },
             "conv_concat": {
               "op": "CONCAT",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "conv_window",
                 "src0": "conv_state_input",
-                "src1": "conv_x"
+                "src1": "conv_x_transposed"
               }
             },
             "conv_state_reshape": {
@@ -19335,7 +19447,7 @@
             },
             "conv_state_view": {
               "op": "VIEW",
-              "params": "00800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "04000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "conv_state_tail",
                 "src0": "conv_window"
@@ -19562,7 +19674,7 @@
             },
             "ssm": {
               "op": "SSM_CONV",
-              "params": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
               "tensors": {
                 "dst": "conv_ssm_dst",
                 "src0": "conv_window",
@@ -19592,6 +19704,14 @@
               "tensors": {
                 "dst": "v",
                 "src0": "conv_dst"
+              }
+            },
+            "conv_transpose": {
+              "op": "TRANSPOSE",
+              "params": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+              "tensors": {
+                "dst": "conv_x_transposed",
+                "src0": "conv_x"
               }
             }
           },
@@ -19903,14 +20023,14 @@
             "conv_state_input": {
               "offset": 0,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                12,
                 98304,
                 98304
               ],
@@ -19933,16 +20053,16 @@
               "type": "f32"
             },
             "conv_state_tail": {
-              "offset": 32768,
+              "offset": 4,
               "shape": [
-                8192,
                 3,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                16,
                 131072,
                 131072
               ],
@@ -19951,14 +20071,14 @@
             "conv_window": {
               "offset": 0,
               "shape": [
-                8192,
                 4,
+                8192,
                 1,
                 1
               ],
               "strides": [
                 4,
-                32768,
+                16,
                 131072,
                 131072
               ],
@@ -20443,6 +20563,22 @@
                 32768
               ],
               "type": "f32"
+            },
+            "conv_x_transposed": {
+              "offset": 0,
+              "shape": [
+                1,
+                8192,
+                1,
+                1
+              ],
+              "strides": [
+                32768,
+                4,
+                32768,
+                32768
+              ],
+              "type": "f32"
             }
           }
         }
@@ -20615,10 +20751,10 @@
         },
         "conv_state_input": {
           "shape": [
-            "conv_channels",
             "conv_state_rows",
-            1,
-            1
+            "conv_channels",
+            "conv_state_sequences",
+            "conv_state_outer"
           ],
           "type": "F32"
         },
@@ -20633,19 +20769,19 @@
         },
         "conv_state_tail": {
           "shape": [
+            "conv_tail_rows",
             "conv_channels",
-            "conv_state_rows",
-            1,
-            1
+            "conv_tail_sequences",
+            "conv_tail_outer"
           ],
           "type": "F32"
         },
         "conv_window": {
           "shape": [
-            "conv_channels",
             "conv_window_rows",
-            1,
-            1
+            "conv_channels",
+            "conv_window_sequences",
+            "conv_window_outer"
           ],
           "type": "F32"
         },
@@ -20910,6 +21046,15 @@
             "heads",
             "tokens",
             "sequences"
+          ],
+          "type": "F32"
+        },
+        "conv_x_transposed": {
+          "shape": [
+            "conv_tokens",
+            "conv_channels",
+            "conv_sequences",
+            "conv_outer"
           ],
           "type": "F32"
         }

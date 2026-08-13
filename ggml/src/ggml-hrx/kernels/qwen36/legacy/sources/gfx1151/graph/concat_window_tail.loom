@@ -8,17 +8,22 @@
 // while updating the persistent cache from x rows [509, 512).
 //
 // This snapshots 2 MiB per production layer instead of materialising 16.9 MiB.
-// Admission is restricted to the exact PP512 shape and proves that state, x,
-// destination, and cache do not overlap.
+// The public graph keeps llama.cpp's native time-major recurrent-state layout.
+// This kernel transposes only the small carried-state reads and cache writes
+// while preserving the sparse window in the channels-major layout consumed by
+// the fused SSM kernel. Admission is restricted to the exact PP512 shape and
+// proves that state, x, destination, and cache do not overlap.
 
 config.decl @hrx2_shape_concat_tail_d_conv : %value: index where [range(%value, 4, 4)]
 config.decl @hrx2_shape_concat_tail_d_inner : %value: index where [range(%value, 8192, 8192)]
 config.decl @hrx2_shape_concat_tail_n_t : %value: index where [range(%value, 512, 512)]
 config.decl @hrx2_shape_concat_tail_n_s : %value: index where [range(%value, 1, 1)]
-config.decl @hrx2_shape_concat_tail_state_row_stride : %value: index where [range(%value, 8192, 8192)]
+config.decl @hrx2_shape_concat_tail_state_row_stride : %value: index where [range(%value, 1, 1)]
+config.decl @hrx2_shape_concat_tail_state_channel_stride : %value: index where [range(%value, 3, 3)]
 config.decl @hrx2_shape_concat_tail_x_row_stride : %value: index where [range(%value, 1, 16777216)]
 config.decl @hrx2_shape_concat_tail_dst_row_stride : %value: index where [range(%value, 1, 16777216)]
-config.decl @hrx2_shape_concat_tail_cache_row_stride : %value: index where [range(%value, 1, 16777216)]
+config.decl @hrx2_shape_concat_tail_cache_row_stride : %value: index where [range(%value, 1, 1)]
+config.decl @hrx2_shape_concat_tail_cache_channel_stride : %value: index where [range(%value, 3, 3)]
 config.decl @hrx2_tuning_concat_tail_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 
 kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
@@ -47,18 +52,22 @@ kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
   %n_t = config.get @hrx2_shape_concat_tail_n_t : index
   %n_s = config.get @hrx2_shape_concat_tail_n_s : index
   %srs = config.get @hrx2_shape_concat_tail_state_row_stride : index
+  %scs = config.get @hrx2_shape_concat_tail_state_channel_stride : index
   %xrs = config.get @hrx2_shape_concat_tail_x_row_stride : index
   %drs = config.get @hrx2_shape_concat_tail_dst_row_stride : index
   %crs = config.get @hrx2_shape_concat_tail_cache_row_stride : index
+  %ccs = config.get @hrx2_shape_concat_tail_cache_channel_stride : index
   %wg = config.get @hrx2_tuning_concat_tail_workgroup_size : index
 
   %di = index.assume %d_inner [range(%d_inner, 8192, 8192)] : index
   %nt = index.assume %n_t [range(%n_t, 512, 512)] : index
   %ns = index.assume %n_s [range(%n_s, 1, 1)] : index
-  %srsb = index.assume %srs [range(%srs, 8192, 8192)] : index
+  %srsb = index.assume %srs [range(%srs, 1, 1)] : index
+  %scsb = index.assume %scs [range(%scs, 3, 3)] : index
   %xrsb = index.assume %xrs [range(%xrs, 1, 16777216)] : index
   %drsb = index.assume %drs [range(%drs, 1, 16777216)] : index
-  %crsb = index.assume %crs [range(%crs, 1, 16777216)] : index
+  %crsb = index.assume %crs [range(%crs, 1, 1)] : index
+  %ccsb = index.assume %ccs [range(%ccs, 3, 3)] : index
   %carry0 = index.add %d_conv, %minus_one : index
   %carry = index.assume %carry0 [range(%carry0, 3, 3)] : index
   %snapshot_rows0 = index.add %carry, %x_snapshot_rows : index
@@ -108,11 +117,12 @@ kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
     %snapshot = scf.if %is_state -> (f32) {
       // Rows 0..2 snapshot the old recurrent state. In the same workitem,
       // update the corresponding persistent-cache row from x rows 509..511.
-      %state_span = index.mul %carry, %srsb : index
+      %state_span = index.mul %di, %scsb : index
       %state_seq = index.mul %seq, %state_span : index
       %si0 = index.mul %snapshot_row, %srsb : index
       %si1 = index.add %si0, %state_seq : index
-      %si2 = index.add %si1, %chan : index
+      %si_chan = index.mul %chan, %scsb : index
+      %si2 = index.add %si1, %si_chan : index
       %si = index.assume %si2 [range(%si2, 0, 1073741823)] : index
 
       %x_tail0 = index.sub %nt, %carry : index
@@ -124,11 +134,12 @@ kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
       %xi2 = index.add %xi1, %chan : index
       %xi = index.assume %xi2 [range(%xi2, 0, 1073741823)] : index
 
-      %cache_span = index.mul %carry, %crsb : index
+      %cache_span = index.mul %di, %ccsb : index
       %cache_seq = index.mul %seq, %cache_span : index
       %ci0 = index.mul %snapshot_row, %crsb : index
       %ci1 = index.add %ci0, %cache_seq : index
-      %ci2 = index.add %ci1, %chan : index
+      %ci_chan = index.mul %chan, %ccsb : index
+      %ci2 = index.add %ci1, %ci_chan : index
       %ci = index.assume %ci2 [range(%ci2, 0, 1073741823)] : index
 
       %old_state = view.load %state_view[%si] :

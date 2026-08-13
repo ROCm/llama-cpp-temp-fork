@@ -1,6 +1,8 @@
 // Decode convolution with direct recurrent-cache access.
 // Exact trace shape: d_conv=4, d_inner=8192, n_t=1, n_s=1. One workitem owns
-// one channel. It loads old cache rows 0/1/2 and x before any store, computes
+// one channel. The public recurrent cache is llama.cpp's native [3, channels]
+// layout, so each channel owns three adjacent values. The kernel loads those
+// old cache rows 0/1/2 and x before any store, computes
 // the accepted four-tap FMA order, then performs the in-place shift
 // [old0,old1,old2] -> [old1,old2,x]. No workitem reads another workitem's
 // channel, so no inter-workgroup barrier or copy is required.
@@ -42,8 +44,6 @@ kernel.def export("hrx2_ssm_conv_f32_state_cache_decode_full_producer") @hrx2_ss
   %threads = index.constant 256 : index
   %channels = index.constant 8192 : index
   %projection_k = index.constant 2048 : index
-  %row1_delta = index.constant 8192 : index
-  %row2_delta = index.constant 16384 : index
   %zero_f32 = scalar.constant 0.0 : f32
   %one_f32 = scalar.constant 1.0 : f32
 
@@ -100,14 +100,17 @@ kernel.def export("hrx2_ssm_conv_f32_state_cache_decode_full_producer") @hrx2_ss
   %channel0 = index.add %channel_base, %lane : index
   %channel = index.assume %channel0 [range(%channel0, 0, 8191)] : index
 
-  %row1_0 = index.add %channel, %row1_delta : index
-  %row1 = index.assume %row1_0 [range(%row1_0, 8192, 16383)] : index
-  %row2_0 = index.add %channel, %row2_delta : index
-  %row2 = index.assume %row2_0 [range(%row2_0, 16384, 24575)] : index
+  %row0_0 = index.mul %channel, %three : index
+  %row0 = index.assume %row0_0
+      [range(%row0_0, 0, 24573), mul(%row0_0, 3)] : index
+  %row1_0 = index.add %row0, %one : index
+  %row1 = index.assume %row1_0 [range(%row1_0, 1, 24574)] : index
+  %row2_0 = index.add %row0, %two : index
+  %row2 = index.assume %row2_0 [range(%row2_0, 2, 24575)] : index
 
   // Mandatory alias ordering: all four data values are registers before the
   // first state_io store.
-  %old0 = view.load %state_view[%channel] :
+  %old0 = view.load %state_view[%row0] :
       view<24576xf32> -> f32
   %old1 = view.load %state_view[%row1] :
       view<24576xf32> -> f32
@@ -137,7 +140,7 @@ kernel.def export("hrx2_ssm_conv_f32_state_cache_decode_full_producer") @hrx2_ss
 
   %activated = scalar.siluf<afn> %acc : f32
   view.store %activated, %dst_view[%channel] : f32, view<8192xf32>
-  view.store %old1, %state_view[%channel] : f32, view<24576xf32>
+  view.store %old1, %state_view[%row0] : f32, view<24576xf32>
   view.store %old2, %state_view[%row1] : f32, view<24576xf32>
   view.store %new_x, %state_view[%row2] : f32, view<24576xf32>
 
