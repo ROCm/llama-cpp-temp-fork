@@ -615,8 +615,8 @@ static void test_pinned_kernel_corpus_manifest() {
     REQUIRE(ggml::hrx::verify_kernel_corpus(corpus).valid());
     REQUIRE(std::string(corpus.upstream_revision) ==
             "c09218e7ca354654b6c66dddaf80f6294e4748bb+e809fd673bc46d47da5b07f59c0415fe379c4816");
-    REQUIRE(corpus.kernels.size() == 121);
-    REQUIRE(corpus.storage_transforms.size() == 4);
+    REQUIRE(corpus.kernels.size() == 133);
+    REQUIRE(corpus.storage_transforms.size() == 21);
     REQUIRE(corpus.plan_case_count == 32);
 
     const std::array<int64_t, GGML_MAX_DIMS> q5_shape = { 512, 2048, 256, 1 };
@@ -628,6 +628,22 @@ static void test_pinned_kernel_corpus_manifest() {
                 corpus, "gfx1151", GGML_TYPE_Q5_K, q5_shape, true, "blk.00.ffn_down_exps.weight") == nullptr);
     REQUIRE(ggml::hrx::match_kernel_storage_transform(
                 corpus, "gfx1151", GGML_TYPE_Q5_K, q5_shape, true, "ffn_down_exps.weight") == nullptr);
+
+    const std::array<int64_t, GGML_MAX_DIMS> q4_shape = { 5120, 17408, 1, 1 };
+    const ggml::hrx::kernel_storage_transform * q4_transform = ggml::hrx::match_kernel_storage_transform(
+        corpus, "gfx1151", GGML_TYPE_Q4_K, q4_shape, true, "");
+    REQUIRE(q4_transform != nullptr);
+    REQUIRE(std::string(q4_transform->name) == "q4_k_symi4_row64_k64");
+    const ggml::hrx::kernel_storage_transform * q4_tensor_plane =
+        ggml::hrx::resolve_kernel_storage_transform(
+            corpus, "gfx1151", "q4_k_tensor_payload_header8", GGML_TYPE_Q4_K, q4_shape, true, "");
+    REQUIRE(q4_tensor_plane != nullptr);
+    REQUIRE(std::string(q4_tensor_plane->name) == "q4_k_tensor_payload_header8");
+    const ggml::hrx::kernel_storage_transform * q4_symi4_tensor_plane =
+        ggml::hrx::resolve_kernel_storage_transform(
+            corpus, "gfx1151", "q4_k_symi4_tensor_payload_header8", GGML_TYPE_Q4_K, q4_shape, true, "");
+    REQUIRE(q4_symi4_tensor_plane != nullptr);
+    REQUIRE(std::string(q4_symi4_tensor_plane->name) == "q4_k_symi4_tensor_payload_header8");
 
     const std::array<int64_t, GGML_MAX_DIMS> q8_shape = { 4096, 2048, 1, 1 };
     const ggml::hrx::kernel_storage_transform * q8_transform = ggml::hrx::match_kernel_storage_transform(

@@ -9,6 +9,11 @@ namespace ggml::hrx {
 enum class kernel_storage_transform_kind : uint8_t {
     RowGroupFieldInterleave,
     RowGroupBlockGroupHeaderPayload,
+    Q4KRowGroupI4Interleave,
+    Q4KRowGroupSymmetricI4Interleave,
+    Q4KTensorPayloadHeader8,
+    Q4KTensorSymmetricI4K64,
+    Q6KToQ4KTensorPayloadHeader8,
 };
 
 struct kernel_storage_transform_field_order {

@@ -19,11 +19,100 @@
 // output: mul, fma, fma, fma, silu<afn>.
 
 config.decl @hrx2_shape_ssm_conv_d_conv : %value: index where [range(%value, 4, 4)]
-config.decl @hrx2_shape_ssm_conv_d_inner : %value: index where [range(%value, 8192, 8192), mul(%value, 32)]
+
+config.decl @hrx2_shape_ssm_conv_d_inner : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+
 config.decl @hrx2_shape_ssm_conv_n_t : %value: index where [range(%value, 512, 512)]
+
 config.decl @hrx2_shape_ssm_conv_n_s : %value: index where [range(%value, 1, 1)]
-config.decl @hrx2_shape_ssm_conv_state_row_stride : %value: index where [range(%value, 8192, 8192)]
-config.decl @hrx2_shape_ssm_conv_x_row_stride : %value: index where [range(%value, 8192, 8192)]
+
+config.decl @hrx2_shape_ssm_conv_state_row_stride : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+
+config.decl @hrx2_shape_ssm_conv_x_row_stride : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+
+// Token-one specialization of the same channels-first SSM operation. The
+// normalized graph materializes the three carried rows in channels-major
+// order. One workitem owns one channel, computes the accepted four-tap FMA
+// tree, publishes SiLU, and shifts that channel's cache without inter-thread
+// communication. This separate export keeps the PP512 schedule unchanged
+// while allowing Loom to compile only the decode implementation at runtime.
+config.decl @hrx2_shape_ssm_decode_d_inner : %value: index where [range(%value, 8192, 65536), mul(%value, 32)]
+
+config.decl @hrx2_tuning_ssm_decode_workgroup_size : %value: index where [range(%value, 256, 256)]
+
+kernel.def export("hrx2_ssm_conv_f32_state_materialized_decode_silu") @hrx2_ssm_conv_f32_state_materialized_decode_silu() {
+  %one = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %d_inner = config.get @hrx2_shape_ssm_decode_d_inner : index
+  %wg = config.get @hrx2_tuning_ssm_decode_workgroup_size : index
+  %rounding = index.add %wg, %minus_one : index
+  %rounded = index.add %d_inner, %rounding : index
+  %groups = index.div %rounded, %wg : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg, %one, %one) : index
+} launch(%state: buffer, %x: buffer, %filt: buffer, %dst: buffer, %cache: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %four = index.constant 4 : index
+  %d_inner0 = config.get @hrx2_shape_ssm_decode_d_inner : index
+  %wg = config.get @hrx2_tuning_ssm_decode_workgroup_size : index
+  %d_inner = index.assume %d_inner0 [range(%d_inner0, 8192, 65536), mul(%d_inner0, 32)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 255)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %channel_base = index.mul %group, %wg : index
+  %channel0 = index.add %channel_base, %lane : index
+  %channel = index.assume %channel0 [range(%channel0, 0, 65535)] : index
+  %in_bounds = index.cmp ult, %channel, %d_inner : index
+
+  %state_g = buffer.assume.memory_space<global> %state : buffer
+  %x_g = buffer.assume.memory_space<global> %x : buffer
+  %filt_g = buffer.assume.memory_space<global> %filt : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %cache_g = buffer.assume.memory_space<global> %cache : buffer
+  %state_na, %x_na, %filt_na, %dst_na, %cache_na = buffer.assume.noalias %state_g, %x_g, %filt_g, %dst_g, %cache_g : buffer, buffer, buffer, buffer, buffer
+  %state_v = buffer.view %state_na[%base] : buffer -> view<196608xf32>
+  %x_v = buffer.view %x_na[%base] : buffer -> view<65536xf32>
+  %filt_v = buffer.view %filt_na[%base] : buffer -> view<262144xf32>
+  %dst_v = buffer.view %dst_na[%base] : buffer -> view<65536xf32>
+  %cache_v = buffer.view %cache_na[%base] : buffer -> view<196608xf32>
+
+  scf.if %in_bounds {
+    %state_row0 = index.mul %channel, %three : index
+    %state_row = index.assume %state_row0 [range(%state_row0, 0, 196605), mul(%state_row0, 3)] : index
+    %state_row1_0 = index.add %state_row, %one : index
+    %state_row1 = index.assume %state_row1_0 [range(%state_row1_0, 1, 196606)] : index
+    %state_row2_0 = index.add %state_row, %two : index
+    %state_row2 = index.assume %state_row2_0 [range(%state_row2_0, 2, 196607)] : index
+
+    %old0 = view.load %state_v[%state_row] : view<196608xf32> -> f32
+    %old1 = view.load %state_v[%state_row1] : view<196608xf32> -> f32
+    %old2 = view.load %state_v[%state_row2] : view<196608xf32> -> f32
+    %new_x = view.load %x_v[%channel] : view<65536xf32> -> f32
+
+    %filter_row0 = index.mul %channel, %four : index
+    %filter_row = index.assume %filter_row0 [range(%filter_row0, 0, 262140), mul(%filter_row0, 4)] : index
+    %weights = vector.load %filt_v[%filter_row] : view<262144xf32> -> vector<4xf32>
+    %w0 = vector.extract %weights[%zero] : vector<4xf32> -> f32
+    %w1 = vector.extract %weights[%one] : vector<4xf32> -> f32
+    %w2 = vector.extract %weights[%two] : vector<4xf32> -> f32
+    %w3 = vector.extract %weights[%three] : vector<4xf32> -> f32
+    %p0 = scalar.mulf<nnan|ninf|nsz> %old0, %w0 : f32
+    %p1 = scalar.fmaf<nnan|ninf|nsz> %old1, %w1, %p0 : f32
+    %p2 = scalar.fmaf<nnan|ninf|nsz> %old2, %w2, %p1 : f32
+    %acc = scalar.fmaf<nnan|ninf|nsz> %new_x, %w3, %p2 : f32
+    %activated = scalar.siluf<afn> %acc : f32
+
+    view.store %activated, %dst_v[%channel] : f32, view<65536xf32>
+    view.store %old1, %cache_v[%state_row] : f32, view<196608xf32>
+    view.store %old2, %cache_v[%state_row1] : f32, view<196608xf32>
+    view.store %new_x, %cache_v[%state_row2] : f32, view<196608xf32>
+  }
+  kernel.return
+}
 
 kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024() {
   %one = index.constant 1 : index
@@ -32,8 +121,7 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
   %d_inner = config.get @hrx2_shape_ssm_conv_d_inner : index
   %n_s = config.get @hrx2_shape_ssm_conv_n_s : index
   %groups_x = index.div %d_inner, %channels : index
-  kernel.launch.config workgroups(%groups_x, %n_s, %one)
-      workgroup_size(%threads, %one, %one) : index
+  kernel.launch.config workgroups(%groups_x, %n_s, %one) workgroup_size(%threads, %one, %one) : index
 } launch(%state: buffer, %x: buffer, %filt: buffer, %dst: buffer) {
   %base = index.constant 0 : offset
   %c0 = index.constant 0 : index
@@ -77,19 +165,16 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
   %n_s0 = config.get @hrx2_shape_ssm_conv_n_s : index
   %state_row_stride0 = config.get @hrx2_shape_ssm_conv_state_row_stride : index
   %x_row_stride0 = config.get @hrx2_shape_ssm_conv_x_row_stride : index
-  %d_inner = index.assume %d_inner0
-      [range(%d_inner0, 8192, 8192), mul(%d_inner0, 32)] : index
+  %d_inner = index.assume %d_inner0 [range(%d_inner0, 8192, 10240), mul(%d_inner0, 32)] : index
   %n_t = index.assume %n_t0 [range(%n_t0, 512, 512)] : index
   %n_s = index.assume %n_s0 [range(%n_s0, 1, 1)] : index
-  %state_row_stride = index.assume %state_row_stride0
-      [range(%state_row_stride0, 8192, 8192)] : index
-  %x_row_stride = index.assume %x_row_stride0
-      [range(%x_row_stride0, 8192, 8192)] : index
+  %state_row_stride = index.assume %state_row_stride0 [range(%state_row_stride0, 8192, 10240), mul(%state_row_stride0, 32)] : index
+  %x_row_stride = index.assume %x_row_stride0 [range(%x_row_stride0, 8192, 10240), mul(%x_row_stride0, 32)] : index
 
   %group_x0 = kernel.workgroup.id<x> : index
   %sequence0 = kernel.workgroup.id<y> : index
   %local0 = kernel.workitem.id<x> : index
-  %group_x = index.assume %group_x0 [range(%group_x0, 0, 255)] : index
+  %group_x = index.assume %group_x0 [range(%group_x0, 0, 319)] : index
   %sequence = index.assume %sequence0 [range(%sequence0, 0, 0)] : index
   %local = index.assume %local0 [range(%local0, 0, 1023)] : index
   %wave0 = index.div %local, %c32 : index
@@ -99,57 +184,42 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
   %first_wave = index.cmp eq, %wave, %c0 : index
 
   %channel_base0 = index.mul %group_x, %c32 : index
-  %channel_base = index.assume %channel_base0
-      [range(%channel_base0, 0, 8160), mul(%channel_base0, 32)] : index
+  %channel_base = index.assume %channel_base0 [range(%channel_base0, 0, 10208), mul(%channel_base0, 32)] : index
   %channel0 = index.add %channel_base, %lane : index
-  %channel = index.assume %channel0 [range(%channel0, 0, 8191)] : index
+  %channel = index.assume %channel0 [range(%channel0, 0, 10239)] : index
   %wave_token_base0 = index.mul %wave, %c16 : index
-  %wave_token_base = index.assume %wave_token_base0
-      [range(%wave_token_base0, 0, 496),
-       mul(%wave_token_base0, 16)] : index
+  %wave_token_base = index.assume %wave_token_base0 [range(%wave_token_base0, 0, 496), mul(%wave_token_base0, 16)] : index
   %prior_wave = scf.if %first_wave -> (index) {
     scf.yield %c0 : index
   } else {
     %prior_wave0 = index.sub %wave, %c1 : index
-    %prior_wave1 = index.assume %prior_wave0
-        [range(%prior_wave0, 0, 30)] : index
+    %prior_wave1 = index.assume %prior_wave0 [range(%prior_wave0, 0, 30)] : index
     scf.yield %prior_wave1 : index
   }
   %prior_wave_base0 = index.mul %prior_wave, %c16 : index
-  %prior_wave_base = index.assume %prior_wave_base0
-      [range(%prior_wave_base0, 0, 480),
-       mul(%prior_wave_base0, 16)] : index
+  %prior_wave_base = index.assume %prior_wave_base0 [range(%prior_wave_base0, 0, 480), mul(%prior_wave_base0, 16)] : index
 
   %state_g = buffer.assume.memory_space<global> %state : buffer
   %x_g = buffer.assume.memory_space<global> %x : buffer
   %filt_g = buffer.assume.memory_space<global> %filt : buffer
   %dst_g = buffer.assume.memory_space<global> %dst : buffer
   // dst deliberately does not participate: its physical span may equal x.
-  %state_na, %x_na, %filt_na = buffer.assume.noalias
-      %state_g, %x_g, %filt_g : buffer, buffer, buffer
-  %state_v = buffer.view %state_na[%base] :
-      buffer -> view<1073741824xf32>
-  %x_v = buffer.view %x_na[%base] :
-      buffer -> view<1073741824xf32>
-  %dst_v = buffer.view %dst_g[%base] :
-      buffer -> view<1073741824xf32>
+  %state_na, %x_na, %filt_na = buffer.assume.noalias %state_g, %x_g, %filt_g : buffer, buffer, buffer
+  %state_v = buffer.view %state_na[%base] : buffer -> view<1073741824xf32>
+  %x_v = buffer.view %x_na[%base] : buffer -> view<1073741824xf32>
+  %dst_v = buffer.view %dst_g[%base] : buffer -> view<1073741824xf32>
 
   %x_sequence_span0 = index.mul %n_t, %x_row_stride : index
-  %x_sequence_span = index.assume %x_sequence_span0
-      [range(%x_sequence_span0, 4194304, 4194304)] : index
+  %x_sequence_span = index.assume %x_sequence_span0 [range(%x_sequence_span0, 4194304, 5242880), mul(%x_sequence_span0, 16384)] : index
   %x_sequence_base0 = index.mul %sequence, %x_sequence_span : index
-  %x_sequence_base = index.assume %x_sequence_base0
-      [range(%x_sequence_base0, 0, 1073741823)] : index
+  %x_sequence_base = index.assume %x_sequence_base0 [range(%x_sequence_base0, 0, 1073741823)] : index
 
   %state_sequence_rows0 = index.add %n_t, %c3 : index
-  %state_sequence_rows = index.assume %state_sequence_rows0
-      [range(%state_sequence_rows0, 515, 515)] : index
+  %state_sequence_rows = index.assume %state_sequence_rows0 [range(%state_sequence_rows0, 515, 515)] : index
   %state_sequence_span0 = index.mul %state_sequence_rows, %state_row_stride : index
-  %state_sequence_span = index.assume %state_sequence_span0
-      [range(%state_sequence_span0, 4218880, 4218880)] : index
+  %state_sequence_span = index.assume %state_sequence_span0 [range(%state_sequence_span0, 4218880, 5273600), mul(%state_sequence_span0, 16480)] : index
   %state_sequence_base0 = index.mul %sequence, %state_sequence_span : index
-  %state_sequence_base = index.assume %state_sequence_base0
-      [range(%state_sequence_base0, 0, 1073741823)] : index
+  %state_sequence_base = index.assume %state_sequence_base0 [range(%state_sequence_base0, 0, 1073741823)] : index
 
   // Register snapshot.  Slots k map to x row wave_base-3+k.  For wave zero,
   // slots 0..2 are dummy because those taps come from carried state; slots
@@ -159,75 +229,54 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
     scf.yield %zero_f32, %zero_f32, %zero_f32 : f32, f32, f32
   } else {
     %x_row_00 = index.add %prior_wave_base, %c13 : index
-    %x_row_0 = index.assume %x_row_00
-        [range(%x_row_00, 13, 508)] : index
+    %x_row_0 = index.assume %x_row_00 [range(%x_row_00, 13, 508)] : index
     %x_row_10 = index.add %prior_wave_base, %c14 : index
-    %x_row_1 = index.assume %x_row_10
-        [range(%x_row_10, 14, 509)] : index
+    %x_row_1 = index.assume %x_row_10 [range(%x_row_10, 14, 509)] : index
     %x_row_20 = index.add %prior_wave_base, %c15 : index
-    %x_row_2 = index.assume %x_row_20
-        [range(%x_row_20, 15, 510)] : index
+    %x_row_2 = index.assume %x_row_20 [range(%x_row_20, 15, 510)] : index
     %early_is_snapshotted = index.cmp ult, %wave, %c4 : index
     %early_value_0, %early_value_1, %early_value_2 = scf.if %early_is_snapshotted -> (f32, f32, f32) {
-      %snapshot_x_row_early_0 = index.assume %x_row_0
-          [range(%x_row_0, 0, 60)] : index
+      %snapshot_x_row_early_0 = index.assume %x_row_0 [range(%x_row_0, 0, 60)] : index
       %snapshot_row_early_00 = index.add %snapshot_x_row_early_0, %c3 : index
-      %snapshot_row_early_0 = index.assume %snapshot_row_early_00
-          [range(%snapshot_row_early_00, 3, 63)] : index
+      %snapshot_row_early_0 = index.assume %snapshot_row_early_00 [range(%snapshot_row_early_00, 3, 63)] : index
       %snapshot_row_early_0_offset0 = index.mul %snapshot_row_early_0, %state_row_stride : index
       %snapshot_row_early_0_offset1 = index.add %state_sequence_base, %snapshot_row_early_0_offset0 : index
       %snapshot_index_early_00 = index.add %snapshot_row_early_0_offset1, %channel : index
-      %snapshot_index_early_0 = index.assume %snapshot_index_early_00
-          [range(%snapshot_index_early_00, 0, 1073741823)] : index
-      %early_snapshot_value_0 = view.load %state_v[%snapshot_index_early_0] :
-          view<1073741824xf32> -> f32
-      %snapshot_x_row_early_1 = index.assume %x_row_1
-          [range(%x_row_1, 0, 60)] : index
+      %snapshot_index_early_0 = index.assume %snapshot_index_early_00 [range(%snapshot_index_early_00, 0, 1073741823)] : index
+      %early_snapshot_value_0 = view.load %state_v[%snapshot_index_early_0] : view<1073741824xf32> -> f32
+      %snapshot_x_row_early_1 = index.assume %x_row_1 [range(%x_row_1, 0, 60)] : index
       %snapshot_row_early_10 = index.add %snapshot_x_row_early_1, %c3 : index
-      %snapshot_row_early_1 = index.assume %snapshot_row_early_10
-          [range(%snapshot_row_early_10, 3, 63)] : index
+      %snapshot_row_early_1 = index.assume %snapshot_row_early_10 [range(%snapshot_row_early_10, 3, 63)] : index
       %snapshot_row_early_1_offset0 = index.mul %snapshot_row_early_1, %state_row_stride : index
       %snapshot_row_early_1_offset1 = index.add %state_sequence_base, %snapshot_row_early_1_offset0 : index
       %snapshot_index_early_10 = index.add %snapshot_row_early_1_offset1, %channel : index
-      %snapshot_index_early_1 = index.assume %snapshot_index_early_10
-          [range(%snapshot_index_early_10, 0, 1073741823)] : index
-      %early_snapshot_value_1 = view.load %state_v[%snapshot_index_early_1] :
-          view<1073741824xf32> -> f32
-      %snapshot_x_row_early_2 = index.assume %x_row_2
-          [range(%x_row_2, 0, 60)] : index
+      %snapshot_index_early_1 = index.assume %snapshot_index_early_10 [range(%snapshot_index_early_10, 0, 1073741823)] : index
+      %early_snapshot_value_1 = view.load %state_v[%snapshot_index_early_1] : view<1073741824xf32> -> f32
+      %snapshot_x_row_early_2 = index.assume %x_row_2 [range(%x_row_2, 0, 60)] : index
       %snapshot_row_early_20 = index.add %snapshot_x_row_early_2, %c3 : index
-      %snapshot_row_early_2 = index.assume %snapshot_row_early_20
-          [range(%snapshot_row_early_20, 3, 63)] : index
+      %snapshot_row_early_2 = index.assume %snapshot_row_early_20 [range(%snapshot_row_early_20, 3, 63)] : index
       %snapshot_row_early_2_offset0 = index.mul %snapshot_row_early_2, %state_row_stride : index
       %snapshot_row_early_2_offset1 = index.add %state_sequence_base, %snapshot_row_early_2_offset0 : index
       %snapshot_index_early_20 = index.add %snapshot_row_early_2_offset1, %channel : index
-      %snapshot_index_early_2 = index.assume %snapshot_index_early_20
-          [range(%snapshot_index_early_20, 0, 1073741823)] : index
-      %early_snapshot_value_2 = view.load %state_v[%snapshot_index_early_2] :
-          view<1073741824xf32> -> f32
+      %snapshot_index_early_2 = index.assume %snapshot_index_early_20 [range(%snapshot_index_early_20, 0, 1073741823)] : index
+      %early_snapshot_value_2 = view.load %state_v[%snapshot_index_early_2] : view<1073741824xf32> -> f32
       scf.yield %early_snapshot_value_0, %early_snapshot_value_1, %early_snapshot_value_2 : f32, f32, f32
     } else {
       %x_row_early_00 = index.mul %x_row_0, %x_row_stride : index
       %x_row_early_01 = index.add %x_sequence_base, %x_row_early_00 : index
       %x_index_early_00 = index.add %x_row_early_01, %channel : index
-      %x_index_early_0 = index.assume %x_index_early_00
-          [range(%x_index_early_00, 0, 1073741823)] : index
-      %early_raw_value_0 = view.load %x_v[%x_index_early_0] :
-          view<1073741824xf32> -> f32
+      %x_index_early_0 = index.assume %x_index_early_00 [range(%x_index_early_00, 0, 1073741823)] : index
+      %early_raw_value_0 = view.load %x_v[%x_index_early_0] : view<1073741824xf32> -> f32
       %x_row_early_10 = index.mul %x_row_1, %x_row_stride : index
       %x_row_early_11 = index.add %x_sequence_base, %x_row_early_10 : index
       %x_index_early_10 = index.add %x_row_early_11, %channel : index
-      %x_index_early_1 = index.assume %x_index_early_10
-          [range(%x_index_early_10, 0, 1073741823)] : index
-      %early_raw_value_1 = view.load %x_v[%x_index_early_1] :
-          view<1073741824xf32> -> f32
+      %x_index_early_1 = index.assume %x_index_early_10 [range(%x_index_early_10, 0, 1073741823)] : index
+      %early_raw_value_1 = view.load %x_v[%x_index_early_1] : view<1073741824xf32> -> f32
       %x_row_early_20 = index.mul %x_row_2, %x_row_stride : index
       %x_row_early_21 = index.add %x_sequence_base, %x_row_early_20 : index
       %x_index_early_20 = index.add %x_row_early_21, %channel : index
-      %x_index_early_2 = index.assume %x_index_early_20
-          [range(%x_index_early_20, 0, 1073741823)] : index
-      %early_raw_value_2 = view.load %x_v[%x_index_early_2] :
-          view<1073741824xf32> -> f32
+      %x_index_early_2 = index.assume %x_index_early_20 [range(%x_index_early_20, 0, 1073741823)] : index
+      %early_raw_value_2 = view.load %x_v[%x_index_early_2] : view<1073741824xf32> -> f32
       scf.yield %early_raw_value_0, %early_raw_value_1, %early_raw_value_2 : f32, f32, f32
     }
     scf.yield %early_value_0, %early_value_1, %early_value_2 : f32, f32, f32
@@ -235,297 +284,205 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
   // X_PRELOAD_0
   // X_PRELOAD_1
   // X_PRELOAD_2
-
   %x_row_common_30 = index.add %wave_token_base, %c0 : index
-  %x_row_common_3 = index.assume %x_row_common_30
-      [range(%x_row_common_30, 0, 496)] : index
+  %x_row_common_3 = index.assume %x_row_common_30 [range(%x_row_common_30, 0, 496)] : index
   %x_row_common_40 = index.add %wave_token_base, %c1 : index
-  %x_row_common_4 = index.assume %x_row_common_40
-      [range(%x_row_common_40, 1, 497)] : index
+  %x_row_common_4 = index.assume %x_row_common_40 [range(%x_row_common_40, 1, 497)] : index
   %x_row_common_50 = index.add %wave_token_base, %c2 : index
-  %x_row_common_5 = index.assume %x_row_common_50
-      [range(%x_row_common_50, 2, 498)] : index
+  %x_row_common_5 = index.assume %x_row_common_50 [range(%x_row_common_50, 2, 498)] : index
   %x_row_common_60 = index.add %wave_token_base, %c3 : index
-  %x_row_common_6 = index.assume %x_row_common_60
-      [range(%x_row_common_60, 3, 499)] : index
+  %x_row_common_6 = index.assume %x_row_common_60 [range(%x_row_common_60, 3, 499)] : index
   %x_row_common_70 = index.add %wave_token_base, %c4 : index
-  %x_row_common_7 = index.assume %x_row_common_70
-      [range(%x_row_common_70, 4, 500)] : index
+  %x_row_common_7 = index.assume %x_row_common_70 [range(%x_row_common_70, 4, 500)] : index
   %x_row_common_80 = index.add %wave_token_base, %c5 : index
-  %x_row_common_8 = index.assume %x_row_common_80
-      [range(%x_row_common_80, 5, 501)] : index
+  %x_row_common_8 = index.assume %x_row_common_80 [range(%x_row_common_80, 5, 501)] : index
   %x_row_common_90 = index.add %wave_token_base, %c6 : index
-  %x_row_common_9 = index.assume %x_row_common_90
-      [range(%x_row_common_90, 6, 502)] : index
+  %x_row_common_9 = index.assume %x_row_common_90 [range(%x_row_common_90, 6, 502)] : index
   %x_row_common_100 = index.add %wave_token_base, %c7 : index
-  %x_row_common_10 = index.assume %x_row_common_100
-      [range(%x_row_common_100, 7, 503)] : index
+  %x_row_common_10 = index.assume %x_row_common_100 [range(%x_row_common_100, 7, 503)] : index
   %x_row_common_110 = index.add %wave_token_base, %c8 : index
-  %x_row_common_11 = index.assume %x_row_common_110
-      [range(%x_row_common_110, 8, 504)] : index
+  %x_row_common_11 = index.assume %x_row_common_110 [range(%x_row_common_110, 8, 504)] : index
   %x_row_common_120 = index.add %wave_token_base, %c9 : index
-  %x_row_common_12 = index.assume %x_row_common_120
-      [range(%x_row_common_120, 9, 505)] : index
+  %x_row_common_12 = index.assume %x_row_common_120 [range(%x_row_common_120, 9, 505)] : index
   %x_row_common_130 = index.add %wave_token_base, %c10 : index
-  %x_row_common_13 = index.assume %x_row_common_130
-      [range(%x_row_common_130, 10, 506)] : index
+  %x_row_common_13 = index.assume %x_row_common_130 [range(%x_row_common_130, 10, 506)] : index
   %x_row_common_140 = index.add %wave_token_base, %c11 : index
-  %x_row_common_14 = index.assume %x_row_common_140
-      [range(%x_row_common_140, 11, 507)] : index
+  %x_row_common_14 = index.assume %x_row_common_140 [range(%x_row_common_140, 11, 507)] : index
   %x_row_common_150 = index.add %wave_token_base, %c12 : index
-  %x_row_common_15 = index.assume %x_row_common_150
-      [range(%x_row_common_150, 12, 508)] : index
+  %x_row_common_15 = index.assume %x_row_common_150 [range(%x_row_common_150, 12, 508)] : index
   %common_low_is_snapshotted = index.cmp ult, %wave, %c4 : index
   %xr3, %xr4, %xr5, %xr6, %xr7, %xr8, %xr9, %xr10, %xr11, %xr12, %xr13, %xr14, %xr15 = scf.if %common_low_is_snapshotted -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
-    %snapshot_x_row_common_low_3 = index.assume %x_row_common_3
-        [range(%x_row_common_3, 0, 60)] : index
+    %snapshot_x_row_common_low_3 = index.assume %x_row_common_3 [range(%x_row_common_3, 0, 60)] : index
     %snapshot_row_common_low_30 = index.add %snapshot_x_row_common_low_3, %c3 : index
-    %snapshot_row_common_low_3 = index.assume %snapshot_row_common_low_30
-        [range(%snapshot_row_common_low_30, 3, 63)] : index
+    %snapshot_row_common_low_3 = index.assume %snapshot_row_common_low_30 [range(%snapshot_row_common_low_30, 3, 63)] : index
     %snapshot_row_common_low_3_offset0 = index.mul %snapshot_row_common_low_3, %state_row_stride : index
     %snapshot_row_common_low_3_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_3_offset0 : index
     %snapshot_index_common_low_30 = index.add %snapshot_row_common_low_3_offset1, %channel : index
-    %snapshot_index_common_low_3 = index.assume %snapshot_index_common_low_30
-        [range(%snapshot_index_common_low_30, 0, 1073741823)] : index
-    %common_low_snapshot_value_3 = view.load %state_v[%snapshot_index_common_low_3] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_4 = index.assume %x_row_common_4
-        [range(%x_row_common_4, 0, 60)] : index
+    %snapshot_index_common_low_3 = index.assume %snapshot_index_common_low_30 [range(%snapshot_index_common_low_30, 0, 1073741823)] : index
+    %common_low_snapshot_value_3 = view.load %state_v[%snapshot_index_common_low_3] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_4 = index.assume %x_row_common_4 [range(%x_row_common_4, 0, 60)] : index
     %snapshot_row_common_low_40 = index.add %snapshot_x_row_common_low_4, %c3 : index
-    %snapshot_row_common_low_4 = index.assume %snapshot_row_common_low_40
-        [range(%snapshot_row_common_low_40, 3, 63)] : index
+    %snapshot_row_common_low_4 = index.assume %snapshot_row_common_low_40 [range(%snapshot_row_common_low_40, 3, 63)] : index
     %snapshot_row_common_low_4_offset0 = index.mul %snapshot_row_common_low_4, %state_row_stride : index
     %snapshot_row_common_low_4_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_4_offset0 : index
     %snapshot_index_common_low_40 = index.add %snapshot_row_common_low_4_offset1, %channel : index
-    %snapshot_index_common_low_4 = index.assume %snapshot_index_common_low_40
-        [range(%snapshot_index_common_low_40, 0, 1073741823)] : index
-    %common_low_snapshot_value_4 = view.load %state_v[%snapshot_index_common_low_4] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_5 = index.assume %x_row_common_5
-        [range(%x_row_common_5, 0, 60)] : index
+    %snapshot_index_common_low_4 = index.assume %snapshot_index_common_low_40 [range(%snapshot_index_common_low_40, 0, 1073741823)] : index
+    %common_low_snapshot_value_4 = view.load %state_v[%snapshot_index_common_low_4] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_5 = index.assume %x_row_common_5 [range(%x_row_common_5, 0, 60)] : index
     %snapshot_row_common_low_50 = index.add %snapshot_x_row_common_low_5, %c3 : index
-    %snapshot_row_common_low_5 = index.assume %snapshot_row_common_low_50
-        [range(%snapshot_row_common_low_50, 3, 63)] : index
+    %snapshot_row_common_low_5 = index.assume %snapshot_row_common_low_50 [range(%snapshot_row_common_low_50, 3, 63)] : index
     %snapshot_row_common_low_5_offset0 = index.mul %snapshot_row_common_low_5, %state_row_stride : index
     %snapshot_row_common_low_5_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_5_offset0 : index
     %snapshot_index_common_low_50 = index.add %snapshot_row_common_low_5_offset1, %channel : index
-    %snapshot_index_common_low_5 = index.assume %snapshot_index_common_low_50
-        [range(%snapshot_index_common_low_50, 0, 1073741823)] : index
-    %common_low_snapshot_value_5 = view.load %state_v[%snapshot_index_common_low_5] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_6 = index.assume %x_row_common_6
-        [range(%x_row_common_6, 0, 60)] : index
+    %snapshot_index_common_low_5 = index.assume %snapshot_index_common_low_50 [range(%snapshot_index_common_low_50, 0, 1073741823)] : index
+    %common_low_snapshot_value_5 = view.load %state_v[%snapshot_index_common_low_5] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_6 = index.assume %x_row_common_6 [range(%x_row_common_6, 0, 60)] : index
     %snapshot_row_common_low_60 = index.add %snapshot_x_row_common_low_6, %c3 : index
-    %snapshot_row_common_low_6 = index.assume %snapshot_row_common_low_60
-        [range(%snapshot_row_common_low_60, 3, 63)] : index
+    %snapshot_row_common_low_6 = index.assume %snapshot_row_common_low_60 [range(%snapshot_row_common_low_60, 3, 63)] : index
     %snapshot_row_common_low_6_offset0 = index.mul %snapshot_row_common_low_6, %state_row_stride : index
     %snapshot_row_common_low_6_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_6_offset0 : index
     %snapshot_index_common_low_60 = index.add %snapshot_row_common_low_6_offset1, %channel : index
-    %snapshot_index_common_low_6 = index.assume %snapshot_index_common_low_60
-        [range(%snapshot_index_common_low_60, 0, 1073741823)] : index
-    %common_low_snapshot_value_6 = view.load %state_v[%snapshot_index_common_low_6] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_7 = index.assume %x_row_common_7
-        [range(%x_row_common_7, 0, 60)] : index
+    %snapshot_index_common_low_6 = index.assume %snapshot_index_common_low_60 [range(%snapshot_index_common_low_60, 0, 1073741823)] : index
+    %common_low_snapshot_value_6 = view.load %state_v[%snapshot_index_common_low_6] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_7 = index.assume %x_row_common_7 [range(%x_row_common_7, 0, 60)] : index
     %snapshot_row_common_low_70 = index.add %snapshot_x_row_common_low_7, %c3 : index
-    %snapshot_row_common_low_7 = index.assume %snapshot_row_common_low_70
-        [range(%snapshot_row_common_low_70, 3, 63)] : index
+    %snapshot_row_common_low_7 = index.assume %snapshot_row_common_low_70 [range(%snapshot_row_common_low_70, 3, 63)] : index
     %snapshot_row_common_low_7_offset0 = index.mul %snapshot_row_common_low_7, %state_row_stride : index
     %snapshot_row_common_low_7_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_7_offset0 : index
     %snapshot_index_common_low_70 = index.add %snapshot_row_common_low_7_offset1, %channel : index
-    %snapshot_index_common_low_7 = index.assume %snapshot_index_common_low_70
-        [range(%snapshot_index_common_low_70, 0, 1073741823)] : index
-    %common_low_snapshot_value_7 = view.load %state_v[%snapshot_index_common_low_7] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_8 = index.assume %x_row_common_8
-        [range(%x_row_common_8, 0, 60)] : index
+    %snapshot_index_common_low_7 = index.assume %snapshot_index_common_low_70 [range(%snapshot_index_common_low_70, 0, 1073741823)] : index
+    %common_low_snapshot_value_7 = view.load %state_v[%snapshot_index_common_low_7] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_8 = index.assume %x_row_common_8 [range(%x_row_common_8, 0, 60)] : index
     %snapshot_row_common_low_80 = index.add %snapshot_x_row_common_low_8, %c3 : index
-    %snapshot_row_common_low_8 = index.assume %snapshot_row_common_low_80
-        [range(%snapshot_row_common_low_80, 3, 63)] : index
+    %snapshot_row_common_low_8 = index.assume %snapshot_row_common_low_80 [range(%snapshot_row_common_low_80, 3, 63)] : index
     %snapshot_row_common_low_8_offset0 = index.mul %snapshot_row_common_low_8, %state_row_stride : index
     %snapshot_row_common_low_8_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_8_offset0 : index
     %snapshot_index_common_low_80 = index.add %snapshot_row_common_low_8_offset1, %channel : index
-    %snapshot_index_common_low_8 = index.assume %snapshot_index_common_low_80
-        [range(%snapshot_index_common_low_80, 0, 1073741823)] : index
-    %common_low_snapshot_value_8 = view.load %state_v[%snapshot_index_common_low_8] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_9 = index.assume %x_row_common_9
-        [range(%x_row_common_9, 0, 60)] : index
+    %snapshot_index_common_low_8 = index.assume %snapshot_index_common_low_80 [range(%snapshot_index_common_low_80, 0, 1073741823)] : index
+    %common_low_snapshot_value_8 = view.load %state_v[%snapshot_index_common_low_8] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_9 = index.assume %x_row_common_9 [range(%x_row_common_9, 0, 60)] : index
     %snapshot_row_common_low_90 = index.add %snapshot_x_row_common_low_9, %c3 : index
-    %snapshot_row_common_low_9 = index.assume %snapshot_row_common_low_90
-        [range(%snapshot_row_common_low_90, 3, 63)] : index
+    %snapshot_row_common_low_9 = index.assume %snapshot_row_common_low_90 [range(%snapshot_row_common_low_90, 3, 63)] : index
     %snapshot_row_common_low_9_offset0 = index.mul %snapshot_row_common_low_9, %state_row_stride : index
     %snapshot_row_common_low_9_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_9_offset0 : index
     %snapshot_index_common_low_90 = index.add %snapshot_row_common_low_9_offset1, %channel : index
-    %snapshot_index_common_low_9 = index.assume %snapshot_index_common_low_90
-        [range(%snapshot_index_common_low_90, 0, 1073741823)] : index
-    %common_low_snapshot_value_9 = view.load %state_v[%snapshot_index_common_low_9] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_10 = index.assume %x_row_common_10
-        [range(%x_row_common_10, 0, 60)] : index
+    %snapshot_index_common_low_9 = index.assume %snapshot_index_common_low_90 [range(%snapshot_index_common_low_90, 0, 1073741823)] : index
+    %common_low_snapshot_value_9 = view.load %state_v[%snapshot_index_common_low_9] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_10 = index.assume %x_row_common_10 [range(%x_row_common_10, 0, 60)] : index
     %snapshot_row_common_low_100 = index.add %snapshot_x_row_common_low_10, %c3 : index
-    %snapshot_row_common_low_10 = index.assume %snapshot_row_common_low_100
-        [range(%snapshot_row_common_low_100, 3, 63)] : index
+    %snapshot_row_common_low_10 = index.assume %snapshot_row_common_low_100 [range(%snapshot_row_common_low_100, 3, 63)] : index
     %snapshot_row_common_low_10_offset0 = index.mul %snapshot_row_common_low_10, %state_row_stride : index
     %snapshot_row_common_low_10_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_10_offset0 : index
     %snapshot_index_common_low_100 = index.add %snapshot_row_common_low_10_offset1, %channel : index
-    %snapshot_index_common_low_10 = index.assume %snapshot_index_common_low_100
-        [range(%snapshot_index_common_low_100, 0, 1073741823)] : index
-    %common_low_snapshot_value_10 = view.load %state_v[%snapshot_index_common_low_10] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_11 = index.assume %x_row_common_11
-        [range(%x_row_common_11, 0, 60)] : index
+    %snapshot_index_common_low_10 = index.assume %snapshot_index_common_low_100 [range(%snapshot_index_common_low_100, 0, 1073741823)] : index
+    %common_low_snapshot_value_10 = view.load %state_v[%snapshot_index_common_low_10] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_11 = index.assume %x_row_common_11 [range(%x_row_common_11, 0, 60)] : index
     %snapshot_row_common_low_110 = index.add %snapshot_x_row_common_low_11, %c3 : index
-    %snapshot_row_common_low_11 = index.assume %snapshot_row_common_low_110
-        [range(%snapshot_row_common_low_110, 3, 63)] : index
+    %snapshot_row_common_low_11 = index.assume %snapshot_row_common_low_110 [range(%snapshot_row_common_low_110, 3, 63)] : index
     %snapshot_row_common_low_11_offset0 = index.mul %snapshot_row_common_low_11, %state_row_stride : index
     %snapshot_row_common_low_11_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_11_offset0 : index
     %snapshot_index_common_low_110 = index.add %snapshot_row_common_low_11_offset1, %channel : index
-    %snapshot_index_common_low_11 = index.assume %snapshot_index_common_low_110
-        [range(%snapshot_index_common_low_110, 0, 1073741823)] : index
-    %common_low_snapshot_value_11 = view.load %state_v[%snapshot_index_common_low_11] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_12 = index.assume %x_row_common_12
-        [range(%x_row_common_12, 0, 60)] : index
+    %snapshot_index_common_low_11 = index.assume %snapshot_index_common_low_110 [range(%snapshot_index_common_low_110, 0, 1073741823)] : index
+    %common_low_snapshot_value_11 = view.load %state_v[%snapshot_index_common_low_11] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_12 = index.assume %x_row_common_12 [range(%x_row_common_12, 0, 60)] : index
     %snapshot_row_common_low_120 = index.add %snapshot_x_row_common_low_12, %c3 : index
-    %snapshot_row_common_low_12 = index.assume %snapshot_row_common_low_120
-        [range(%snapshot_row_common_low_120, 3, 63)] : index
+    %snapshot_row_common_low_12 = index.assume %snapshot_row_common_low_120 [range(%snapshot_row_common_low_120, 3, 63)] : index
     %snapshot_row_common_low_12_offset0 = index.mul %snapshot_row_common_low_12, %state_row_stride : index
     %snapshot_row_common_low_12_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_12_offset0 : index
     %snapshot_index_common_low_120 = index.add %snapshot_row_common_low_12_offset1, %channel : index
-    %snapshot_index_common_low_12 = index.assume %snapshot_index_common_low_120
-        [range(%snapshot_index_common_low_120, 0, 1073741823)] : index
-    %common_low_snapshot_value_12 = view.load %state_v[%snapshot_index_common_low_12] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_13 = index.assume %x_row_common_13
-        [range(%x_row_common_13, 0, 60)] : index
+    %snapshot_index_common_low_12 = index.assume %snapshot_index_common_low_120 [range(%snapshot_index_common_low_120, 0, 1073741823)] : index
+    %common_low_snapshot_value_12 = view.load %state_v[%snapshot_index_common_low_12] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_13 = index.assume %x_row_common_13 [range(%x_row_common_13, 0, 60)] : index
     %snapshot_row_common_low_130 = index.add %snapshot_x_row_common_low_13, %c3 : index
-    %snapshot_row_common_low_13 = index.assume %snapshot_row_common_low_130
-        [range(%snapshot_row_common_low_130, 3, 63)] : index
+    %snapshot_row_common_low_13 = index.assume %snapshot_row_common_low_130 [range(%snapshot_row_common_low_130, 3, 63)] : index
     %snapshot_row_common_low_13_offset0 = index.mul %snapshot_row_common_low_13, %state_row_stride : index
     %snapshot_row_common_low_13_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_13_offset0 : index
     %snapshot_index_common_low_130 = index.add %snapshot_row_common_low_13_offset1, %channel : index
-    %snapshot_index_common_low_13 = index.assume %snapshot_index_common_low_130
-        [range(%snapshot_index_common_low_130, 0, 1073741823)] : index
-    %common_low_snapshot_value_13 = view.load %state_v[%snapshot_index_common_low_13] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_14 = index.assume %x_row_common_14
-        [range(%x_row_common_14, 0, 60)] : index
+    %snapshot_index_common_low_13 = index.assume %snapshot_index_common_low_130 [range(%snapshot_index_common_low_130, 0, 1073741823)] : index
+    %common_low_snapshot_value_13 = view.load %state_v[%snapshot_index_common_low_13] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_14 = index.assume %x_row_common_14 [range(%x_row_common_14, 0, 60)] : index
     %snapshot_row_common_low_140 = index.add %snapshot_x_row_common_low_14, %c3 : index
-    %snapshot_row_common_low_14 = index.assume %snapshot_row_common_low_140
-        [range(%snapshot_row_common_low_140, 3, 63)] : index
+    %snapshot_row_common_low_14 = index.assume %snapshot_row_common_low_140 [range(%snapshot_row_common_low_140, 3, 63)] : index
     %snapshot_row_common_low_14_offset0 = index.mul %snapshot_row_common_low_14, %state_row_stride : index
     %snapshot_row_common_low_14_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_14_offset0 : index
     %snapshot_index_common_low_140 = index.add %snapshot_row_common_low_14_offset1, %channel : index
-    %snapshot_index_common_low_14 = index.assume %snapshot_index_common_low_140
-        [range(%snapshot_index_common_low_140, 0, 1073741823)] : index
-    %common_low_snapshot_value_14 = view.load %state_v[%snapshot_index_common_low_14] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_low_15 = index.assume %x_row_common_15
-        [range(%x_row_common_15, 0, 60)] : index
+    %snapshot_index_common_low_14 = index.assume %snapshot_index_common_low_140 [range(%snapshot_index_common_low_140, 0, 1073741823)] : index
+    %common_low_snapshot_value_14 = view.load %state_v[%snapshot_index_common_low_14] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_low_15 = index.assume %x_row_common_15 [range(%x_row_common_15, 0, 60)] : index
     %snapshot_row_common_low_150 = index.add %snapshot_x_row_common_low_15, %c3 : index
-    %snapshot_row_common_low_15 = index.assume %snapshot_row_common_low_150
-        [range(%snapshot_row_common_low_150, 3, 63)] : index
+    %snapshot_row_common_low_15 = index.assume %snapshot_row_common_low_150 [range(%snapshot_row_common_low_150, 3, 63)] : index
     %snapshot_row_common_low_15_offset0 = index.mul %snapshot_row_common_low_15, %state_row_stride : index
     %snapshot_row_common_low_15_offset1 = index.add %state_sequence_base, %snapshot_row_common_low_15_offset0 : index
     %snapshot_index_common_low_150 = index.add %snapshot_row_common_low_15_offset1, %channel : index
-    %snapshot_index_common_low_15 = index.assume %snapshot_index_common_low_150
-        [range(%snapshot_index_common_low_150, 0, 1073741823)] : index
-    %common_low_snapshot_value_15 = view.load %state_v[%snapshot_index_common_low_15] :
-        view<1073741824xf32> -> f32
+    %snapshot_index_common_low_15 = index.assume %snapshot_index_common_low_150 [range(%snapshot_index_common_low_150, 0, 1073741823)] : index
+    %common_low_snapshot_value_15 = view.load %state_v[%snapshot_index_common_low_15] : view<1073741824xf32> -> f32
     scf.yield %common_low_snapshot_value_3, %common_low_snapshot_value_4, %common_low_snapshot_value_5, %common_low_snapshot_value_6, %common_low_snapshot_value_7, %common_low_snapshot_value_8, %common_low_snapshot_value_9, %common_low_snapshot_value_10, %common_low_snapshot_value_11, %common_low_snapshot_value_12, %common_low_snapshot_value_13, %common_low_snapshot_value_14, %common_low_snapshot_value_15 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
   } else {
     %x_row_common_low_30 = index.mul %x_row_common_3, %x_row_stride : index
     %x_row_common_low_31 = index.add %x_sequence_base, %x_row_common_low_30 : index
     %x_index_common_low_30 = index.add %x_row_common_low_31, %channel : index
-    %x_index_common_low_3 = index.assume %x_index_common_low_30
-        [range(%x_index_common_low_30, 0, 1073741823)] : index
-    %common_low_raw_value_3 = view.load %x_v[%x_index_common_low_3] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_3 = index.assume %x_index_common_low_30 [range(%x_index_common_low_30, 0, 1073741823)] : index
+    %common_low_raw_value_3 = view.load %x_v[%x_index_common_low_3] : view<1073741824xf32> -> f32
     %x_row_common_low_40 = index.mul %x_row_common_4, %x_row_stride : index
     %x_row_common_low_41 = index.add %x_sequence_base, %x_row_common_low_40 : index
     %x_index_common_low_40 = index.add %x_row_common_low_41, %channel : index
-    %x_index_common_low_4 = index.assume %x_index_common_low_40
-        [range(%x_index_common_low_40, 0, 1073741823)] : index
-    %common_low_raw_value_4 = view.load %x_v[%x_index_common_low_4] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_4 = index.assume %x_index_common_low_40 [range(%x_index_common_low_40, 0, 1073741823)] : index
+    %common_low_raw_value_4 = view.load %x_v[%x_index_common_low_4] : view<1073741824xf32> -> f32
     %x_row_common_low_50 = index.mul %x_row_common_5, %x_row_stride : index
     %x_row_common_low_51 = index.add %x_sequence_base, %x_row_common_low_50 : index
     %x_index_common_low_50 = index.add %x_row_common_low_51, %channel : index
-    %x_index_common_low_5 = index.assume %x_index_common_low_50
-        [range(%x_index_common_low_50, 0, 1073741823)] : index
-    %common_low_raw_value_5 = view.load %x_v[%x_index_common_low_5] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_5 = index.assume %x_index_common_low_50 [range(%x_index_common_low_50, 0, 1073741823)] : index
+    %common_low_raw_value_5 = view.load %x_v[%x_index_common_low_5] : view<1073741824xf32> -> f32
     %x_row_common_low_60 = index.mul %x_row_common_6, %x_row_stride : index
     %x_row_common_low_61 = index.add %x_sequence_base, %x_row_common_low_60 : index
     %x_index_common_low_60 = index.add %x_row_common_low_61, %channel : index
-    %x_index_common_low_6 = index.assume %x_index_common_low_60
-        [range(%x_index_common_low_60, 0, 1073741823)] : index
-    %common_low_raw_value_6 = view.load %x_v[%x_index_common_low_6] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_6 = index.assume %x_index_common_low_60 [range(%x_index_common_low_60, 0, 1073741823)] : index
+    %common_low_raw_value_6 = view.load %x_v[%x_index_common_low_6] : view<1073741824xf32> -> f32
     %x_row_common_low_70 = index.mul %x_row_common_7, %x_row_stride : index
     %x_row_common_low_71 = index.add %x_sequence_base, %x_row_common_low_70 : index
     %x_index_common_low_70 = index.add %x_row_common_low_71, %channel : index
-    %x_index_common_low_7 = index.assume %x_index_common_low_70
-        [range(%x_index_common_low_70, 0, 1073741823)] : index
-    %common_low_raw_value_7 = view.load %x_v[%x_index_common_low_7] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_7 = index.assume %x_index_common_low_70 [range(%x_index_common_low_70, 0, 1073741823)] : index
+    %common_low_raw_value_7 = view.load %x_v[%x_index_common_low_7] : view<1073741824xf32> -> f32
     %x_row_common_low_80 = index.mul %x_row_common_8, %x_row_stride : index
     %x_row_common_low_81 = index.add %x_sequence_base, %x_row_common_low_80 : index
     %x_index_common_low_80 = index.add %x_row_common_low_81, %channel : index
-    %x_index_common_low_8 = index.assume %x_index_common_low_80
-        [range(%x_index_common_low_80, 0, 1073741823)] : index
-    %common_low_raw_value_8 = view.load %x_v[%x_index_common_low_8] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_8 = index.assume %x_index_common_low_80 [range(%x_index_common_low_80, 0, 1073741823)] : index
+    %common_low_raw_value_8 = view.load %x_v[%x_index_common_low_8] : view<1073741824xf32> -> f32
     %x_row_common_low_90 = index.mul %x_row_common_9, %x_row_stride : index
     %x_row_common_low_91 = index.add %x_sequence_base, %x_row_common_low_90 : index
     %x_index_common_low_90 = index.add %x_row_common_low_91, %channel : index
-    %x_index_common_low_9 = index.assume %x_index_common_low_90
-        [range(%x_index_common_low_90, 0, 1073741823)] : index
-    %common_low_raw_value_9 = view.load %x_v[%x_index_common_low_9] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_9 = index.assume %x_index_common_low_90 [range(%x_index_common_low_90, 0, 1073741823)] : index
+    %common_low_raw_value_9 = view.load %x_v[%x_index_common_low_9] : view<1073741824xf32> -> f32
     %x_row_common_low_100 = index.mul %x_row_common_10, %x_row_stride : index
     %x_row_common_low_101 = index.add %x_sequence_base, %x_row_common_low_100 : index
     %x_index_common_low_100 = index.add %x_row_common_low_101, %channel : index
-    %x_index_common_low_10 = index.assume %x_index_common_low_100
-        [range(%x_index_common_low_100, 0, 1073741823)] : index
-    %common_low_raw_value_10 = view.load %x_v[%x_index_common_low_10] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_10 = index.assume %x_index_common_low_100 [range(%x_index_common_low_100, 0, 1073741823)] : index
+    %common_low_raw_value_10 = view.load %x_v[%x_index_common_low_10] : view<1073741824xf32> -> f32
     %x_row_common_low_110 = index.mul %x_row_common_11, %x_row_stride : index
     %x_row_common_low_111 = index.add %x_sequence_base, %x_row_common_low_110 : index
     %x_index_common_low_110 = index.add %x_row_common_low_111, %channel : index
-    %x_index_common_low_11 = index.assume %x_index_common_low_110
-        [range(%x_index_common_low_110, 0, 1073741823)] : index
-    %common_low_raw_value_11 = view.load %x_v[%x_index_common_low_11] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_11 = index.assume %x_index_common_low_110 [range(%x_index_common_low_110, 0, 1073741823)] : index
+    %common_low_raw_value_11 = view.load %x_v[%x_index_common_low_11] : view<1073741824xf32> -> f32
     %x_row_common_low_120 = index.mul %x_row_common_12, %x_row_stride : index
     %x_row_common_low_121 = index.add %x_sequence_base, %x_row_common_low_120 : index
     %x_index_common_low_120 = index.add %x_row_common_low_121, %channel : index
-    %x_index_common_low_12 = index.assume %x_index_common_low_120
-        [range(%x_index_common_low_120, 0, 1073741823)] : index
-    %common_low_raw_value_12 = view.load %x_v[%x_index_common_low_12] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_12 = index.assume %x_index_common_low_120 [range(%x_index_common_low_120, 0, 1073741823)] : index
+    %common_low_raw_value_12 = view.load %x_v[%x_index_common_low_12] : view<1073741824xf32> -> f32
     %x_row_common_low_130 = index.mul %x_row_common_13, %x_row_stride : index
     %x_row_common_low_131 = index.add %x_sequence_base, %x_row_common_low_130 : index
     %x_index_common_low_130 = index.add %x_row_common_low_131, %channel : index
-    %x_index_common_low_13 = index.assume %x_index_common_low_130
-        [range(%x_index_common_low_130, 0, 1073741823)] : index
-    %common_low_raw_value_13 = view.load %x_v[%x_index_common_low_13] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_13 = index.assume %x_index_common_low_130 [range(%x_index_common_low_130, 0, 1073741823)] : index
+    %common_low_raw_value_13 = view.load %x_v[%x_index_common_low_13] : view<1073741824xf32> -> f32
     %x_row_common_low_140 = index.mul %x_row_common_14, %x_row_stride : index
     %x_row_common_low_141 = index.add %x_sequence_base, %x_row_common_low_140 : index
     %x_index_common_low_140 = index.add %x_row_common_low_141, %channel : index
-    %x_index_common_low_14 = index.assume %x_index_common_low_140
-        [range(%x_index_common_low_140, 0, 1073741823)] : index
-    %common_low_raw_value_14 = view.load %x_v[%x_index_common_low_14] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_14 = index.assume %x_index_common_low_140 [range(%x_index_common_low_140, 0, 1073741823)] : index
+    %common_low_raw_value_14 = view.load %x_v[%x_index_common_low_14] : view<1073741824xf32> -> f32
     %x_row_common_low_150 = index.mul %x_row_common_15, %x_row_stride : index
     %x_row_common_low_151 = index.add %x_sequence_base, %x_row_common_low_150 : index
     %x_index_common_low_150 = index.add %x_row_common_low_151, %channel : index
-    %x_index_common_low_15 = index.assume %x_index_common_low_150
-        [range(%x_index_common_low_150, 0, 1073741823)] : index
-    %common_low_raw_value_15 = view.load %x_v[%x_index_common_low_15] :
-        view<1073741824xf32> -> f32
+    %x_index_common_low_15 = index.assume %x_index_common_low_150 [range(%x_index_common_low_150, 0, 1073741823)] : index
+    %common_low_raw_value_15 = view.load %x_v[%x_index_common_low_15] : view<1073741824xf32> -> f32
     scf.yield %common_low_raw_value_3, %common_low_raw_value_4, %common_low_raw_value_5, %common_low_raw_value_6, %common_low_raw_value_7, %common_low_raw_value_8, %common_low_raw_value_9, %common_low_raw_value_10, %common_low_raw_value_11, %common_low_raw_value_12, %common_low_raw_value_13, %common_low_raw_value_14, %common_low_raw_value_15 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
   }
   // X_PRELOAD_3
@@ -541,93 +498,67 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
   // X_PRELOAD_13
   // X_PRELOAD_14
   // X_PRELOAD_15
-
   %x_row_common_160 = index.add %wave_token_base, %c13 : index
-  %x_row_common_16 = index.assume %x_row_common_160
-      [range(%x_row_common_160, 13, 509)] : index
+  %x_row_common_16 = index.assume %x_row_common_160 [range(%x_row_common_160, 13, 509)] : index
   %x_row_common_170 = index.add %wave_token_base, %c14 : index
-  %x_row_common_17 = index.assume %x_row_common_170
-      [range(%x_row_common_170, 14, 510)] : index
+  %x_row_common_17 = index.assume %x_row_common_170 [range(%x_row_common_170, 14, 510)] : index
   %x_row_common_180 = index.add %wave_token_base, %c15 : index
-  %x_row_common_18 = index.assume %x_row_common_180
-      [range(%x_row_common_180, 15, 511)] : index
+  %x_row_common_18 = index.assume %x_row_common_180 [range(%x_row_common_180, 15, 511)] : index
   %common_high_is_snapshotted = index.cmp ult, %wave, %c3 : index
   %xr16, %xr17, %xr18 = scf.if %common_high_is_snapshotted -> (f32, f32, f32) {
-    %snapshot_x_row_common_high_16 = index.assume %x_row_common_16
-        [range(%x_row_common_16, 0, 60)] : index
+    %snapshot_x_row_common_high_16 = index.assume %x_row_common_16 [range(%x_row_common_16, 0, 60)] : index
     %snapshot_row_common_high_160 = index.add %snapshot_x_row_common_high_16, %c3 : index
-    %snapshot_row_common_high_16 = index.assume %snapshot_row_common_high_160
-        [range(%snapshot_row_common_high_160, 3, 63)] : index
+    %snapshot_row_common_high_16 = index.assume %snapshot_row_common_high_160 [range(%snapshot_row_common_high_160, 3, 63)] : index
     %snapshot_row_common_high_16_offset0 = index.mul %snapshot_row_common_high_16, %state_row_stride : index
     %snapshot_row_common_high_16_offset1 = index.add %state_sequence_base, %snapshot_row_common_high_16_offset0 : index
     %snapshot_index_common_high_160 = index.add %snapshot_row_common_high_16_offset1, %channel : index
-    %snapshot_index_common_high_16 = index.assume %snapshot_index_common_high_160
-        [range(%snapshot_index_common_high_160, 0, 1073741823)] : index
-    %common_high_snapshot_value_16 = view.load %state_v[%snapshot_index_common_high_16] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_high_17 = index.assume %x_row_common_17
-        [range(%x_row_common_17, 0, 60)] : index
+    %snapshot_index_common_high_16 = index.assume %snapshot_index_common_high_160 [range(%snapshot_index_common_high_160, 0, 1073741823)] : index
+    %common_high_snapshot_value_16 = view.load %state_v[%snapshot_index_common_high_16] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_high_17 = index.assume %x_row_common_17 [range(%x_row_common_17, 0, 60)] : index
     %snapshot_row_common_high_170 = index.add %snapshot_x_row_common_high_17, %c3 : index
-    %snapshot_row_common_high_17 = index.assume %snapshot_row_common_high_170
-        [range(%snapshot_row_common_high_170, 3, 63)] : index
+    %snapshot_row_common_high_17 = index.assume %snapshot_row_common_high_170 [range(%snapshot_row_common_high_170, 3, 63)] : index
     %snapshot_row_common_high_17_offset0 = index.mul %snapshot_row_common_high_17, %state_row_stride : index
     %snapshot_row_common_high_17_offset1 = index.add %state_sequence_base, %snapshot_row_common_high_17_offset0 : index
     %snapshot_index_common_high_170 = index.add %snapshot_row_common_high_17_offset1, %channel : index
-    %snapshot_index_common_high_17 = index.assume %snapshot_index_common_high_170
-        [range(%snapshot_index_common_high_170, 0, 1073741823)] : index
-    %common_high_snapshot_value_17 = view.load %state_v[%snapshot_index_common_high_17] :
-        view<1073741824xf32> -> f32
-    %snapshot_x_row_common_high_18 = index.assume %x_row_common_18
-        [range(%x_row_common_18, 0, 60)] : index
+    %snapshot_index_common_high_17 = index.assume %snapshot_index_common_high_170 [range(%snapshot_index_common_high_170, 0, 1073741823)] : index
+    %common_high_snapshot_value_17 = view.load %state_v[%snapshot_index_common_high_17] : view<1073741824xf32> -> f32
+    %snapshot_x_row_common_high_18 = index.assume %x_row_common_18 [range(%x_row_common_18, 0, 60)] : index
     %snapshot_row_common_high_180 = index.add %snapshot_x_row_common_high_18, %c3 : index
-    %snapshot_row_common_high_18 = index.assume %snapshot_row_common_high_180
-        [range(%snapshot_row_common_high_180, 3, 63)] : index
+    %snapshot_row_common_high_18 = index.assume %snapshot_row_common_high_180 [range(%snapshot_row_common_high_180, 3, 63)] : index
     %snapshot_row_common_high_18_offset0 = index.mul %snapshot_row_common_high_18, %state_row_stride : index
     %snapshot_row_common_high_18_offset1 = index.add %state_sequence_base, %snapshot_row_common_high_18_offset0 : index
     %snapshot_index_common_high_180 = index.add %snapshot_row_common_high_18_offset1, %channel : index
-    %snapshot_index_common_high_18 = index.assume %snapshot_index_common_high_180
-        [range(%snapshot_index_common_high_180, 0, 1073741823)] : index
-    %common_high_snapshot_value_18 = view.load %state_v[%snapshot_index_common_high_18] :
-        view<1073741824xf32> -> f32
+    %snapshot_index_common_high_18 = index.assume %snapshot_index_common_high_180 [range(%snapshot_index_common_high_180, 0, 1073741823)] : index
+    %common_high_snapshot_value_18 = view.load %state_v[%snapshot_index_common_high_18] : view<1073741824xf32> -> f32
     scf.yield %common_high_snapshot_value_16, %common_high_snapshot_value_17, %common_high_snapshot_value_18 : f32, f32, f32
   } else {
     %x_row_common_high_160 = index.mul %x_row_common_16, %x_row_stride : index
     %x_row_common_high_161 = index.add %x_sequence_base, %x_row_common_high_160 : index
     %x_index_common_high_160 = index.add %x_row_common_high_161, %channel : index
-    %x_index_common_high_16 = index.assume %x_index_common_high_160
-        [range(%x_index_common_high_160, 0, 1073741823)] : index
-    %common_high_raw_value_16 = view.load %x_v[%x_index_common_high_16] :
-        view<1073741824xf32> -> f32
+    %x_index_common_high_16 = index.assume %x_index_common_high_160 [range(%x_index_common_high_160, 0, 1073741823)] : index
+    %common_high_raw_value_16 = view.load %x_v[%x_index_common_high_16] : view<1073741824xf32> -> f32
     %x_row_common_high_170 = index.mul %x_row_common_17, %x_row_stride : index
     %x_row_common_high_171 = index.add %x_sequence_base, %x_row_common_high_170 : index
     %x_index_common_high_170 = index.add %x_row_common_high_171, %channel : index
-    %x_index_common_high_17 = index.assume %x_index_common_high_170
-        [range(%x_index_common_high_170, 0, 1073741823)] : index
-    %common_high_raw_value_17 = view.load %x_v[%x_index_common_high_17] :
-        view<1073741824xf32> -> f32
+    %x_index_common_high_17 = index.assume %x_index_common_high_170 [range(%x_index_common_high_170, 0, 1073741823)] : index
+    %common_high_raw_value_17 = view.load %x_v[%x_index_common_high_17] : view<1073741824xf32> -> f32
     %x_row_common_high_180 = index.mul %x_row_common_18, %x_row_stride : index
     %x_row_common_high_181 = index.add %x_sequence_base, %x_row_common_high_180 : index
     %x_index_common_high_180 = index.add %x_row_common_high_181, %channel : index
-    %x_index_common_high_18 = index.assume %x_index_common_high_180
-        [range(%x_index_common_high_180, 0, 1073741823)] : index
-    %common_high_raw_value_18 = view.load %x_v[%x_index_common_high_18] :
-        view<1073741824xf32> -> f32
+    %x_index_common_high_18 = index.assume %x_index_common_high_180 [range(%x_index_common_high_180, 0, 1073741823)] : index
+    %common_high_raw_value_18 = view.load %x_v[%x_index_common_high_18] : view<1073741824xf32> -> f32
     scf.yield %common_high_raw_value_16, %common_high_raw_value_17, %common_high_raw_value_18 : f32, f32, f32
   }
   // X_PRELOAD_16
   // X_PRELOAD_17
   // X_PRELOAD_18
-
   // Filter and state are disjoint from x/dst.  Each wave loads its lane's four
   // filter values once and reuses them for 16 outputs.
   %filter_byte0 = index.mul %channel, %c16 : index
-  %filter_byte = index.assume %filter_byte0
-      [range(%filter_byte0, 0, 131056), mul(%filter_byte0, 16)] : index
+  %filter_byte = index.assume %filter_byte0 [range(%filter_byte0, 0, 163824), mul(%filter_byte0, 16)] : index
   %filter_offset = index.cast %filter_byte : index to offset
-  %filter_v = buffer.view %filt_na[%filter_offset] :
-      buffer -> view<4xf32>
-  %weights = vector.load %filter_v[%c0] :
-      view<4xf32> -> vector<4xf32>
+  %filter_v = buffer.view %filt_na[%filter_offset] : buffer -> view<4xf32>
+  %weights = vector.load %filter_v[%c0] : view<4xf32> -> vector<4xf32>
   %w0 = vector.extract %weights[%c0] : vector<4xf32> -> f32
   %w1 = vector.extract %weights[%c1] : vector<4xf32> -> f32
   %w2 = vector.extract %weights[%c2] : vector<4xf32> -> f32
@@ -637,10 +568,8 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
     %state_row_00 = index.mul %c0, %state_row_stride : index
     %state_row_01 = index.add %state_sequence_base, %state_row_00 : index
     %state_index_00 = index.add %state_row_01, %channel : index
-    %state_index_0 = index.assume %state_index_00
-        [range(%state_index_00, 0, 1073741823)] : index
-    %loaded = view.load %state_v[%state_index_0] :
-        view<1073741824xf32> -> f32
+    %state_index_0 = index.assume %state_index_00 [range(%state_index_00, 0, 1073741823)] : index
+    %loaded = view.load %state_v[%state_index_0] : view<1073741824xf32> -> f32
     scf.yield %loaded : f32
   } else {
     scf.yield %zero_f32 : f32
@@ -650,10 +579,8 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
     %state_row_10 = index.mul %c1, %state_row_stride : index
     %state_row_11 = index.add %state_sequence_base, %state_row_10 : index
     %state_index_10 = index.add %state_row_11, %channel : index
-    %state_index_1 = index.assume %state_index_10
-        [range(%state_index_10, 0, 1073741823)] : index
-    %loaded = view.load %state_v[%state_index_1] :
-        view<1073741824xf32> -> f32
+    %state_index_1 = index.assume %state_index_10 [range(%state_index_10, 0, 1073741823)] : index
+    %loaded = view.load %state_v[%state_index_1] : view<1073741824xf32> -> f32
     scf.yield %loaded : f32
   } else {
     scf.yield %zero_f32 : f32
@@ -663,10 +590,8 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
     %state_row_20 = index.mul %c2, %state_row_stride : index
     %state_row_21 = index.add %state_sequence_base, %state_row_20 : index
     %state_index_20 = index.add %state_row_21, %channel : index
-    %state_index_2 = index.assume %state_index_20
-        [range(%state_index_20, 0, 1073741823)] : index
-    %loaded = view.load %state_v[%state_index_2] :
-        view<1073741824xf32> -> f32
+    %state_index_2 = index.assume %state_index_20 [range(%state_index_20, 0, 1073741823)] : index
+    %loaded = view.load %state_v[%state_index_2] : view<1073741824xf32> -> f32
     scf.yield %loaded : f32
   } else {
     scf.yield %zero_f32 : f32
@@ -679,180 +604,103 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
   %v0_0 = scf.select %first_wave, %state0, %xr0 : f32
   %v0_1 = scf.select %first_wave, %state1, %xr1 : f32
   %v0_2 = scf.select %first_wave, %state2, %xr2 : f32
-  %p0_0 = scalar.mulf<nnan|ninf|nsz>
-      %v0_0, %w0 : f32
-  %p0_1 = scalar.fmaf<nnan|ninf|nsz>
-      %v0_1, %w1, %p0_0 : f32
-  %p0_2 = scalar.fmaf<nnan|ninf|nsz>
-      %v0_2, %w2, %p0_1 : f32
-  %acc0 = scalar.fmaf<nnan|ninf|nsz>
-      %xr3, %w3, %p0_2 : f32
+  %p0_0 = scalar.mulf<nnan|ninf|nsz> %v0_0, %w0 : f32
+  %p0_1 = scalar.fmaf<nnan|ninf|nsz> %v0_1, %w1, %p0_0 : f32
+  %p0_2 = scalar.fmaf<nnan|ninf|nsz> %v0_2, %w2, %p0_1 : f32
+  %acc0 = scalar.fmaf<nnan|ninf|nsz> %xr3, %w3, %p0_2 : f32
   %activated0 = scalar.siluf<afn> %acc0 : f32
 
   %v1_0 = scf.select %first_wave, %state1, %xr1 : f32
   %v1_1 = scf.select %first_wave, %state2, %xr2 : f32
-  %p1_0 = scalar.mulf<nnan|ninf|nsz>
-      %v1_0, %w0 : f32
-  %p1_1 = scalar.fmaf<nnan|ninf|nsz>
-      %v1_1, %w1, %p1_0 : f32
-  %p1_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr3, %w2, %p1_1 : f32
-  %acc1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr4, %w3, %p1_2 : f32
+  %p1_0 = scalar.mulf<nnan|ninf|nsz> %v1_0, %w0 : f32
+  %p1_1 = scalar.fmaf<nnan|ninf|nsz> %v1_1, %w1, %p1_0 : f32
+  %p1_2 = scalar.fmaf<nnan|ninf|nsz> %xr3, %w2, %p1_1 : f32
+  %acc1 = scalar.fmaf<nnan|ninf|nsz> %xr4, %w3, %p1_2 : f32
   %activated1 = scalar.siluf<afn> %acc1 : f32
 
   %v2_0 = scf.select %first_wave, %state2, %xr2 : f32
-  %p2_0 = scalar.mulf<nnan|ninf|nsz>
-      %v2_0, %w0 : f32
-  %p2_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr3, %w1, %p2_0 : f32
-  %p2_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr4, %w2, %p2_1 : f32
-  %acc2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr5, %w3, %p2_2 : f32
+  %p2_0 = scalar.mulf<nnan|ninf|nsz> %v2_0, %w0 : f32
+  %p2_1 = scalar.fmaf<nnan|ninf|nsz> %xr3, %w1, %p2_0 : f32
+  %p2_2 = scalar.fmaf<nnan|ninf|nsz> %xr4, %w2, %p2_1 : f32
+  %acc2 = scalar.fmaf<nnan|ninf|nsz> %xr5, %w3, %p2_2 : f32
   %activated2 = scalar.siluf<afn> %acc2 : f32
 
-
-  %p3_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr3, %w0 : f32
-  %p3_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr4, %w1, %p3_0 : f32
-  %p3_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr5, %w2, %p3_1 : f32
-  %acc3 = scalar.fmaf<nnan|ninf|nsz>
-      %xr6, %w3, %p3_2 : f32
+  %p3_0 = scalar.mulf<nnan|ninf|nsz> %xr3, %w0 : f32
+  %p3_1 = scalar.fmaf<nnan|ninf|nsz> %xr4, %w1, %p3_0 : f32
+  %p3_2 = scalar.fmaf<nnan|ninf|nsz> %xr5, %w2, %p3_1 : f32
+  %acc3 = scalar.fmaf<nnan|ninf|nsz> %xr6, %w3, %p3_2 : f32
   %activated3 = scalar.siluf<afn> %acc3 : f32
 
-
-  %p4_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr4, %w0 : f32
-  %p4_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr5, %w1, %p4_0 : f32
-  %p4_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr6, %w2, %p4_1 : f32
-  %acc4 = scalar.fmaf<nnan|ninf|nsz>
-      %xr7, %w3, %p4_2 : f32
+  %p4_0 = scalar.mulf<nnan|ninf|nsz> %xr4, %w0 : f32
+  %p4_1 = scalar.fmaf<nnan|ninf|nsz> %xr5, %w1, %p4_0 : f32
+  %p4_2 = scalar.fmaf<nnan|ninf|nsz> %xr6, %w2, %p4_1 : f32
+  %acc4 = scalar.fmaf<nnan|ninf|nsz> %xr7, %w3, %p4_2 : f32
   %activated4 = scalar.siluf<afn> %acc4 : f32
 
-
-  %p5_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr5, %w0 : f32
-  %p5_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr6, %w1, %p5_0 : f32
-  %p5_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr7, %w2, %p5_1 : f32
-  %acc5 = scalar.fmaf<nnan|ninf|nsz>
-      %xr8, %w3, %p5_2 : f32
+  %p5_0 = scalar.mulf<nnan|ninf|nsz> %xr5, %w0 : f32
+  %p5_1 = scalar.fmaf<nnan|ninf|nsz> %xr6, %w1, %p5_0 : f32
+  %p5_2 = scalar.fmaf<nnan|ninf|nsz> %xr7, %w2, %p5_1 : f32
+  %acc5 = scalar.fmaf<nnan|ninf|nsz> %xr8, %w3, %p5_2 : f32
   %activated5 = scalar.siluf<afn> %acc5 : f32
 
-
-  %p6_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr6, %w0 : f32
-  %p6_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr7, %w1, %p6_0 : f32
-  %p6_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr8, %w2, %p6_1 : f32
-  %acc6 = scalar.fmaf<nnan|ninf|nsz>
-      %xr9, %w3, %p6_2 : f32
+  %p6_0 = scalar.mulf<nnan|ninf|nsz> %xr6, %w0 : f32
+  %p6_1 = scalar.fmaf<nnan|ninf|nsz> %xr7, %w1, %p6_0 : f32
+  %p6_2 = scalar.fmaf<nnan|ninf|nsz> %xr8, %w2, %p6_1 : f32
+  %acc6 = scalar.fmaf<nnan|ninf|nsz> %xr9, %w3, %p6_2 : f32
   %activated6 = scalar.siluf<afn> %acc6 : f32
 
-
-  %p7_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr7, %w0 : f32
-  %p7_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr8, %w1, %p7_0 : f32
-  %p7_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr9, %w2, %p7_1 : f32
-  %acc7 = scalar.fmaf<nnan|ninf|nsz>
-      %xr10, %w3, %p7_2 : f32
+  %p7_0 = scalar.mulf<nnan|ninf|nsz> %xr7, %w0 : f32
+  %p7_1 = scalar.fmaf<nnan|ninf|nsz> %xr8, %w1, %p7_0 : f32
+  %p7_2 = scalar.fmaf<nnan|ninf|nsz> %xr9, %w2, %p7_1 : f32
+  %acc7 = scalar.fmaf<nnan|ninf|nsz> %xr10, %w3, %p7_2 : f32
   %activated7 = scalar.siluf<afn> %acc7 : f32
 
-
-  %p8_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr8, %w0 : f32
-  %p8_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr9, %w1, %p8_0 : f32
-  %p8_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr10, %w2, %p8_1 : f32
-  %acc8 = scalar.fmaf<nnan|ninf|nsz>
-      %xr11, %w3, %p8_2 : f32
+  %p8_0 = scalar.mulf<nnan|ninf|nsz> %xr8, %w0 : f32
+  %p8_1 = scalar.fmaf<nnan|ninf|nsz> %xr9, %w1, %p8_0 : f32
+  %p8_2 = scalar.fmaf<nnan|ninf|nsz> %xr10, %w2, %p8_1 : f32
+  %acc8 = scalar.fmaf<nnan|ninf|nsz> %xr11, %w3, %p8_2 : f32
   %activated8 = scalar.siluf<afn> %acc8 : f32
 
-
-  %p9_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr9, %w0 : f32
-  %p9_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr10, %w1, %p9_0 : f32
-  %p9_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr11, %w2, %p9_1 : f32
-  %acc9 = scalar.fmaf<nnan|ninf|nsz>
-      %xr12, %w3, %p9_2 : f32
+  %p9_0 = scalar.mulf<nnan|ninf|nsz> %xr9, %w0 : f32
+  %p9_1 = scalar.fmaf<nnan|ninf|nsz> %xr10, %w1, %p9_0 : f32
+  %p9_2 = scalar.fmaf<nnan|ninf|nsz> %xr11, %w2, %p9_1 : f32
+  %acc9 = scalar.fmaf<nnan|ninf|nsz> %xr12, %w3, %p9_2 : f32
   %activated9 = scalar.siluf<afn> %acc9 : f32
 
-
-  %p10_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr10, %w0 : f32
-  %p10_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr11, %w1, %p10_0 : f32
-  %p10_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr12, %w2, %p10_1 : f32
-  %acc10 = scalar.fmaf<nnan|ninf|nsz>
-      %xr13, %w3, %p10_2 : f32
+  %p10_0 = scalar.mulf<nnan|ninf|nsz> %xr10, %w0 : f32
+  %p10_1 = scalar.fmaf<nnan|ninf|nsz> %xr11, %w1, %p10_0 : f32
+  %p10_2 = scalar.fmaf<nnan|ninf|nsz> %xr12, %w2, %p10_1 : f32
+  %acc10 = scalar.fmaf<nnan|ninf|nsz> %xr13, %w3, %p10_2 : f32
   %activated10 = scalar.siluf<afn> %acc10 : f32
 
-
-  %p11_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr11, %w0 : f32
-  %p11_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr12, %w1, %p11_0 : f32
-  %p11_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr13, %w2, %p11_1 : f32
-  %acc11 = scalar.fmaf<nnan|ninf|nsz>
-      %xr14, %w3, %p11_2 : f32
+  %p11_0 = scalar.mulf<nnan|ninf|nsz> %xr11, %w0 : f32
+  %p11_1 = scalar.fmaf<nnan|ninf|nsz> %xr12, %w1, %p11_0 : f32
+  %p11_2 = scalar.fmaf<nnan|ninf|nsz> %xr13, %w2, %p11_1 : f32
+  %acc11 = scalar.fmaf<nnan|ninf|nsz> %xr14, %w3, %p11_2 : f32
   %activated11 = scalar.siluf<afn> %acc11 : f32
 
-
-  %p12_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr12, %w0 : f32
-  %p12_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr13, %w1, %p12_0 : f32
-  %p12_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr14, %w2, %p12_1 : f32
-  %acc12 = scalar.fmaf<nnan|ninf|nsz>
-      %xr15, %w3, %p12_2 : f32
+  %p12_0 = scalar.mulf<nnan|ninf|nsz> %xr12, %w0 : f32
+  %p12_1 = scalar.fmaf<nnan|ninf|nsz> %xr13, %w1, %p12_0 : f32
+  %p12_2 = scalar.fmaf<nnan|ninf|nsz> %xr14, %w2, %p12_1 : f32
+  %acc12 = scalar.fmaf<nnan|ninf|nsz> %xr15, %w3, %p12_2 : f32
   %activated12 = scalar.siluf<afn> %acc12 : f32
 
-
-  %p13_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr13, %w0 : f32
-  %p13_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr14, %w1, %p13_0 : f32
-  %p13_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr15, %w2, %p13_1 : f32
-  %acc13 = scalar.fmaf<nnan|ninf|nsz>
-      %xr16, %w3, %p13_2 : f32
+  %p13_0 = scalar.mulf<nnan|ninf|nsz> %xr13, %w0 : f32
+  %p13_1 = scalar.fmaf<nnan|ninf|nsz> %xr14, %w1, %p13_0 : f32
+  %p13_2 = scalar.fmaf<nnan|ninf|nsz> %xr15, %w2, %p13_1 : f32
+  %acc13 = scalar.fmaf<nnan|ninf|nsz> %xr16, %w3, %p13_2 : f32
   %activated13 = scalar.siluf<afn> %acc13 : f32
 
-
-  %p14_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr14, %w0 : f32
-  %p14_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr15, %w1, %p14_0 : f32
-  %p14_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr16, %w2, %p14_1 : f32
-  %acc14 = scalar.fmaf<nnan|ninf|nsz>
-      %xr17, %w3, %p14_2 : f32
+  %p14_0 = scalar.mulf<nnan|ninf|nsz> %xr14, %w0 : f32
+  %p14_1 = scalar.fmaf<nnan|ninf|nsz> %xr15, %w1, %p14_0 : f32
+  %p14_2 = scalar.fmaf<nnan|ninf|nsz> %xr16, %w2, %p14_1 : f32
+  %acc14 = scalar.fmaf<nnan|ninf|nsz> %xr17, %w3, %p14_2 : f32
   %activated14 = scalar.siluf<afn> %acc14 : f32
 
-
-  %p15_0 = scalar.mulf<nnan|ninf|nsz>
-      %xr15, %w0 : f32
-  %p15_1 = scalar.fmaf<nnan|ninf|nsz>
-      %xr16, %w1, %p15_0 : f32
-  %p15_2 = scalar.fmaf<nnan|ninf|nsz>
-      %xr17, %w2, %p15_1 : f32
-  %acc15 = scalar.fmaf<nnan|ninf|nsz>
-      %xr18, %w3, %p15_2 : f32
+  %p15_0 = scalar.mulf<nnan|ninf|nsz> %xr15, %w0 : f32
+  %p15_1 = scalar.fmaf<nnan|ninf|nsz> %xr16, %w1, %p15_0 : f32
+  %p15_2 = scalar.fmaf<nnan|ninf|nsz> %xr17, %w2, %p15_1 : f32
+  %acc15 = scalar.fmaf<nnan|ninf|nsz> %xr18, %w3, %p15_2 : f32
   %activated15 = scalar.siluf<afn> %acc15 : f32
 
   // Uniform load/compute-before-store boundary.  There is no LDS allocation
@@ -860,187 +708,137 @@ kernel.def export("hrx2_ssm_conv_f32_chan_concat_silu_regblock_wg1024") @hrx2_ss
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
 
   %dst_sequence_span0 = index.mul %n_t, %d_inner : index
-  %dst_sequence_span = index.assume %dst_sequence_span0
-      [range(%dst_sequence_span0, 4194304, 4194304)] : index
+  %dst_sequence_span = index.assume %dst_sequence_span0 [range(%dst_sequence_span0, 4194304, 5242880), mul(%dst_sequence_span0, 16384)] : index
   %dst_sequence_base0 = index.mul %sequence, %dst_sequence_span : index
-  %dst_sequence_base = index.assume %dst_sequence_base0
-      [range(%dst_sequence_base0, 0, 1073741823)] : index
+  %dst_sequence_base = index.assume %dst_sequence_base0 [range(%dst_sequence_base0, 0, 1073741823)] : index
 
   %token_0_raw = index.add %wave_token_base, %c0 : index
-  %token_0 = index.assume %token_0_raw
-      [range(%token_0_raw, 0, 496)] : index
+  %token_0 = index.assume %token_0_raw [range(%token_0_raw, 0, 496)] : index
   %dst_row_0_raw = index.mul %token_0, %d_inner : index
   %dst_row_0 = index.add %dst_sequence_base, %dst_row_0_raw : index
   %dst_index_0_raw = index.add %dst_row_0, %channel : index
-  %dst_index_0 = index.assume %dst_index_0_raw
-      [range(%dst_index_0_raw, 0, 1073741823)] : index
-  view.store %activated0, %dst_v[%dst_index_0] :
-      f32, view<1073741824xf32> // DST_STORE_0
-
+  %dst_index_0 = index.assume %dst_index_0_raw [range(%dst_index_0_raw, 0, 1073741823)] : index
+  view.store %activated0, %dst_v[%dst_index_0] : f32, view<1073741824xf32>
+  // DST_STORE_0
   %token_1_raw = index.add %wave_token_base, %c1 : index
-  %token_1 = index.assume %token_1_raw
-      [range(%token_1_raw, 1, 497)] : index
+  %token_1 = index.assume %token_1_raw [range(%token_1_raw, 1, 497)] : index
   %dst_row_1_raw = index.mul %token_1, %d_inner : index
   %dst_row_1 = index.add %dst_sequence_base, %dst_row_1_raw : index
   %dst_index_1_raw = index.add %dst_row_1, %channel : index
-  %dst_index_1 = index.assume %dst_index_1_raw
-      [range(%dst_index_1_raw, 0, 1073741823)] : index
-  view.store %activated1, %dst_v[%dst_index_1] :
-      f32, view<1073741824xf32> // DST_STORE_1
-
+  %dst_index_1 = index.assume %dst_index_1_raw [range(%dst_index_1_raw, 0, 1073741823)] : index
+  view.store %activated1, %dst_v[%dst_index_1] : f32, view<1073741824xf32>
+  // DST_STORE_1
   %token_2_raw = index.add %wave_token_base, %c2 : index
-  %token_2 = index.assume %token_2_raw
-      [range(%token_2_raw, 2, 498)] : index
+  %token_2 = index.assume %token_2_raw [range(%token_2_raw, 2, 498)] : index
   %dst_row_2_raw = index.mul %token_2, %d_inner : index
   %dst_row_2 = index.add %dst_sequence_base, %dst_row_2_raw : index
   %dst_index_2_raw = index.add %dst_row_2, %channel : index
-  %dst_index_2 = index.assume %dst_index_2_raw
-      [range(%dst_index_2_raw, 0, 1073741823)] : index
-  view.store %activated2, %dst_v[%dst_index_2] :
-      f32, view<1073741824xf32> // DST_STORE_2
-
+  %dst_index_2 = index.assume %dst_index_2_raw [range(%dst_index_2_raw, 0, 1073741823)] : index
+  view.store %activated2, %dst_v[%dst_index_2] : f32, view<1073741824xf32>
+  // DST_STORE_2
   %token_3_raw = index.add %wave_token_base, %c3 : index
-  %token_3 = index.assume %token_3_raw
-      [range(%token_3_raw, 3, 499)] : index
+  %token_3 = index.assume %token_3_raw [range(%token_3_raw, 3, 499)] : index
   %dst_row_3_raw = index.mul %token_3, %d_inner : index
   %dst_row_3 = index.add %dst_sequence_base, %dst_row_3_raw : index
   %dst_index_3_raw = index.add %dst_row_3, %channel : index
-  %dst_index_3 = index.assume %dst_index_3_raw
-      [range(%dst_index_3_raw, 0, 1073741823)] : index
-  view.store %activated3, %dst_v[%dst_index_3] :
-      f32, view<1073741824xf32> // DST_STORE_3
-
+  %dst_index_3 = index.assume %dst_index_3_raw [range(%dst_index_3_raw, 0, 1073741823)] : index
+  view.store %activated3, %dst_v[%dst_index_3] : f32, view<1073741824xf32>
+  // DST_STORE_3
   %token_4_raw = index.add %wave_token_base, %c4 : index
-  %token_4 = index.assume %token_4_raw
-      [range(%token_4_raw, 4, 500)] : index
+  %token_4 = index.assume %token_4_raw [range(%token_4_raw, 4, 500)] : index
   %dst_row_4_raw = index.mul %token_4, %d_inner : index
   %dst_row_4 = index.add %dst_sequence_base, %dst_row_4_raw : index
   %dst_index_4_raw = index.add %dst_row_4, %channel : index
-  %dst_index_4 = index.assume %dst_index_4_raw
-      [range(%dst_index_4_raw, 0, 1073741823)] : index
-  view.store %activated4, %dst_v[%dst_index_4] :
-      f32, view<1073741824xf32> // DST_STORE_4
-
+  %dst_index_4 = index.assume %dst_index_4_raw [range(%dst_index_4_raw, 0, 1073741823)] : index
+  view.store %activated4, %dst_v[%dst_index_4] : f32, view<1073741824xf32>
+  // DST_STORE_4
   %token_5_raw = index.add %wave_token_base, %c5 : index
-  %token_5 = index.assume %token_5_raw
-      [range(%token_5_raw, 5, 501)] : index
+  %token_5 = index.assume %token_5_raw [range(%token_5_raw, 5, 501)] : index
   %dst_row_5_raw = index.mul %token_5, %d_inner : index
   %dst_row_5 = index.add %dst_sequence_base, %dst_row_5_raw : index
   %dst_index_5_raw = index.add %dst_row_5, %channel : index
-  %dst_index_5 = index.assume %dst_index_5_raw
-      [range(%dst_index_5_raw, 0, 1073741823)] : index
-  view.store %activated5, %dst_v[%dst_index_5] :
-      f32, view<1073741824xf32> // DST_STORE_5
-
+  %dst_index_5 = index.assume %dst_index_5_raw [range(%dst_index_5_raw, 0, 1073741823)] : index
+  view.store %activated5, %dst_v[%dst_index_5] : f32, view<1073741824xf32>
+  // DST_STORE_5
   %token_6_raw = index.add %wave_token_base, %c6 : index
-  %token_6 = index.assume %token_6_raw
-      [range(%token_6_raw, 6, 502)] : index
+  %token_6 = index.assume %token_6_raw [range(%token_6_raw, 6, 502)] : index
   %dst_row_6_raw = index.mul %token_6, %d_inner : index
   %dst_row_6 = index.add %dst_sequence_base, %dst_row_6_raw : index
   %dst_index_6_raw = index.add %dst_row_6, %channel : index
-  %dst_index_6 = index.assume %dst_index_6_raw
-      [range(%dst_index_6_raw, 0, 1073741823)] : index
-  view.store %activated6, %dst_v[%dst_index_6] :
-      f32, view<1073741824xf32> // DST_STORE_6
-
+  %dst_index_6 = index.assume %dst_index_6_raw [range(%dst_index_6_raw, 0, 1073741823)] : index
+  view.store %activated6, %dst_v[%dst_index_6] : f32, view<1073741824xf32>
+  // DST_STORE_6
   %token_7_raw = index.add %wave_token_base, %c7 : index
-  %token_7 = index.assume %token_7_raw
-      [range(%token_7_raw, 7, 503)] : index
+  %token_7 = index.assume %token_7_raw [range(%token_7_raw, 7, 503)] : index
   %dst_row_7_raw = index.mul %token_7, %d_inner : index
   %dst_row_7 = index.add %dst_sequence_base, %dst_row_7_raw : index
   %dst_index_7_raw = index.add %dst_row_7, %channel : index
-  %dst_index_7 = index.assume %dst_index_7_raw
-      [range(%dst_index_7_raw, 0, 1073741823)] : index
-  view.store %activated7, %dst_v[%dst_index_7] :
-      f32, view<1073741824xf32> // DST_STORE_7
-
+  %dst_index_7 = index.assume %dst_index_7_raw [range(%dst_index_7_raw, 0, 1073741823)] : index
+  view.store %activated7, %dst_v[%dst_index_7] : f32, view<1073741824xf32>
+  // DST_STORE_7
   %token_8_raw = index.add %wave_token_base, %c8 : index
-  %token_8 = index.assume %token_8_raw
-      [range(%token_8_raw, 8, 504)] : index
+  %token_8 = index.assume %token_8_raw [range(%token_8_raw, 8, 504)] : index
   %dst_row_8_raw = index.mul %token_8, %d_inner : index
   %dst_row_8 = index.add %dst_sequence_base, %dst_row_8_raw : index
   %dst_index_8_raw = index.add %dst_row_8, %channel : index
-  %dst_index_8 = index.assume %dst_index_8_raw
-      [range(%dst_index_8_raw, 0, 1073741823)] : index
-  view.store %activated8, %dst_v[%dst_index_8] :
-      f32, view<1073741824xf32> // DST_STORE_8
-
+  %dst_index_8 = index.assume %dst_index_8_raw [range(%dst_index_8_raw, 0, 1073741823)] : index
+  view.store %activated8, %dst_v[%dst_index_8] : f32, view<1073741824xf32>
+  // DST_STORE_8
   %token_9_raw = index.add %wave_token_base, %c9 : index
-  %token_9 = index.assume %token_9_raw
-      [range(%token_9_raw, 9, 505)] : index
+  %token_9 = index.assume %token_9_raw [range(%token_9_raw, 9, 505)] : index
   %dst_row_9_raw = index.mul %token_9, %d_inner : index
   %dst_row_9 = index.add %dst_sequence_base, %dst_row_9_raw : index
   %dst_index_9_raw = index.add %dst_row_9, %channel : index
-  %dst_index_9 = index.assume %dst_index_9_raw
-      [range(%dst_index_9_raw, 0, 1073741823)] : index
-  view.store %activated9, %dst_v[%dst_index_9] :
-      f32, view<1073741824xf32> // DST_STORE_9
-
+  %dst_index_9 = index.assume %dst_index_9_raw [range(%dst_index_9_raw, 0, 1073741823)] : index
+  view.store %activated9, %dst_v[%dst_index_9] : f32, view<1073741824xf32>
+  // DST_STORE_9
   %token_10_raw = index.add %wave_token_base, %c10 : index
-  %token_10 = index.assume %token_10_raw
-      [range(%token_10_raw, 10, 506)] : index
+  %token_10 = index.assume %token_10_raw [range(%token_10_raw, 10, 506)] : index
   %dst_row_10_raw = index.mul %token_10, %d_inner : index
   %dst_row_10 = index.add %dst_sequence_base, %dst_row_10_raw : index
   %dst_index_10_raw = index.add %dst_row_10, %channel : index
-  %dst_index_10 = index.assume %dst_index_10_raw
-      [range(%dst_index_10_raw, 0, 1073741823)] : index
-  view.store %activated10, %dst_v[%dst_index_10] :
-      f32, view<1073741824xf32> // DST_STORE_10
-
+  %dst_index_10 = index.assume %dst_index_10_raw [range(%dst_index_10_raw, 0, 1073741823)] : index
+  view.store %activated10, %dst_v[%dst_index_10] : f32, view<1073741824xf32>
+  // DST_STORE_10
   %token_11_raw = index.add %wave_token_base, %c11 : index
-  %token_11 = index.assume %token_11_raw
-      [range(%token_11_raw, 11, 507)] : index
+  %token_11 = index.assume %token_11_raw [range(%token_11_raw, 11, 507)] : index
   %dst_row_11_raw = index.mul %token_11, %d_inner : index
   %dst_row_11 = index.add %dst_sequence_base, %dst_row_11_raw : index
   %dst_index_11_raw = index.add %dst_row_11, %channel : index
-  %dst_index_11 = index.assume %dst_index_11_raw
-      [range(%dst_index_11_raw, 0, 1073741823)] : index
-  view.store %activated11, %dst_v[%dst_index_11] :
-      f32, view<1073741824xf32> // DST_STORE_11
-
+  %dst_index_11 = index.assume %dst_index_11_raw [range(%dst_index_11_raw, 0, 1073741823)] : index
+  view.store %activated11, %dst_v[%dst_index_11] : f32, view<1073741824xf32>
+  // DST_STORE_11
   %token_12_raw = index.add %wave_token_base, %c12 : index
-  %token_12 = index.assume %token_12_raw
-      [range(%token_12_raw, 12, 508)] : index
+  %token_12 = index.assume %token_12_raw [range(%token_12_raw, 12, 508)] : index
   %dst_row_12_raw = index.mul %token_12, %d_inner : index
   %dst_row_12 = index.add %dst_sequence_base, %dst_row_12_raw : index
   %dst_index_12_raw = index.add %dst_row_12, %channel : index
-  %dst_index_12 = index.assume %dst_index_12_raw
-      [range(%dst_index_12_raw, 0, 1073741823)] : index
-  view.store %activated12, %dst_v[%dst_index_12] :
-      f32, view<1073741824xf32> // DST_STORE_12
-
+  %dst_index_12 = index.assume %dst_index_12_raw [range(%dst_index_12_raw, 0, 1073741823)] : index
+  view.store %activated12, %dst_v[%dst_index_12] : f32, view<1073741824xf32>
+  // DST_STORE_12
   %token_13_raw = index.add %wave_token_base, %c13 : index
-  %token_13 = index.assume %token_13_raw
-      [range(%token_13_raw, 13, 509)] : index
+  %token_13 = index.assume %token_13_raw [range(%token_13_raw, 13, 509)] : index
   %dst_row_13_raw = index.mul %token_13, %d_inner : index
   %dst_row_13 = index.add %dst_sequence_base, %dst_row_13_raw : index
   %dst_index_13_raw = index.add %dst_row_13, %channel : index
-  %dst_index_13 = index.assume %dst_index_13_raw
-      [range(%dst_index_13_raw, 0, 1073741823)] : index
-  view.store %activated13, %dst_v[%dst_index_13] :
-      f32, view<1073741824xf32> // DST_STORE_13
-
+  %dst_index_13 = index.assume %dst_index_13_raw [range(%dst_index_13_raw, 0, 1073741823)] : index
+  view.store %activated13, %dst_v[%dst_index_13] : f32, view<1073741824xf32>
+  // DST_STORE_13
   %token_14_raw = index.add %wave_token_base, %c14 : index
-  %token_14 = index.assume %token_14_raw
-      [range(%token_14_raw, 14, 510)] : index
+  %token_14 = index.assume %token_14_raw [range(%token_14_raw, 14, 510)] : index
   %dst_row_14_raw = index.mul %token_14, %d_inner : index
   %dst_row_14 = index.add %dst_sequence_base, %dst_row_14_raw : index
   %dst_index_14_raw = index.add %dst_row_14, %channel : index
-  %dst_index_14 = index.assume %dst_index_14_raw
-      [range(%dst_index_14_raw, 0, 1073741823)] : index
-  view.store %activated14, %dst_v[%dst_index_14] :
-      f32, view<1073741824xf32> // DST_STORE_14
-
+  %dst_index_14 = index.assume %dst_index_14_raw [range(%dst_index_14_raw, 0, 1073741823)] : index
+  view.store %activated14, %dst_v[%dst_index_14] : f32, view<1073741824xf32>
+  // DST_STORE_14
   %token_15_raw = index.add %wave_token_base, %c15 : index
-  %token_15 = index.assume %token_15_raw
-      [range(%token_15_raw, 15, 511)] : index
+  %token_15 = index.assume %token_15_raw [range(%token_15_raw, 15, 511)] : index
   %dst_row_15_raw = index.mul %token_15, %d_inner : index
   %dst_row_15 = index.add %dst_sequence_base, %dst_row_15_raw : index
   %dst_index_15_raw = index.add %dst_row_15, %channel : index
-  %dst_index_15 = index.assume %dst_index_15_raw
-      [range(%dst_index_15_raw, 0, 1073741823)] : index
-  view.store %activated15, %dst_v[%dst_index_15] :
-      f32, view<1073741824xf32> // DST_STORE_15
-
+  %dst_index_15 = index.assume %dst_index_15_raw [range(%dst_index_15_raw, 0, 1073741823)] : index
+  view.store %activated15, %dst_v[%dst_index_15] : f32, view<1073741824xf32>
+  // DST_STORE_15
   kernel.return
 }

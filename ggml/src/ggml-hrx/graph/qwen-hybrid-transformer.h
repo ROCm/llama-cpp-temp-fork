@@ -25,8 +25,16 @@ struct QwenHybridComponent {
     RegionBoundary           boundary;
 };
 
+enum class QwenHybridFeedForwardKind : uint8_t {
+    RoutedExperts,
+    DenseSwiGLU,
+};
+
 struct QwenHybridBlock {
     size_t                           ordinal            = 0;
+    QwenHybridFeedForwardKind        feed_forward_kind  = QwenHybridFeedForwardKind::RoutedExperts;
+    OperationId                      feed_forward_hero  = kInvalidId;
+    ValueId                          feed_forward_input = kInvalidId;
     OperationId                      router_projection  = kInvalidId;
     OperationId                      attention_residual = kInvalidId;
     OperationId                      final_residual     = kInvalidId;
@@ -63,9 +71,9 @@ class QwenHybridTransformerProvider final : public FusionProvider {
         supplied_model_(std::move(supplied_model)),
         supplied_recipes_(std::move(supplied_recipes)) {}
 
-    const char * id() const override { return "llm.qwen36_hybrid_transformer"; }
+    const char * id() const override { return "llm.qwen_hybrid_transformer"; }
 
-    const char * revision() const override { return "1"; }
+    const char * revision() const override { return "2"; }
 
     Decision discover(const GraphIndex & index, FactDatabase & facts) const override;
     void     seed(const GraphIndex &             index,

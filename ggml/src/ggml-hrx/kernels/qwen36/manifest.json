@@ -32,6 +32,70 @@
         "read",
         "read",
         "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "state",
+        "x",
+        "filt",
+        "dst",
+        "cache"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/ssm_conv/f32/channels_first_concat_silu_regblock_wg1024.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "ssm_conv_state_materialized_decode_silu",
+      "source": "legacy/sources/gfx1151/ssm_conv/f32/channels_first_concat_silu_regblock_wg1024.loom",
+      "symbol": "hrx2_ssm_conv_f32_state_materialized_decode_silu",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "alpha_raw",
+        "beta_raw",
+        "bias",
+        "a_scale",
+        "gate_dst",
+        "beta_dst"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_pp_gdn_dual_projection_epilogue.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "gdn_projection_epilogue_f32",
+      "source": "legacy/sources/gfx1151/mul_mat/f32_f32/mul_mat_f32_f32_pp_gdn_dual_projection_epilogue.loom",
+      "symbol": "hrx2_gdn_projection_epilogue_f32",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
         "write"
       ],
       "bindings": [
@@ -191,6 +255,48 @@
       "name": "gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused_wg256",
       "source": "legacy/sources/gfx1151/graph/gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused.loom",
       "symbol": "hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "q",
+        "k",
+        "v",
+        "g",
+        "beta",
+        "state_io",
+        "dst",
+        "rms_scales"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "library_sources": [],
+        "mode": "direct",
+        "primary_sources": [
+          "legacy/sources/gfx1151/graph/gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused.loom"
+        ]
+      },
+      "family": "qwen36",
+      "launch_parameters": [
+        {
+          "name": "scale",
+          "type": "f32"
+        }
+      ],
+      "name": "gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_state_cache_fused_wg256",
+      "source": "legacy/sources/gfx1151/graph/gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused.loom",
+      "symbol": "hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_state_cache_fused",
       "target_selector": "gfx1151",
       "workload_parameters": []
     },
@@ -547,6 +653,186 @@
   ],
   "storage_transforms": [
     {
+      "name": "q4_k_symi4_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [5120, 17408, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_tensor_symmetric_i4_k64",
+        "outer_count": 1,
+        "row_count": 17408,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [5120, 17408, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 17408,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [5120, 12288, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 12288,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [5120, 10240, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 10240,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [5120, 6144, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 6144,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [5120, 1024, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 1024,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q6_k_to_q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q6_K",
+        "shape": [17408, 5120, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q6_k_to_q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 5120,
+        "block_count": 68,
+        "field_count": 1,
+        "unit_bytes": 210,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q6_k_to_q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q6_K",
+        "shape": [5120, 10240, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q6_k_to_q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 10240,
+        "block_count": 20,
+        "field_count": 1,
+        "unit_bytes": 210,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q6_k_to_q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q6_K",
+        "shape": [5120, 1024, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q6_k_to_q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 1024,
+        "block_count": 20,
+        "field_count": 1,
+        "unit_bytes": 210,
+        "row_group": 8
+      }
+    },
+    {
+      "name": "q6_k_to_q4_k_tensor_payload_header8",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q6_K",
+        "shape": [5120, 248320, 1, 1],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q6_k_to_q4_k_tensor_payload_header8",
+        "outer_count": 1,
+        "row_count": 248320,
+        "block_count": 20,
+        "field_count": 1,
+        "unit_bytes": 210,
+        "row_group": 8
+      }
+    },
+    {
       "name": "q5_k_expert_down_group4",
       "target_selector": "gfx1151",
       "match": {
@@ -585,6 +871,167 @@
           8,
           10
         ]
+      }
+    },
+    {
+      "name": "q4_k_symi4_row64_k64",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [
+          5120,
+          17408,
+          1,
+          1
+        ],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_row_group_symmetric_i4_interleave",
+        "outer_count": 1,
+        "row_count": 17408,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 64
+      }
+    },
+    {
+      "name": "q4_k_i4_row64_k32",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [
+          17408,
+          5120,
+          1,
+          1
+        ],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_row_group_i4_interleave",
+        "outer_count": 1,
+        "row_count": 5120,
+        "block_count": 68,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 64
+      }
+    },
+    {
+      "name": "q4_k_i4_row64_k32",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [
+          6144,
+          5120,
+          1,
+          1
+        ],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_row_group_i4_interleave",
+        "outer_count": 1,
+        "row_count": 5120,
+        "block_count": 24,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 64
+      }
+    },
+    {
+      "name": "q4_k_i4_row64_k32",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [
+          5120,
+          12288,
+          1,
+          1
+        ],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_row_group_i4_interleave",
+        "outer_count": 1,
+        "row_count": 12288,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 64
+      }
+    },
+    {
+      "name": "q4_k_i4_row64_k32",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [
+          5120,
+          10240,
+          1,
+          1
+        ],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_row_group_i4_interleave",
+        "outer_count": 1,
+        "row_count": 10240,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 64
+      }
+    },
+    {
+      "name": "q4_k_i4_row64_k32",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [
+          5120,
+          6144,
+          1,
+          1
+        ],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_row_group_i4_interleave",
+        "outer_count": 1,
+        "row_count": 6144,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 64
+      }
+    },
+    {
+      "name": "q4_k_i4_row64_k32",
+      "target_selector": "gfx1151",
+      "match": {
+        "type": "Q4_K",
+        "shape": [
+          5120,
+          1024,
+          1,
+          1
+        ],
+        "contiguous": true
+      },
+      "transform": {
+        "kind": "q4_k_row_group_i4_interleave",
+        "outer_count": 1,
+        "row_count": 1024,
+        "block_count": 20,
+        "field_count": 9,
+        "unit_bytes": 16,
+        "row_group": 64
       }
     },
     {

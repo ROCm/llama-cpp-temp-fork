@@ -15,22 +15,36 @@
 // wave reductions per token.
 //
 // LDS 63296 B per workgroup; the full-head form admits one eight-wave workgroup per CU.
-
 config.decl @hrx2_shape_gdn_s_v : %value: index where [range(%value, 1, 4096)]
+
 config.decl @hrx2_shape_gdn_n_heads : %value: index where [range(%value, 1, 4096)]
+
 config.decl @hrx2_shape_gdn_n_tokens : %value: index where [range(%value, 1, 1048576)]
+
 config.decl @hrx2_shape_gdn_n_seqs : %value: index where [range(%value, 1, 4096)]
+
 config.decl @hrx2_shape_gdn_qk_scale_s1 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_qk_scale_s2 : %value: index where [range(%value, 0, 1073741823), mul(%value, 8)]
+
 config.decl @hrx2_shape_gdn_qk_scale_s3 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_sv1 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_sv2 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_sv3 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_sb1 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_sb2 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_sb3 : %value: index where [range(%value, 0, 1073741823)]
+
 config.decl @hrx2_shape_gdn_neqk1 : %value: index where [range(%value, 1, 4096)]
+
 config.decl @hrx2_shape_gdn_rq3 : %value: index where [range(%value, 1, 1024)]
+
 config.decl @hrx2_tuning_gdn_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 
 kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused") @hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fused() {
@@ -45,6 +59,33 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
   %col_blocks = index.div %cr, %blk : index
   kernel.launch.config workgroups(%n_heads, %n_seqs, %col_blocks) workgroup_size(%wg, %unit, %unit) : index
 } launch(%scale: f32, %q: buffer, %k: buffer, %v: buffer, %g: buffer, %beta: buffer, %state_in: buffer, %dst: buffer, %rms_scales: buffer) {
+  %state_inplace = scalar.constant false : i1
+  func.apply<qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body>(%state_inplace, %scale, %q, %k, %v, %g, %beta, %state_in, %dst, %rms_scales) : (i1, f32, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Decode specialization: the graph recipe owns the state gather and cache
+// publication boundaries, so the recurrent state can remain in its cache row.
+// The body is shared with the ordinary export and the literal mode is folded
+// by Loom's JIT specialization.
+kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_state_cache_fused") @hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_state_cache_fused() {
+  %unit = index.constant 1 : index
+  %wg = index.constant 256 : index
+  %blk = index.constant 128 : index
+  %blk_m = index.constant 127 : index
+  %s_v = config.get @hrx2_shape_gdn_s_v : index
+  %n_heads = config.get @hrx2_shape_gdn_n_heads : index
+  %n_seqs = config.get @hrx2_shape_gdn_n_seqs : index
+  %cr = index.add %s_v, %blk_m : index
+  %col_blocks = index.div %cr, %blk : index
+  kernel.launch.config workgroups(%n_heads, %n_seqs, %col_blocks) workgroup_size(%wg, %unit, %unit) : index
+} launch(%scale: f32, %q: buffer, %k: buffer, %v: buffer, %g: buffer, %beta: buffer, %state_inout: buffer, %dst: buffer, %rms_scales: buffer) {
+  %state_inplace = scalar.constant true : i1
+  func.apply<qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body>(%state_inplace, %scale, %q, %k, %v, %g, %beta, %state_inout, %dst, %rms_scales) : (i1, f32, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+func.template<qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gdn_sv128_qk_l2_full_head_rms_scale_body(%state_inplace: i1, %scale: f32, %q: buffer, %k: buffer, %v: buffer, %g: buffer, %beta: buffer, %state_in: buffer, %dst: buffer, %rms_scales: buffer) {
   %base = index.constant 0 : offset
   %rms_output_off = index.constant 0 : offset
   %zero = index.constant 0 : index
@@ -210,7 +251,7 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
   %b_view = buffer.view %b_g[%base] : buffer -> view<1073741824xf32>
   %si_view = buffer.view %si_g[%base] : buffer -> view<1073741824xf32>
   %dst_view = buffer.view %d_g[%base] : buffer -> view<1073741824xf32>
-  %rms_scales_view = buffer.view %rms_scales_g[%rms_output_off] : buffer -> view<16384xf32>
+  %rms_scales_view = buffer.view %rms_scales_g[%rms_output_off] : buffer -> view<1073741824xf32>
 
   %ae0 = index.mul %s_v, %n_heads : index
   %ae1 = index.mul %ae0, %n_tokens : index
@@ -377,28 +418,12 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
   %f0 = scalar.constant 0.0 : f32
   %rms_ncols_i32 = index.cast %k128 : index to i32
   %rms_ncols_f32 = scalar.sitofp %rms_ncols_i32 : i32 to f32
-  %norm_eps = scalar.constant 0.000001 : f32
+  %norm_eps = scalar.constant 9.9999999999999995e-07 : f32
   %norm_eps_sq = scalar.mulf<nnan|ninf|nsz> %norm_eps, %norm_eps : f32
   %fz8 = vector.constant 0.0 : vector<8xf32>
   %zv8 = vector.constant 0.0 : vector<8xf32>
   %fzh8 = vector.constant 0.0 : vector<8xf16>
-  %sf0, %sf1, %sf2, %sf3, %sf4, %sf5, %sf6, %sf7, %sf8, %sf9, %sf10, %sf11, %sf12, %sf13, %sf14, %sf15 = scf.for %ch = [%zero to %n_chunks step %one](
-      %sa0 = %s0_init : vector<4xf32>,
-      %sa1 = %s1_init : vector<4xf32>,
-      %sa2 = %s2_init : vector<4xf32>,
-      %sa3 = %s3_init : vector<4xf32>,
-      %sa4 = %s4_init : vector<4xf32>,
-      %sa5 = %s5_init : vector<4xf32>,
-      %sa6 = %s6_init : vector<4xf32>,
-      %sa7 = %s7_init : vector<4xf32>,
-      %sa8 = %s8_init : vector<4xf32>,
-      %sa9 = %s9_init : vector<4xf32>,
-      %sa10 = %s10_init : vector<4xf32>,
-      %sa11 = %s11_init : vector<4xf32>,
-      %sa12 = %s12_init : vector<4xf32>,
-      %sa13 = %s13_init : vector<4xf32>,
-      %sa14 = %s14_init : vector<4xf32>,
-      %sa15 = %s15_init : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %sf0, %sf1, %sf2, %sf3, %sf4, %sf5, %sf6, %sf7, %sf8, %sf9, %sf10, %sf11, %sf12, %sf13, %sf14, %sf15 = scf.for %ch = [%zero to %n_chunks step %one](%sa0 = %s0_init : vector<4xf32>, %sa1 = %s1_init : vector<4xf32>, %sa2 = %s2_init : vector<4xf32>, %sa3 = %s3_init : vector<4xf32>, %sa4 = %s4_init : vector<4xf32>, %sa5 = %s5_init : vector<4xf32>, %sa6 = %s6_init : vector<4xf32>, %sa7 = %s7_init : vector<4xf32>, %sa8 = %s8_init : vector<4xf32>, %sa9 = %s9_init : vector<4xf32>, %sa10 = %s10_init : vector<4xf32>, %sa11 = %s11_init : vector<4xf32>, %sa12 = %s12_init : vector<4xf32>, %sa13 = %s13_init : vector<4xf32>, %sa14 = %s14_init : vector<4xf32>, %sa15 = %s15_init : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
     %t0 = index.mul %ch, %k16 : index
     // Gate prefix/suffix decays for the chunk, computed once per workgroup
     // in log space. This avoids underflow followed by division of gate
@@ -774,86 +799,86 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
 
     // State shard -> LDS as f16: the lhs of both A and B.
     %shx0 = vector.fptrunc %sa0 : vector<4xf32> to vector<4xf16>
-        %shi0_m = index.mul %k0, %k136 : index
-        %shi0_a = index.add %shi0_m, %row0 : index
-        %shi0 = index.assume %shi0_a [range(%shi0_a, 0, 2172)] : index
-        vector.store %shx0, %sh_flat[%shi0] : vector<4xf16>, view<2176xf16>
-        %shx1 = vector.fptrunc %sa1 : vector<4xf32> to vector<4xf16>
-        %shi1_m = index.mul %k1, %k136 : index
-        %shi1_a = index.add %shi1_m, %row0 : index
-        %shi1 = index.assume %shi1_a [range(%shi1_a, 0, 2172)] : index
-        vector.store %shx1, %sh_flat[%shi1] : vector<4xf16>, view<2176xf16>
-        %shx2 = vector.fptrunc %sa2 : vector<4xf32> to vector<4xf16>
-        %shi2_m = index.mul %k2, %k136 : index
-        %shi2_a = index.add %shi2_m, %row0 : index
-        %shi2 = index.assume %shi2_a [range(%shi2_a, 0, 2172)] : index
-        vector.store %shx2, %sh_flat[%shi2] : vector<4xf16>, view<2176xf16>
-        %shx3 = vector.fptrunc %sa3 : vector<4xf32> to vector<4xf16>
-        %shi3_m = index.mul %k3, %k136 : index
-        %shi3_a = index.add %shi3_m, %row0 : index
-        %shi3 = index.assume %shi3_a [range(%shi3_a, 0, 2172)] : index
-        vector.store %shx3, %sh_flat[%shi3] : vector<4xf16>, view<2176xf16>
-        %shx4 = vector.fptrunc %sa4 : vector<4xf32> to vector<4xf16>
-        %shi4_m = index.mul %k4, %k136 : index
-        %shi4_a = index.add %shi4_m, %row0 : index
-        %shi4 = index.assume %shi4_a [range(%shi4_a, 0, 2172)] : index
-        vector.store %shx4, %sh_flat[%shi4] : vector<4xf16>, view<2176xf16>
-        %shx5 = vector.fptrunc %sa5 : vector<4xf32> to vector<4xf16>
-        %shi5_m = index.mul %k5, %k136 : index
-        %shi5_a = index.add %shi5_m, %row0 : index
-        %shi5 = index.assume %shi5_a [range(%shi5_a, 0, 2172)] : index
-        vector.store %shx5, %sh_flat[%shi5] : vector<4xf16>, view<2176xf16>
-        %shx6 = vector.fptrunc %sa6 : vector<4xf32> to vector<4xf16>
-        %shi6_m = index.mul %k6, %k136 : index
-        %shi6_a = index.add %shi6_m, %row0 : index
-        %shi6 = index.assume %shi6_a [range(%shi6_a, 0, 2172)] : index
-        vector.store %shx6, %sh_flat[%shi6] : vector<4xf16>, view<2176xf16>
-        %shx7 = vector.fptrunc %sa7 : vector<4xf32> to vector<4xf16>
-        %shi7_m = index.mul %k7, %k136 : index
-        %shi7_a = index.add %shi7_m, %row0 : index
-        %shi7 = index.assume %shi7_a [range(%shi7_a, 0, 2172)] : index
-        vector.store %shx7, %sh_flat[%shi7] : vector<4xf16>, view<2176xf16>
-        %shx8 = vector.fptrunc %sa8 : vector<4xf32> to vector<4xf16>
-        %shi8_m = index.mul %k8, %k136 : index
-        %shi8_a = index.add %shi8_m, %row0 : index
-        %shi8 = index.assume %shi8_a [range(%shi8_a, 0, 2172)] : index
-        vector.store %shx8, %sh_flat[%shi8] : vector<4xf16>, view<2176xf16>
-        %shx9 = vector.fptrunc %sa9 : vector<4xf32> to vector<4xf16>
-        %shi9_m = index.mul %k9, %k136 : index
-        %shi9_a = index.add %shi9_m, %row0 : index
-        %shi9 = index.assume %shi9_a [range(%shi9_a, 0, 2172)] : index
-        vector.store %shx9, %sh_flat[%shi9] : vector<4xf16>, view<2176xf16>
-        %shx10 = vector.fptrunc %sa10 : vector<4xf32> to vector<4xf16>
-        %shi10_m = index.mul %k10, %k136 : index
-        %shi10_a = index.add %shi10_m, %row0 : index
-        %shi10 = index.assume %shi10_a [range(%shi10_a, 0, 2172)] : index
-        vector.store %shx10, %sh_flat[%shi10] : vector<4xf16>, view<2176xf16>
-        %shx11 = vector.fptrunc %sa11 : vector<4xf32> to vector<4xf16>
-        %shi11_m = index.mul %k11, %k136 : index
-        %shi11_a = index.add %shi11_m, %row0 : index
-        %shi11 = index.assume %shi11_a [range(%shi11_a, 0, 2172)] : index
-        vector.store %shx11, %sh_flat[%shi11] : vector<4xf16>, view<2176xf16>
-        %shx12 = vector.fptrunc %sa12 : vector<4xf32> to vector<4xf16>
-        %shi12_m = index.mul %k12, %k136 : index
-        %shi12_a = index.add %shi12_m, %row0 : index
-        %shi12 = index.assume %shi12_a [range(%shi12_a, 0, 2172)] : index
-        vector.store %shx12, %sh_flat[%shi12] : vector<4xf16>, view<2176xf16>
-        %shx13 = vector.fptrunc %sa13 : vector<4xf32> to vector<4xf16>
-        %shi13_m = index.mul %k13, %k136 : index
-        %shi13_a = index.add %shi13_m, %row0 : index
-        %shi13 = index.assume %shi13_a [range(%shi13_a, 0, 2172)] : index
-        vector.store %shx13, %sh_flat[%shi13] : vector<4xf16>, view<2176xf16>
-        %shx14 = vector.fptrunc %sa14 : vector<4xf32> to vector<4xf16>
-        %shi14_m = index.mul %k14, %k136 : index
-        %shi14_a = index.add %shi14_m, %row0 : index
-        %shi14 = index.assume %shi14_a [range(%shi14_a, 0, 2172)] : index
-        vector.store %shx14, %sh_flat[%shi14] : vector<4xf16>, view<2176xf16>
-        %shx15 = vector.fptrunc %sa15 : vector<4xf32> to vector<4xf16>
-        %shi15_m = index.mul %k15, %k136 : index
-        %shi15_a = index.add %shi15_m, %row0 : index
-        %shi15 = index.assume %shi15_a [range(%shi15_a, 0, 2172)] : index
-        vector.store %shx15, %sh_flat[%shi15] : vector<4xf16>, view<2176xf16>
-        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %shi0_m = index.mul %k0, %k136 : index
+    %shi0_a = index.add %shi0_m, %row0 : index
+    %shi0 = index.assume %shi0_a [range(%shi0_a, 0, 2172)] : index
+    vector.store %shx0, %sh_flat[%shi0] : vector<4xf16>, view<2176xf16>
+    %shx1 = vector.fptrunc %sa1 : vector<4xf32> to vector<4xf16>
+    %shi1_m = index.mul %k1, %k136 : index
+    %shi1_a = index.add %shi1_m, %row0 : index
+    %shi1 = index.assume %shi1_a [range(%shi1_a, 0, 2172)] : index
+    vector.store %shx1, %sh_flat[%shi1] : vector<4xf16>, view<2176xf16>
+    %shx2 = vector.fptrunc %sa2 : vector<4xf32> to vector<4xf16>
+    %shi2_m = index.mul %k2, %k136 : index
+    %shi2_a = index.add %shi2_m, %row0 : index
+    %shi2 = index.assume %shi2_a [range(%shi2_a, 0, 2172)] : index
+    vector.store %shx2, %sh_flat[%shi2] : vector<4xf16>, view<2176xf16>
+    %shx3 = vector.fptrunc %sa3 : vector<4xf32> to vector<4xf16>
+    %shi3_m = index.mul %k3, %k136 : index
+    %shi3_a = index.add %shi3_m, %row0 : index
+    %shi3 = index.assume %shi3_a [range(%shi3_a, 0, 2172)] : index
+    vector.store %shx3, %sh_flat[%shi3] : vector<4xf16>, view<2176xf16>
+    %shx4 = vector.fptrunc %sa4 : vector<4xf32> to vector<4xf16>
+    %shi4_m = index.mul %k4, %k136 : index
+    %shi4_a = index.add %shi4_m, %row0 : index
+    %shi4 = index.assume %shi4_a [range(%shi4_a, 0, 2172)] : index
+    vector.store %shx4, %sh_flat[%shi4] : vector<4xf16>, view<2176xf16>
+    %shx5 = vector.fptrunc %sa5 : vector<4xf32> to vector<4xf16>
+    %shi5_m = index.mul %k5, %k136 : index
+    %shi5_a = index.add %shi5_m, %row0 : index
+    %shi5 = index.assume %shi5_a [range(%shi5_a, 0, 2172)] : index
+    vector.store %shx5, %sh_flat[%shi5] : vector<4xf16>, view<2176xf16>
+    %shx6 = vector.fptrunc %sa6 : vector<4xf32> to vector<4xf16>
+    %shi6_m = index.mul %k6, %k136 : index
+    %shi6_a = index.add %shi6_m, %row0 : index
+    %shi6 = index.assume %shi6_a [range(%shi6_a, 0, 2172)] : index
+    vector.store %shx6, %sh_flat[%shi6] : vector<4xf16>, view<2176xf16>
+    %shx7 = vector.fptrunc %sa7 : vector<4xf32> to vector<4xf16>
+    %shi7_m = index.mul %k7, %k136 : index
+    %shi7_a = index.add %shi7_m, %row0 : index
+    %shi7 = index.assume %shi7_a [range(%shi7_a, 0, 2172)] : index
+    vector.store %shx7, %sh_flat[%shi7] : vector<4xf16>, view<2176xf16>
+    %shx8 = vector.fptrunc %sa8 : vector<4xf32> to vector<4xf16>
+    %shi8_m = index.mul %k8, %k136 : index
+    %shi8_a = index.add %shi8_m, %row0 : index
+    %shi8 = index.assume %shi8_a [range(%shi8_a, 0, 2172)] : index
+    vector.store %shx8, %sh_flat[%shi8] : vector<4xf16>, view<2176xf16>
+    %shx9 = vector.fptrunc %sa9 : vector<4xf32> to vector<4xf16>
+    %shi9_m = index.mul %k9, %k136 : index
+    %shi9_a = index.add %shi9_m, %row0 : index
+    %shi9 = index.assume %shi9_a [range(%shi9_a, 0, 2172)] : index
+    vector.store %shx9, %sh_flat[%shi9] : vector<4xf16>, view<2176xf16>
+    %shx10 = vector.fptrunc %sa10 : vector<4xf32> to vector<4xf16>
+    %shi10_m = index.mul %k10, %k136 : index
+    %shi10_a = index.add %shi10_m, %row0 : index
+    %shi10 = index.assume %shi10_a [range(%shi10_a, 0, 2172)] : index
+    vector.store %shx10, %sh_flat[%shi10] : vector<4xf16>, view<2176xf16>
+    %shx11 = vector.fptrunc %sa11 : vector<4xf32> to vector<4xf16>
+    %shi11_m = index.mul %k11, %k136 : index
+    %shi11_a = index.add %shi11_m, %row0 : index
+    %shi11 = index.assume %shi11_a [range(%shi11_a, 0, 2172)] : index
+    vector.store %shx11, %sh_flat[%shi11] : vector<4xf16>, view<2176xf16>
+    %shx12 = vector.fptrunc %sa12 : vector<4xf32> to vector<4xf16>
+    %shi12_m = index.mul %k12, %k136 : index
+    %shi12_a = index.add %shi12_m, %row0 : index
+    %shi12 = index.assume %shi12_a [range(%shi12_a, 0, 2172)] : index
+    vector.store %shx12, %sh_flat[%shi12] : vector<4xf16>, view<2176xf16>
+    %shx13 = vector.fptrunc %sa13 : vector<4xf32> to vector<4xf16>
+    %shi13_m = index.mul %k13, %k136 : index
+    %shi13_a = index.add %shi13_m, %row0 : index
+    %shi13 = index.assume %shi13_a [range(%shi13_a, 0, 2172)] : index
+    vector.store %shx13, %sh_flat[%shi13] : vector<4xf16>, view<2176xf16>
+    %shx14 = vector.fptrunc %sa14 : vector<4xf32> to vector<4xf16>
+    %shi14_m = index.mul %k14, %k136 : index
+    %shi14_a = index.add %shi14_m, %row0 : index
+    %shi14 = index.assume %shi14_a [range(%shi14_a, 0, 2172)] : index
+    vector.store %shx14, %sh_flat[%shi14] : vector<4xf16>, view<2176xf16>
+    %shx15 = vector.fptrunc %sa15 : vector<4xf32> to vector<4xf16>
+    %shi15_m = index.mul %k15, %k136 : index
+    %shi15_a = index.add %shi15_m, %row0 : index
+    %shi15 = index.assume %shi15_a [range(%shi15_a, 0, 2172)] : index
+    vector.store %shx15, %sh_flat[%shi15] : vector<4xf16>, view<2176xf16>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
 
     // ---- matmuls ----------------------------------------------------------
     %ma_a0 = vector.fragment<init> %fz8 shape [%k16, %k16] : vector<8xf32>
@@ -2266,8 +2291,7 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
     %rms_local_row = index.mul %stokl, %k128 : index
     %rms_local0 = index.add %rms_local_row, %srow0 : index
     %rms_local = index.assume %rms_local0 [range(%rms_local0, 0, 2040)] : index
-    %rms_values = vector.load %aost_flat[%rms_local] :
-        view<2048xf32> -> vector<8xf32>
+    %rms_values = vector.load %aost_flat[%rms_local] : view<2048xf32> -> vector<8xf32>
     // The standalone vector.reduce lowers to a left-associated accumulator
     // chain, but embedding that vector op in this larger kernel lets the
     // compiler legally reassociate it into a balanced tree. Spell out the
@@ -2281,38 +2305,22 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
     %rms_v5 = vector.extract %rms_values[5] : vector<8xf32> -> f32
     %rms_v6 = vector.extract %rms_values[6] : vector<8xf32> -> f32
     %rms_v7 = vector.extract %rms_values[7] : vector<8xf32> -> f32
-    %rms_sq0 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v0, %rms_v0 : f32
-    %rms_sq1 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v1, %rms_v1 : f32
-    %rms_sq2 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v2, %rms_v2 : f32
-    %rms_sq3 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v3, %rms_v3 : f32
-    %rms_sq4 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v4, %rms_v4 : f32
-    %rms_sq5 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v5, %rms_v5 : f32
-    %rms_sq6 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v6, %rms_v6 : f32
-    %rms_sq7 = scalar.mulf<reassoc|nnan|ninf|nsz>
-        %rms_v7, %rms_v7 : f32
-    %rms_acc0 = scalar.addf<reassoc|nnan|ninf|nsz>
-        %f0, %rms_sq0 : f32
-    %rms_acc1 = scalar.addf<reassoc|nnan|ninf|nsz>
-        %rms_acc0, %rms_sq1 : f32
-    %rms_acc2 = scalar.addf<reassoc|nnan|ninf|nsz>
-        %rms_acc1, %rms_sq2 : f32
-    %rms_acc3 = scalar.addf<reassoc|nnan|ninf|nsz>
-        %rms_acc2, %rms_sq3 : f32
-    %rms_acc4 = scalar.addf<reassoc|nnan|ninf|nsz>
-        %rms_acc3, %rms_sq4 : f32
-    %rms_acc5 = scalar.addf<reassoc|nnan|ninf|nsz>
-        %rms_acc4, %rms_sq5 : f32
-    %rms_acc6 = scalar.addf<reassoc|nnan|ninf|nsz>
-        %rms_acc5, %rms_sq6 : f32
-    %rms_partial = scalar.addf<reassoc|nnan|ninf|nsz>
-        %rms_acc6, %rms_sq7 : f32
+    %rms_sq0 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v0, %rms_v0 : f32
+    %rms_sq1 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v1, %rms_v1 : f32
+    %rms_sq2 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v2, %rms_v2 : f32
+    %rms_sq3 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v3, %rms_v3 : f32
+    %rms_sq4 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v4, %rms_v4 : f32
+    %rms_sq5 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v5, %rms_v5 : f32
+    %rms_sq6 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v6, %rms_v6 : f32
+    %rms_sq7 = scalar.mulf<reassoc|nnan|ninf|nsz> %rms_v7, %rms_v7 : f32
+    %rms_acc0 = scalar.addf<reassoc|nnan|ninf|nsz> %f0, %rms_sq0 : f32
+    %rms_acc1 = scalar.addf<reassoc|nnan|ninf|nsz> %rms_acc0, %rms_sq1 : f32
+    %rms_acc2 = scalar.addf<reassoc|nnan|ninf|nsz> %rms_acc1, %rms_sq2 : f32
+    %rms_acc3 = scalar.addf<reassoc|nnan|ninf|nsz> %rms_acc2, %rms_sq3 : f32
+    %rms_acc4 = scalar.addf<reassoc|nnan|ninf|nsz> %rms_acc3, %rms_sq4 : f32
+    %rms_acc5 = scalar.addf<reassoc|nnan|ninf|nsz> %rms_acc4, %rms_sq5 : f32
+    %rms_acc6 = scalar.addf<reassoc|nnan|ninf|nsz> %rms_acc5, %rms_sq6 : f32
+    %rms_partial = scalar.addf<reassoc|nnan|ninf|nsz> %rms_acc6, %rms_sq7 : f32
     // A cluster-size-16 reduction is not bitwise-equivalent to the accepted
     // workgroup reduction on gfx1151. Reproduce its full-wave first level:
     // the standalone prepass has live partials in lanes 0..15 and +0 in
@@ -2323,12 +2331,9 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
     %rms_lo_sum = kernel.subgroup.reduce<addf> %rms_lo_in : f32
     %rms_hi_sum = kernel.subgroup.reduce<addf> %rms_hi_in : f32
     %rms_sum = scf.select %lane_lo, %rms_lo_sum, %rms_hi_sum : f32
-    %rms_mean = scalar.divf<nnan|ninf|nsz|arcp>
-        %rms_sum, %rms_ncols_f32 : f32
-    %rms_mean_eps = scalar.addf<nnan|ninf|nsz>
-        %rms_mean, %norm_eps : f32
-    %rms_scale = scalar.rsqrtf<nnan|ninf|nsz|afn>
-        %rms_mean_eps : f32
+    %rms_mean = scalar.divf<nnan|ninf|nsz|arcp> %rms_sum, %rms_ncols_f32 : f32
+    %rms_mean_eps = scalar.addf<nnan|ninf|nsz> %rms_mean, %norm_eps : f32
+    %rms_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %rms_mean_eps : f32
 
     %rms_t_r = index.add %t0, %stokl : index
     %rms_t_ok = index.cmp ult, %rms_t_r, %n_tokens : index
@@ -2342,8 +2347,7 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
     %rms_lane0 = index.cmp eq, %srlane, %zero : index
     scf.if %rms_lane0 {
       scf.if %rms_t_ok {
-        view.store %rms_scale, %rms_scales_view[%rms_row] :
-            f32, view<16384xf32>
+        view.store %rms_scale, %rms_scales_view[%rms_row] : f32, view<1073741824xf32>
       }
     }
 
@@ -2528,70 +2532,70 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
     %rowh_r = index.rem %row0, %k64 : index
     %rowh = index.assume %rowh_r [range(%rowh_r, 0, 60)] : index
     %ur00_m = index.mul %k0, %k68 : index
-        %ur00_a = index.add %ur00_m, %rowh : index
-        %ur00_b = index.assume %ur00_a [range(%ur00_a, 0, 1084)] : index
-        %ur00 = vector.load %upd_flat[%ur00_b] : view<1088xf32> -> vector<4xf32>
-        %ur01_m = index.mul %k1, %k68 : index
-        %ur01_a = index.add %ur01_m, %rowh : index
-        %ur01_b = index.assume %ur01_a [range(%ur01_a, 0, 1084)] : index
-        %ur01 = vector.load %upd_flat[%ur01_b] : view<1088xf32> -> vector<4xf32>
-        %ur02_m = index.mul %k2, %k68 : index
-        %ur02_a = index.add %ur02_m, %rowh : index
-        %ur02_b = index.assume %ur02_a [range(%ur02_a, 0, 1084)] : index
-        %ur02 = vector.load %upd_flat[%ur02_b] : view<1088xf32> -> vector<4xf32>
-        %ur03_m = index.mul %k3, %k68 : index
-        %ur03_a = index.add %ur03_m, %rowh : index
-        %ur03_b = index.assume %ur03_a [range(%ur03_a, 0, 1084)] : index
-        %ur03 = vector.load %upd_flat[%ur03_b] : view<1088xf32> -> vector<4xf32>
-        %ur04_m = index.mul %k4, %k68 : index
-        %ur04_a = index.add %ur04_m, %rowh : index
-        %ur04_b = index.assume %ur04_a [range(%ur04_a, 0, 1084)] : index
-        %ur04 = vector.load %upd_flat[%ur04_b] : view<1088xf32> -> vector<4xf32>
-        %ur05_m = index.mul %k5, %k68 : index
-        %ur05_a = index.add %ur05_m, %rowh : index
-        %ur05_b = index.assume %ur05_a [range(%ur05_a, 0, 1084)] : index
-        %ur05 = vector.load %upd_flat[%ur05_b] : view<1088xf32> -> vector<4xf32>
-        %ur06_m = index.mul %k6, %k68 : index
-        %ur06_a = index.add %ur06_m, %rowh : index
-        %ur06_b = index.assume %ur06_a [range(%ur06_a, 0, 1084)] : index
-        %ur06 = vector.load %upd_flat[%ur06_b] : view<1088xf32> -> vector<4xf32>
-        %ur07_m = index.mul %k7, %k68 : index
-        %ur07_a = index.add %ur07_m, %rowh : index
-        %ur07_b = index.assume %ur07_a [range(%ur07_a, 0, 1084)] : index
-        %ur07 = vector.load %upd_flat[%ur07_b] : view<1088xf32> -> vector<4xf32>
-        %ur08_m = index.mul %k8, %k68 : index
-        %ur08_a = index.add %ur08_m, %rowh : index
-        %ur08_b = index.assume %ur08_a [range(%ur08_a, 0, 1084)] : index
-        %ur08 = vector.load %upd_flat[%ur08_b] : view<1088xf32> -> vector<4xf32>
-        %ur09_m = index.mul %k9, %k68 : index
-        %ur09_a = index.add %ur09_m, %rowh : index
-        %ur09_b = index.assume %ur09_a [range(%ur09_a, 0, 1084)] : index
-        %ur09 = vector.load %upd_flat[%ur09_b] : view<1088xf32> -> vector<4xf32>
-        %ur010_m = index.mul %k10, %k68 : index
-        %ur010_a = index.add %ur010_m, %rowh : index
-        %ur010_b = index.assume %ur010_a [range(%ur010_a, 0, 1084)] : index
-        %ur010 = vector.load %upd_flat[%ur010_b] : view<1088xf32> -> vector<4xf32>
-        %ur011_m = index.mul %k11, %k68 : index
-        %ur011_a = index.add %ur011_m, %rowh : index
-        %ur011_b = index.assume %ur011_a [range(%ur011_a, 0, 1084)] : index
-        %ur011 = vector.load %upd_flat[%ur011_b] : view<1088xf32> -> vector<4xf32>
-        %ur012_m = index.mul %k12, %k68 : index
-        %ur012_a = index.add %ur012_m, %rowh : index
-        %ur012_b = index.assume %ur012_a [range(%ur012_a, 0, 1084)] : index
-        %ur012 = vector.load %upd_flat[%ur012_b] : view<1088xf32> -> vector<4xf32>
-        %ur013_m = index.mul %k13, %k68 : index
-        %ur013_a = index.add %ur013_m, %rowh : index
-        %ur013_b = index.assume %ur013_a [range(%ur013_a, 0, 1084)] : index
-        %ur013 = vector.load %upd_flat[%ur013_b] : view<1088xf32> -> vector<4xf32>
-        %ur014_m = index.mul %k14, %k68 : index
-        %ur014_a = index.add %ur014_m, %rowh : index
-        %ur014_b = index.assume %ur014_a [range(%ur014_a, 0, 1084)] : index
-        %ur014 = vector.load %upd_flat[%ur014_b] : view<1088xf32> -> vector<4xf32>
-        %ur015_m = index.mul %k15, %k68 : index
-        %ur015_a = index.add %ur015_m, %rowh : index
-        %ur015_b = index.assume %ur015_a [range(%ur015_a, 0, 1084)] : index
-        %ur015 = vector.load %upd_flat[%ur015_b] : view<1088xf32> -> vector<4xf32>
-        %up10_i = vector.fragment<init> %fz8 shape [%k16, %k16] : vector<8xf32>
+    %ur00_a = index.add %ur00_m, %rowh : index
+    %ur00_b = index.assume %ur00_a [range(%ur00_a, 0, 1084)] : index
+    %ur00 = vector.load %upd_flat[%ur00_b] : view<1088xf32> -> vector<4xf32>
+    %ur01_m = index.mul %k1, %k68 : index
+    %ur01_a = index.add %ur01_m, %rowh : index
+    %ur01_b = index.assume %ur01_a [range(%ur01_a, 0, 1084)] : index
+    %ur01 = vector.load %upd_flat[%ur01_b] : view<1088xf32> -> vector<4xf32>
+    %ur02_m = index.mul %k2, %k68 : index
+    %ur02_a = index.add %ur02_m, %rowh : index
+    %ur02_b = index.assume %ur02_a [range(%ur02_a, 0, 1084)] : index
+    %ur02 = vector.load %upd_flat[%ur02_b] : view<1088xf32> -> vector<4xf32>
+    %ur03_m = index.mul %k3, %k68 : index
+    %ur03_a = index.add %ur03_m, %rowh : index
+    %ur03_b = index.assume %ur03_a [range(%ur03_a, 0, 1084)] : index
+    %ur03 = vector.load %upd_flat[%ur03_b] : view<1088xf32> -> vector<4xf32>
+    %ur04_m = index.mul %k4, %k68 : index
+    %ur04_a = index.add %ur04_m, %rowh : index
+    %ur04_b = index.assume %ur04_a [range(%ur04_a, 0, 1084)] : index
+    %ur04 = vector.load %upd_flat[%ur04_b] : view<1088xf32> -> vector<4xf32>
+    %ur05_m = index.mul %k5, %k68 : index
+    %ur05_a = index.add %ur05_m, %rowh : index
+    %ur05_b = index.assume %ur05_a [range(%ur05_a, 0, 1084)] : index
+    %ur05 = vector.load %upd_flat[%ur05_b] : view<1088xf32> -> vector<4xf32>
+    %ur06_m = index.mul %k6, %k68 : index
+    %ur06_a = index.add %ur06_m, %rowh : index
+    %ur06_b = index.assume %ur06_a [range(%ur06_a, 0, 1084)] : index
+    %ur06 = vector.load %upd_flat[%ur06_b] : view<1088xf32> -> vector<4xf32>
+    %ur07_m = index.mul %k7, %k68 : index
+    %ur07_a = index.add %ur07_m, %rowh : index
+    %ur07_b = index.assume %ur07_a [range(%ur07_a, 0, 1084)] : index
+    %ur07 = vector.load %upd_flat[%ur07_b] : view<1088xf32> -> vector<4xf32>
+    %ur08_m = index.mul %k8, %k68 : index
+    %ur08_a = index.add %ur08_m, %rowh : index
+    %ur08_b = index.assume %ur08_a [range(%ur08_a, 0, 1084)] : index
+    %ur08 = vector.load %upd_flat[%ur08_b] : view<1088xf32> -> vector<4xf32>
+    %ur09_m = index.mul %k9, %k68 : index
+    %ur09_a = index.add %ur09_m, %rowh : index
+    %ur09_b = index.assume %ur09_a [range(%ur09_a, 0, 1084)] : index
+    %ur09 = vector.load %upd_flat[%ur09_b] : view<1088xf32> -> vector<4xf32>
+    %ur010_m = index.mul %k10, %k68 : index
+    %ur010_a = index.add %ur010_m, %rowh : index
+    %ur010_b = index.assume %ur010_a [range(%ur010_a, 0, 1084)] : index
+    %ur010 = vector.load %upd_flat[%ur010_b] : view<1088xf32> -> vector<4xf32>
+    %ur011_m = index.mul %k11, %k68 : index
+    %ur011_a = index.add %ur011_m, %rowh : index
+    %ur011_b = index.assume %ur011_a [range(%ur011_a, 0, 1084)] : index
+    %ur011 = vector.load %upd_flat[%ur011_b] : view<1088xf32> -> vector<4xf32>
+    %ur012_m = index.mul %k12, %k68 : index
+    %ur012_a = index.add %ur012_m, %rowh : index
+    %ur012_b = index.assume %ur012_a [range(%ur012_a, 0, 1084)] : index
+    %ur012 = vector.load %upd_flat[%ur012_b] : view<1088xf32> -> vector<4xf32>
+    %ur013_m = index.mul %k13, %k68 : index
+    %ur013_a = index.add %ur013_m, %rowh : index
+    %ur013_b = index.assume %ur013_a [range(%ur013_a, 0, 1084)] : index
+    %ur013 = vector.load %upd_flat[%ur013_b] : view<1088xf32> -> vector<4xf32>
+    %ur014_m = index.mul %k14, %k68 : index
+    %ur014_a = index.add %ur014_m, %rowh : index
+    %ur014_b = index.assume %ur014_a [range(%ur014_a, 0, 1084)] : index
+    %ur014 = vector.load %upd_flat[%ur014_b] : view<1088xf32> -> vector<4xf32>
+    %ur015_m = index.mul %k15, %k68 : index
+    %ur015_a = index.add %ur015_m, %rowh : index
+    %ur015_b = index.assume %ur015_a [range(%ur015_a, 0, 1084)] : index
+    %ur015 = vector.load %upd_flat[%ur015_b] : view<1088xf32> -> vector<4xf32>
+    %up10_i = vector.fragment<init> %fz8 shape [%k16, %k16] : vector<8xf32>
     %up10_l = vector.fragment.load<lhs> %d_lhs[%k0, %k0] shape [%k16, %k16] : view<16x16xf16, %lay_dcol> -> vector<16xf16>
     %up10_r = vector.fragment.load<rhs> %ka_rhs[%k0, %k64] shape [%k16, %k16] : view<16x128xf16, %lay_katok> -> vector<16xf16>
     %up10_m = vector.mma %up10_l, %up10_r, %up10_i : vector<16xf16>, vector<16xf16>, vector<8xf32>
@@ -2614,69 +2618,69 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
     vector.fragment.store<result> %up13_m, %upd_tile[%k0, %k48] shape [%k16, %k16] : vector<8xf32>, view<16x68xf32, %lay_upd>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     %ur10_m = index.mul %k0, %k68 : index
-        %ur10_a = index.add %ur10_m, %rowh : index
-        %ur10_b = index.assume %ur10_a [range(%ur10_a, 0, 1084)] : index
-        %ur10 = vector.load %upd_flat[%ur10_b] : view<1088xf32> -> vector<4xf32>
-        %ur11_m = index.mul %k1, %k68 : index
-        %ur11_a = index.add %ur11_m, %rowh : index
-        %ur11_b = index.assume %ur11_a [range(%ur11_a, 0, 1084)] : index
-        %ur11 = vector.load %upd_flat[%ur11_b] : view<1088xf32> -> vector<4xf32>
-        %ur12_m = index.mul %k2, %k68 : index
-        %ur12_a = index.add %ur12_m, %rowh : index
-        %ur12_b = index.assume %ur12_a [range(%ur12_a, 0, 1084)] : index
-        %ur12 = vector.load %upd_flat[%ur12_b] : view<1088xf32> -> vector<4xf32>
-        %ur13_m = index.mul %k3, %k68 : index
-        %ur13_a = index.add %ur13_m, %rowh : index
-        %ur13_b = index.assume %ur13_a [range(%ur13_a, 0, 1084)] : index
-        %ur13 = vector.load %upd_flat[%ur13_b] : view<1088xf32> -> vector<4xf32>
-        %ur14_m = index.mul %k4, %k68 : index
-        %ur14_a = index.add %ur14_m, %rowh : index
-        %ur14_b = index.assume %ur14_a [range(%ur14_a, 0, 1084)] : index
-        %ur14 = vector.load %upd_flat[%ur14_b] : view<1088xf32> -> vector<4xf32>
-        %ur15_m = index.mul %k5, %k68 : index
-        %ur15_a = index.add %ur15_m, %rowh : index
-        %ur15_b = index.assume %ur15_a [range(%ur15_a, 0, 1084)] : index
-        %ur15 = vector.load %upd_flat[%ur15_b] : view<1088xf32> -> vector<4xf32>
-        %ur16_m = index.mul %k6, %k68 : index
-        %ur16_a = index.add %ur16_m, %rowh : index
-        %ur16_b = index.assume %ur16_a [range(%ur16_a, 0, 1084)] : index
-        %ur16 = vector.load %upd_flat[%ur16_b] : view<1088xf32> -> vector<4xf32>
-        %ur17_m = index.mul %k7, %k68 : index
-        %ur17_a = index.add %ur17_m, %rowh : index
-        %ur17_b = index.assume %ur17_a [range(%ur17_a, 0, 1084)] : index
-        %ur17 = vector.load %upd_flat[%ur17_b] : view<1088xf32> -> vector<4xf32>
-        %ur18_m = index.mul %k8, %k68 : index
-        %ur18_a = index.add %ur18_m, %rowh : index
-        %ur18_b = index.assume %ur18_a [range(%ur18_a, 0, 1084)] : index
-        %ur18 = vector.load %upd_flat[%ur18_b] : view<1088xf32> -> vector<4xf32>
-        %ur19_m = index.mul %k9, %k68 : index
-        %ur19_a = index.add %ur19_m, %rowh : index
-        %ur19_b = index.assume %ur19_a [range(%ur19_a, 0, 1084)] : index
-        %ur19 = vector.load %upd_flat[%ur19_b] : view<1088xf32> -> vector<4xf32>
-        %ur110_m = index.mul %k10, %k68 : index
-        %ur110_a = index.add %ur110_m, %rowh : index
-        %ur110_b = index.assume %ur110_a [range(%ur110_a, 0, 1084)] : index
-        %ur110 = vector.load %upd_flat[%ur110_b] : view<1088xf32> -> vector<4xf32>
-        %ur111_m = index.mul %k11, %k68 : index
-        %ur111_a = index.add %ur111_m, %rowh : index
-        %ur111_b = index.assume %ur111_a [range(%ur111_a, 0, 1084)] : index
-        %ur111 = vector.load %upd_flat[%ur111_b] : view<1088xf32> -> vector<4xf32>
-        %ur112_m = index.mul %k12, %k68 : index
-        %ur112_a = index.add %ur112_m, %rowh : index
-        %ur112_b = index.assume %ur112_a [range(%ur112_a, 0, 1084)] : index
-        %ur112 = vector.load %upd_flat[%ur112_b] : view<1088xf32> -> vector<4xf32>
-        %ur113_m = index.mul %k13, %k68 : index
-        %ur113_a = index.add %ur113_m, %rowh : index
-        %ur113_b = index.assume %ur113_a [range(%ur113_a, 0, 1084)] : index
-        %ur113 = vector.load %upd_flat[%ur113_b] : view<1088xf32> -> vector<4xf32>
-        %ur114_m = index.mul %k14, %k68 : index
-        %ur114_a = index.add %ur114_m, %rowh : index
-        %ur114_b = index.assume %ur114_a [range(%ur114_a, 0, 1084)] : index
-        %ur114 = vector.load %upd_flat[%ur114_b] : view<1088xf32> -> vector<4xf32>
-        %ur115_m = index.mul %k15, %k68 : index
-        %ur115_a = index.add %ur115_m, %rowh : index
-        %ur115_b = index.assume %ur115_a [range(%ur115_a, 0, 1084)] : index
-        %ur115 = vector.load %upd_flat[%ur115_b] : view<1088xf32> -> vector<4xf32>
+    %ur10_a = index.add %ur10_m, %rowh : index
+    %ur10_b = index.assume %ur10_a [range(%ur10_a, 0, 1084)] : index
+    %ur10 = vector.load %upd_flat[%ur10_b] : view<1088xf32> -> vector<4xf32>
+    %ur11_m = index.mul %k1, %k68 : index
+    %ur11_a = index.add %ur11_m, %rowh : index
+    %ur11_b = index.assume %ur11_a [range(%ur11_a, 0, 1084)] : index
+    %ur11 = vector.load %upd_flat[%ur11_b] : view<1088xf32> -> vector<4xf32>
+    %ur12_m = index.mul %k2, %k68 : index
+    %ur12_a = index.add %ur12_m, %rowh : index
+    %ur12_b = index.assume %ur12_a [range(%ur12_a, 0, 1084)] : index
+    %ur12 = vector.load %upd_flat[%ur12_b] : view<1088xf32> -> vector<4xf32>
+    %ur13_m = index.mul %k3, %k68 : index
+    %ur13_a = index.add %ur13_m, %rowh : index
+    %ur13_b = index.assume %ur13_a [range(%ur13_a, 0, 1084)] : index
+    %ur13 = vector.load %upd_flat[%ur13_b] : view<1088xf32> -> vector<4xf32>
+    %ur14_m = index.mul %k4, %k68 : index
+    %ur14_a = index.add %ur14_m, %rowh : index
+    %ur14_b = index.assume %ur14_a [range(%ur14_a, 0, 1084)] : index
+    %ur14 = vector.load %upd_flat[%ur14_b] : view<1088xf32> -> vector<4xf32>
+    %ur15_m = index.mul %k5, %k68 : index
+    %ur15_a = index.add %ur15_m, %rowh : index
+    %ur15_b = index.assume %ur15_a [range(%ur15_a, 0, 1084)] : index
+    %ur15 = vector.load %upd_flat[%ur15_b] : view<1088xf32> -> vector<4xf32>
+    %ur16_m = index.mul %k6, %k68 : index
+    %ur16_a = index.add %ur16_m, %rowh : index
+    %ur16_b = index.assume %ur16_a [range(%ur16_a, 0, 1084)] : index
+    %ur16 = vector.load %upd_flat[%ur16_b] : view<1088xf32> -> vector<4xf32>
+    %ur17_m = index.mul %k7, %k68 : index
+    %ur17_a = index.add %ur17_m, %rowh : index
+    %ur17_b = index.assume %ur17_a [range(%ur17_a, 0, 1084)] : index
+    %ur17 = vector.load %upd_flat[%ur17_b] : view<1088xf32> -> vector<4xf32>
+    %ur18_m = index.mul %k8, %k68 : index
+    %ur18_a = index.add %ur18_m, %rowh : index
+    %ur18_b = index.assume %ur18_a [range(%ur18_a, 0, 1084)] : index
+    %ur18 = vector.load %upd_flat[%ur18_b] : view<1088xf32> -> vector<4xf32>
+    %ur19_m = index.mul %k9, %k68 : index
+    %ur19_a = index.add %ur19_m, %rowh : index
+    %ur19_b = index.assume %ur19_a [range(%ur19_a, 0, 1084)] : index
+    %ur19 = vector.load %upd_flat[%ur19_b] : view<1088xf32> -> vector<4xf32>
+    %ur110_m = index.mul %k10, %k68 : index
+    %ur110_a = index.add %ur110_m, %rowh : index
+    %ur110_b = index.assume %ur110_a [range(%ur110_a, 0, 1084)] : index
+    %ur110 = vector.load %upd_flat[%ur110_b] : view<1088xf32> -> vector<4xf32>
+    %ur111_m = index.mul %k11, %k68 : index
+    %ur111_a = index.add %ur111_m, %rowh : index
+    %ur111_b = index.assume %ur111_a [range(%ur111_a, 0, 1084)] : index
+    %ur111 = vector.load %upd_flat[%ur111_b] : view<1088xf32> -> vector<4xf32>
+    %ur112_m = index.mul %k12, %k68 : index
+    %ur112_a = index.add %ur112_m, %rowh : index
+    %ur112_b = index.assume %ur112_a [range(%ur112_a, 0, 1084)] : index
+    %ur112 = vector.load %upd_flat[%ur112_b] : view<1088xf32> -> vector<4xf32>
+    %ur113_m = index.mul %k13, %k68 : index
+    %ur113_a = index.add %ur113_m, %rowh : index
+    %ur113_b = index.assume %ur113_a [range(%ur113_a, 0, 1084)] : index
+    %ur113 = vector.load %upd_flat[%ur113_b] : view<1088xf32> -> vector<4xf32>
+    %ur114_m = index.mul %k14, %k68 : index
+    %ur114_a = index.add %ur114_m, %rowh : index
+    %ur114_b = index.assume %ur114_a [range(%ur114_a, 0, 1084)] : index
+    %ur114 = vector.load %upd_flat[%ur114_b] : view<1088xf32> -> vector<4xf32>
+    %ur115_m = index.mul %k15, %k68 : index
+    %ur115_a = index.add %ur115_m, %rowh : index
+    %ur115_b = index.assume %ur115_a [range(%ur115_a, 0, 1084)] : index
+    %ur115 = vector.load %upd_flat[%ur115_b] : view<1088xf32> -> vector<4xf32>
 
     %usel0 = scf.select %lane_lo, %ur00, %ur10 : vector<4xf32>
     %sdec0 = vector.mulf<nnan|ninf|nsz> %sa0, %clv : vector<4xf32>
@@ -2730,58 +2734,78 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_fuse
     scf.yield %snew0, %snew1, %snew2, %snew3, %snew4, %snew5, %snew6, %snew7, %snew8, %snew9, %snew10, %snew11, %snew12, %snew13, %snew14, %snew15 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
   }
 
-  // Updated state is appended after the attention output in dst.
-  // Rebuild output addresses only after the recurrent loop.
-  %woc0_m = index.mul %wcol, %s_v : index
-  %woc0_a = index.add %state_offset, %woc0_m : index
-  %woc0_e = index.add %woc0_a, %attn_elems : index
-  %woc0_r = index.add %woc0_e, %row0 : index
-  %woc0 = index.assume %woc0_r [range(%woc0_r, 0, 1073741820)] : index
-  vector.store %sf0, %dst_view[%woc0] : vector<4xf32>, view<1073741824xf32>
-  %woc1_r = index.add %woc0, %k128 : index
-  %woc1 = index.assume %woc1_r [range(%woc1_r, 0, 1073741820)] : index
-  vector.store %sf1, %dst_view[%woc1] : vector<4xf32>, view<1073741824xf32>
-  %woc2_r = index.add %woc1, %k128 : index
-  %woc2 = index.assume %woc2_r [range(%woc2_r, 0, 1073741820)] : index
-  vector.store %sf2, %dst_view[%woc2] : vector<4xf32>, view<1073741824xf32>
-  %woc3_r = index.add %woc2, %k128 : index
-  %woc3 = index.assume %woc3_r [range(%woc3_r, 0, 1073741820)] : index
-  vector.store %sf3, %dst_view[%woc3] : vector<4xf32>, view<1073741824xf32>
-  %woc4_r = index.add %woc3, %k128 : index
-  %woc4 = index.assume %woc4_r [range(%woc4_r, 0, 1073741820)] : index
-  vector.store %sf4, %dst_view[%woc4] : vector<4xf32>, view<1073741824xf32>
-  %woc5_r = index.add %woc4, %k128 : index
-  %woc5 = index.assume %woc5_r [range(%woc5_r, 0, 1073741820)] : index
-  vector.store %sf5, %dst_view[%woc5] : vector<4xf32>, view<1073741824xf32>
-  %woc6_r = index.add %woc5, %k128 : index
-  %woc6 = index.assume %woc6_r [range(%woc6_r, 0, 1073741820)] : index
-  vector.store %sf6, %dst_view[%woc6] : vector<4xf32>, view<1073741824xf32>
-  %woc7_r = index.add %woc6, %k128 : index
-  %woc7 = index.assume %woc7_r [range(%woc7_r, 0, 1073741820)] : index
-  vector.store %sf7, %dst_view[%woc7] : vector<4xf32>, view<1073741824xf32>
-  %woc8_r = index.add %woc7, %k128 : index
-  %woc8 = index.assume %woc8_r [range(%woc8_r, 0, 1073741820)] : index
-  vector.store %sf8, %dst_view[%woc8] : vector<4xf32>, view<1073741824xf32>
-  %woc9_r = index.add %woc8, %k128 : index
-  %woc9 = index.assume %woc9_r [range(%woc9_r, 0, 1073741820)] : index
-  vector.store %sf9, %dst_view[%woc9] : vector<4xf32>, view<1073741824xf32>
-  %woc10_r = index.add %woc9, %k128 : index
-  %woc10 = index.assume %woc10_r [range(%woc10_r, 0, 1073741820)] : index
-  vector.store %sf10, %dst_view[%woc10] : vector<4xf32>, view<1073741824xf32>
-  %woc11_r = index.add %woc10, %k128 : index
-  %woc11 = index.assume %woc11_r [range(%woc11_r, 0, 1073741820)] : index
-  vector.store %sf11, %dst_view[%woc11] : vector<4xf32>, view<1073741824xf32>
-  %woc12_r = index.add %woc11, %k128 : index
-  %woc12 = index.assume %woc12_r [range(%woc12_r, 0, 1073741820)] : index
-  vector.store %sf12, %dst_view[%woc12] : vector<4xf32>, view<1073741824xf32>
-  %woc13_r = index.add %woc12, %k128 : index
-  %woc13 = index.assume %woc13_r [range(%woc13_r, 0, 1073741820)] : index
-  vector.store %sf13, %dst_view[%woc13] : vector<4xf32>, view<1073741824xf32>
-  %woc14_r = index.add %woc13, %k128 : index
-  %woc14 = index.assume %woc14_r [range(%woc14_r, 0, 1073741820)] : index
-  vector.store %sf14, %dst_view[%woc14] : vector<4xf32>, view<1073741824xf32>
-  %woc15_r = index.add %woc14, %k128 : index
-  %woc15 = index.assume %woc15_r [range(%woc15_r, 0, 1073741820)] : index
-  vector.store %sf15, %dst_view[%woc15] : vector<4xf32>, view<1073741824xf32>
-  kernel.return
+  scf.if %state_inplace {
+    // All state shards have already been consumed, and each workgroup owns a
+    // disjoint head/column range, so publication can safely reuse the cache row.
+    vector.store %sf0, %si_view[%icb0] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf1, %si_view[%icb1] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf2, %si_view[%icb2] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf3, %si_view[%icb3] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf4, %si_view[%icb4] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf5, %si_view[%icb5] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf6, %si_view[%icb6] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf7, %si_view[%icb7] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf8, %si_view[%icb8] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf9, %si_view[%icb9] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf10, %si_view[%icb10] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf11, %si_view[%icb11] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf12, %si_view[%icb12] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf13, %si_view[%icb13] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf14, %si_view[%icb14] : vector<4xf32>, view<1073741824xf32>
+    vector.store %sf15, %si_view[%icb15] : vector<4xf32>, view<1073741824xf32>
+  } else {
+    // The ordinary graph contract appends updated state after attention.
+    %woc0_m = index.mul %wcol, %s_v : index
+    %woc0_a = index.add %state_offset, %woc0_m : index
+    %woc0_e = index.add %woc0_a, %attn_elems : index
+    %woc0_r = index.add %woc0_e, %row0 : index
+    %woc0 = index.assume %woc0_r [range(%woc0_r, 0, 1073741820)] : index
+    vector.store %sf0, %dst_view[%woc0] : vector<4xf32>, view<1073741824xf32>
+    %woc1_r = index.add %woc0, %k128 : index
+    %woc1 = index.assume %woc1_r [range(%woc1_r, 0, 1073741820)] : index
+    vector.store %sf1, %dst_view[%woc1] : vector<4xf32>, view<1073741824xf32>
+    %woc2_r = index.add %woc1, %k128 : index
+    %woc2 = index.assume %woc2_r [range(%woc2_r, 0, 1073741820)] : index
+    vector.store %sf2, %dst_view[%woc2] : vector<4xf32>, view<1073741824xf32>
+    %woc3_r = index.add %woc2, %k128 : index
+    %woc3 = index.assume %woc3_r [range(%woc3_r, 0, 1073741820)] : index
+    vector.store %sf3, %dst_view[%woc3] : vector<4xf32>, view<1073741824xf32>
+    %woc4_r = index.add %woc3, %k128 : index
+    %woc4 = index.assume %woc4_r [range(%woc4_r, 0, 1073741820)] : index
+    vector.store %sf4, %dst_view[%woc4] : vector<4xf32>, view<1073741824xf32>
+    %woc5_r = index.add %woc4, %k128 : index
+    %woc5 = index.assume %woc5_r [range(%woc5_r, 0, 1073741820)] : index
+    vector.store %sf5, %dst_view[%woc5] : vector<4xf32>, view<1073741824xf32>
+    %woc6_r = index.add %woc5, %k128 : index
+    %woc6 = index.assume %woc6_r [range(%woc6_r, 0, 1073741820)] : index
+    vector.store %sf6, %dst_view[%woc6] : vector<4xf32>, view<1073741824xf32>
+    %woc7_r = index.add %woc6, %k128 : index
+    %woc7 = index.assume %woc7_r [range(%woc7_r, 0, 1073741820)] : index
+    vector.store %sf7, %dst_view[%woc7] : vector<4xf32>, view<1073741824xf32>
+    %woc8_r = index.add %woc7, %k128 : index
+    %woc8 = index.assume %woc8_r [range(%woc8_r, 0, 1073741820)] : index
+    vector.store %sf8, %dst_view[%woc8] : vector<4xf32>, view<1073741824xf32>
+    %woc9_r = index.add %woc8, %k128 : index
+    %woc9 = index.assume %woc9_r [range(%woc9_r, 0, 1073741820)] : index
+    vector.store %sf9, %dst_view[%woc9] : vector<4xf32>, view<1073741824xf32>
+    %woc10_r = index.add %woc9, %k128 : index
+    %woc10 = index.assume %woc10_r [range(%woc10_r, 0, 1073741820)] : index
+    vector.store %sf10, %dst_view[%woc10] : vector<4xf32>, view<1073741824xf32>
+    %woc11_r = index.add %woc10, %k128 : index
+    %woc11 = index.assume %woc11_r [range(%woc11_r, 0, 1073741820)] : index
+    vector.store %sf11, %dst_view[%woc11] : vector<4xf32>, view<1073741824xf32>
+    %woc12_r = index.add %woc11, %k128 : index
+    %woc12 = index.assume %woc12_r [range(%woc12_r, 0, 1073741820)] : index
+    vector.store %sf12, %dst_view[%woc12] : vector<4xf32>, view<1073741824xf32>
+    %woc13_r = index.add %woc12, %k128 : index
+    %woc13 = index.assume %woc13_r [range(%woc13_r, 0, 1073741820)] : index
+    vector.store %sf13, %dst_view[%woc13] : vector<4xf32>, view<1073741824xf32>
+    %woc14_r = index.add %woc13, %k128 : index
+    %woc14 = index.assume %woc14_r [range(%woc14_r, 0, 1073741820)] : index
+    vector.store %sf14, %dst_view[%woc14] : vector<4xf32>, view<1073741824xf32>
+    %woc15_r = index.add %woc14, %k128 : index
+    %woc15 = index.assume %woc15_r [range(%woc15_r, 0, 1073741820)] : index
+    vector.store %sf15, %dst_view[%woc15] : vector<4xf32>, view<1073741824xf32>
+  }
+  func.return
 }

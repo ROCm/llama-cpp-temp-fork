@@ -182,7 +182,18 @@ bool descriptor_matches(const Value & value, const TensorDescriptor & descriptor
     if (!descriptor.valid || descriptor.type != value.type || descriptor.offset != value.access.offset) {
         return false;
     }
-    return descriptor.shape == value.access.shape && descriptor.strides == value.access.strides;
+    if (descriptor.shape != value.access.shape) {
+        return false;
+    }
+    for (size_t dimension = 0; dimension < descriptor.shape.size(); ++dimension) {
+        // A stride cannot affect addressing when its extent is one. GGML uses
+        // the trailing singleton stride to retain backing-cache capacity, so
+        // requiring it would make otherwise identical views context-sized.
+        if (descriptor.shape[dimension] > 1 && descriptor.strides[dimension] != value.access.strides[dimension]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 struct Region {
@@ -401,7 +412,7 @@ const LoadedRecipes & load_recipes() {
             const nlohmann::json root =
                 nlohmann::json::parse(source->source.data, source->source.data + source->source.length);
             if (root.value("schema", std::string()) != "ggml-hrx-native-physical-recipes-v1" ||
-                root.value("domain", std::string()) != "llm.qwen36_hybrid_transformer") {
+                root.value("domain", std::string()) != "llm.qwen_hybrid_transformer") {
                 loaded.errors.push_back("Qwen hybrid native recipe corpus has an invalid schema");
                 return loaded;
             }

@@ -391,6 +391,16 @@ def storage_transform_kind(value: str) -> str:
         return "kernel_storage_transform_kind::RowGroupFieldInterleave"
     if value == "row_group_block_group_header_payload":
         return "kernel_storage_transform_kind::RowGroupBlockGroupHeaderPayload"
+    if value == "q4_k_row_group_i4_interleave":
+        return "kernel_storage_transform_kind::Q4KRowGroupI4Interleave"
+    if value == "q4_k_row_group_symmetric_i4_interleave":
+        return "kernel_storage_transform_kind::Q4KRowGroupSymmetricI4Interleave"
+    if value == "q4_k_tensor_payload_header8":
+        return "kernel_storage_transform_kind::Q4KTensorPayloadHeader8"
+    if value == "q4_k_tensor_symmetric_i4_k64":
+        return "kernel_storage_transform_kind::Q4KTensorSymmetricI4K64"
+    if value == "q6_k_to_q4_k_tensor_payload_header8":
+        return "kernel_storage_transform_kind::Q6KToQ4KTensorPayloadHeader8"
     raise RuntimeError(f"unsupported storage transform kind: {value}")
 
 

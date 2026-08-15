@@ -1,8 +1,13 @@
-config.decl @hrx2_shape_pointwise_ncols : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2_shape_pointwise_ncols : %value: index where [range(%value, 1, 1048576)]
+
 config.decl @hrx2_shape_pointwise_nrows : %value: index where [range(%value, 1, 1048576)]
+
 config.decl @hrx2_shape_pointwise_src0_row_stride : %value: index where [range(%value, 1, 65536)]
+
 config.decl @hrx2_shape_pointwise_src1_row_stride : %value: index where [range(%value, 0, 65536)]
+
 config.decl @hrx2_shape_pointwise_src1_ncols : %value: index where [range(%value, 1, 65536)]
+
 config.decl @hrx2_tuning_pointwise_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 
 kernel.def export("hrx2_add_f32") @hrx2_add_f32() {
@@ -400,7 +405,7 @@ kernel.def export("hrx2_scale_f32") @hrx2_scale_f32() {
   %ncols = config.get @hrx2_shape_pointwise_ncols : index
   %nrows = config.get @hrx2_shape_pointwise_nrows : index
   %workgroup_size = config.get @hrx2_tuning_pointwise_workgroup_size : index
-  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 1048576)] : index
   %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
   %workgroup0 = kernel.workgroup.id<x> : index
   %lane0 = kernel.workitem.id<x> : index

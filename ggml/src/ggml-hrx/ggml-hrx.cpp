@@ -242,6 +242,7 @@ static bool ranges_overlap(size_t lhs_offset, size_t lhs_length, size_t rhs_offs
 
 static transformed_range_state find_transformed_range(
     ggml_backend_hrx_buffer_context * context, size_t offset, size_t length,
+    const ggml::hrx::kernel_storage_transform * required_transform,
     ggml_backend_hrx_buffer_context::transformed_range * result) {
     if (result != nullptr) {
         *result = {};
@@ -249,6 +250,9 @@ static transformed_range_state find_transformed_range(
     std::lock_guard<std::mutex> lock(context->transformed_ranges_mutex);
     for (const auto & range : context->transformed_ranges) {
         if (range.offset == offset && range.length == length) {
+            if (required_transform != nullptr && range.transform != required_transform) {
+                continue;
+            }
             if (result != nullptr) {
                 *result = range;
             }
@@ -267,7 +271,10 @@ static bool register_transformed_range(ggml_backend_hrx_buffer_context * context
     std::lock_guard<std::mutex> lock(context->transformed_ranges_mutex);
     for (const auto & range : context->transformed_ranges) {
         if (range.offset == offset && range.length == length) {
-            return range.transform == transform && range.buffer == buffer;
+            if (range.transform == transform) {
+                return range.buffer == buffer;
+            }
+            continue;
         }
         if (ranges_overlap(offset, length, range.offset, range.length)) {
             return false;
@@ -277,13 +284,21 @@ static bool register_transformed_range(ggml_backend_hrx_buffer_context * context
     return true;
 }
 
-static const ggml::hrx::kernel_storage_transform * tensor_storage_transform(
+static std::vector<const ggml::hrx::kernel_storage_transform *> tensor_storage_transforms(
     const ggml_backend_hrx_buffer_context * context, const ggml_tensor * tensor) {
     std::array<int64_t, GGML_MAX_DIMS> shape = {};
     std::copy_n(tensor->ne, GGML_MAX_DIMS, shape.begin());
-    return ggml::hrx::match_kernel_storage_transform(
-        ggml::hrx::get_qwen_kernel_corpus(), context->device->architecture, tensor->type, shape,
-        ggml_is_contiguous(tensor), ggml_get_name(tensor));
+    const ggml::hrx::kernel_corpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    std::vector<const ggml::hrx::kernel_storage_transform *> result;
+    for (const ggml::hrx::kernel_storage_transform & candidate : corpus.storage_transforms) {
+        const ggml::hrx::kernel_storage_transform * transform = ggml::hrx::resolve_kernel_storage_transform(
+            corpus, context->device->architecture, candidate.name, tensor->type, shape,
+            ggml_is_contiguous(tensor), ggml_get_name(tensor));
+        if (transform != nullptr && std::find(result.begin(), result.end(), transform) == result.end()) {
+            result.push_back(transform);
+        }
+    }
+    return result;
 }
 
 static const char * buffer_type_name(ggml_backend_buffer_type_t buft) {
@@ -337,31 +352,48 @@ static void buffer_set(ggml_backend_buffer_t buffer,
     const size_t tensor_base        = tensor_offset(context, tensor);
     const size_t destination_offset = tensor_base + offset;
     GGML_ASSERT(destination_offset <= buffer->size && size <= buffer->size - destination_offset);
-    const auto * transform = tensor_storage_transform(context, tensor);
-    std::vector<uint8_t> packed;
-    ggml_backend_hrx_buffer_context::transformed_range transformed;
-    bool new_transformed_buffer = false;
-    if (transform != nullptr) {
-        const size_t tensor_size = ggml_nbytes(tensor);
-        const transformed_range_state state = find_transformed_range(context, tensor_base, tensor_size, &transformed);
-        if (state == transformed_range_state::Overlap ||
-            (state == transformed_range_state::Exact && transformed.transform != transform) ||
-            offset != 0 || size != tensor_size) {
+    const auto transforms = tensor_storage_transforms(context, tensor);
+    const size_t tensor_size = ggml_nbytes(tensor);
+    if (!transforms.empty()) {
+        if (offset != 0 || size != tensor_size) {
             GGML_LOG_ERROR("%s: transformed tensor %s requires an exact full-tensor upload\n", __func__,
                            ggml_get_name(tensor));
             return;
         }
+        for (const ggml::hrx::kernel_storage_transform * transform : transforms) {
+            if (find_transformed_range(context, tensor_base, tensor_size, transform, nullptr) ==
+                transformed_range_state::Overlap) {
+                GGML_LOG_ERROR("%s: transformed tensor %s overlaps another tensor upload\n", __func__,
+                               ggml_get_name(tensor));
+                return;
+            }
+        }
+    }
+    const std::string error = context->device->transfers->upload(data, context->buffer, destination_offset, size);
+    if (!error.empty()) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, error.c_str());
+        return;
+    }
+    std::vector<uint8_t> packed;
+    if (!transforms.empty()) {
         try {
             packed.resize(tensor_size);
         } catch (const std::bad_alloc &) {
             GGML_LOG_ERROR("%s: cannot allocate transformed upload for %s\n", __func__, ggml_get_name(tensor));
             return;
         }
+    }
+    for (const ggml::hrx::kernel_storage_transform * transform : transforms) {
         if (!ggml::hrx::kernel_storage_transform_pack(*transform, data, size, packed.data(), packed.size())) {
-            GGML_LOG_ERROR("%s: cannot transform tensor %s\n", __func__, ggml_get_name(tensor));
+            GGML_LOG_ERROR("%s: cannot transform tensor %s into layout %s\n", __func__, ggml_get_name(tensor),
+                           transform->name);
             return;
         }
-        if (state == transformed_range_state::None) {
+        ggml_backend_hrx_buffer_context::transformed_range transformed;
+        const transformed_range_state state =
+            find_transformed_range(context, tensor_base, tensor_size, transform, &transformed);
+        const bool new_transformed_buffer = state == transformed_range_state::None;
+        if (new_transformed_buffer) {
             const hrx_buffer_params_t params = {
                 HRX_MEMORY_TYPE_DEVICE_LOCAL,
                 HRX_MEMORY_ACCESS_ALL,
@@ -370,26 +402,16 @@ static void buffer_set(ggml_backend_buffer_t buffer,
             };
             if (!HRX_CHECK(hrx_allocator_allocate_buffer(hrx_device_allocator(context->device->device), params,
                                                          tensor_size, &transformed.buffer))) {
-                GGML_LOG_ERROR("%s: cannot allocate transformed tensor %s\n", __func__, ggml_get_name(tensor));
+                GGML_LOG_ERROR("%s: cannot allocate transformed tensor %s for layout %s\n", __func__,
+                               ggml_get_name(tensor), transform->name);
                 return;
             }
-            transformed.offset = tensor_base;
-            transformed.length = tensor_size;
-            transformed.transform = transform;
-            transformed.identity = g_allocation_generation.fetch_add(1);
+            transformed.offset     = tensor_base;
+            transformed.length     = tensor_size;
+            transformed.transform  = transform;
+            transformed.identity   = g_allocation_generation.fetch_add(1);
             transformed.generation = transformed.identity;
-            new_transformed_buffer = true;
         }
-    }
-    const std::string error = context->device->transfers->upload(data, context->buffer, destination_offset, size);
-    if (!error.empty()) {
-        GGML_LOG_ERROR("%s: %s\n", __func__, error.c_str());
-        if (new_transformed_buffer) {
-            hrx_buffer_release(transformed.buffer);
-        }
-        return;
-    }
-    if (transform != nullptr) {
         const std::string transformed_error =
             context->device->transfers->upload(packed.data(), transformed.buffer, 0, packed.size());
         if (!transformed_error.empty()) {
@@ -403,7 +425,8 @@ static void buffer_set(ggml_backend_buffer_t buffer,
             !register_transformed_range(context, tensor_base, ggml_nbytes(tensor), transform, transformed.buffer,
                                         transformed.identity, transformed.generation)) {
             hrx_buffer_release(transformed.buffer);
-            GGML_LOG_ERROR("%s: cannot register transformed tensor %s\n", __func__, ggml_get_name(tensor));
+            GGML_LOG_ERROR("%s: cannot register transformed tensor %s for layout %s\n", __func__,
+                           ggml_get_name(tensor), transform->name);
         }
     }
 }
@@ -896,7 +919,7 @@ static ggml::hrx::executable_bindings resolve_executable_bindings(const ggml_bac
         if (tensor_hrx_binding(root, &hrx_context, &root_offset)) {
             ggml_backend_hrx_buffer_context::transformed_range transformed;
             const transformed_range_state storage_state =
-                find_transformed_range(hrx_context, root_offset, resource.size, &transformed);
+                find_transformed_range(hrx_context, root_offset, resource.size, binding.transform, &transformed);
             if (binding.transform != nullptr &&
                 (storage_state != transformed_range_state::Exact || transformed.transform != binding.transform ||
                  transformed.buffer == nullptr)) {

@@ -149,7 +149,7 @@ add_library(ggml-hrx-transfer STATIC
 )
 target_include_directories(ggml-hrx-transfer PUBLIC .)
 target_compile_features(ggml-hrx-transfer PRIVATE cxx_std_17)
-target_link_libraries(ggml-hrx-transfer PUBLIC hrx::hrx)
+target_link_libraries(ggml-hrx-transfer PUBLIC hrx::hrx PRIVATE ggml-base)
 set_target_properties(ggml-hrx-transfer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(ggml-hrx-executable STATIC

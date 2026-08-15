@@ -1,4 +1,5 @@
 #include "hrx_runtime.h"
+#include "../ggml/src/ggml-quants.h"
 #include "storage-transform.h"
 #include "transfer-manager.h"
 #include "weight-residency.h"
@@ -73,6 +74,153 @@ static void test_kernel_storage_transforms() {
         header_payload, canonical_header_payload.data(), canonical_header_payload.size(),
         packed_header_payload.data(), packed_header_payload.size()));
     REQUIRE(packed_header_payload == expected_header_payload);
+
+    ggml::hrx::kernel_storage_transform q4_i4;
+    q4_i4.kind        = ggml::hrx::kernel_storage_transform_kind::Q4KRowGroupI4Interleave;
+    q4_i4.outer_count = 1;
+    q4_i4.row_count   = 2;
+    q4_i4.block_count = 1;
+    q4_i4.field_count = 9;
+    q4_i4.unit_bytes  = 16;
+    q4_i4.row_group   = 2;
+    std::array<uint8_t, 288> canonical_q4 = {};
+    for (size_t row = 0; row < 2; ++row) {
+        for (size_t byte = 0; byte < 16; ++byte) {
+            canonical_q4[(row * 9 + 0) * 16 + byte] = static_cast<uint8_t>(0x80 + row * 16 + byte);
+            canonical_q4[(row * 9 + 1) * 16 + byte] = static_cast<uint8_t>((1 + row * 2) * 16 + byte);
+            canonical_q4[(row * 9 + 2) * 16 + byte] = static_cast<uint8_t>((2 + row * 2) * 16 + byte);
+        }
+    }
+    std::array<uint8_t, 288> packed_q4 = {};
+    REQUIRE(ggml::hrx::kernel_storage_transform_pack(
+        q4_i4, canonical_q4.data(), canonical_q4.size(), packed_q4.data(), packed_q4.size()));
+    REQUIRE(std::equal(packed_q4.begin(), packed_q4.begin() + 16, canonical_q4.begin()));
+    REQUIRE(std::equal(packed_q4.begin() + 16, packed_q4.begin() + 32, canonical_q4.begin() + 144));
+    const std::array<uint8_t, 16> expected_low = {
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE,
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE,
+    };
+    REQUIRE(std::equal(packed_q4.begin() + 32, packed_q4.begin() + 48, expected_low.begin()));
+    REQUIRE(std::equal(packed_q4.begin() + 48, packed_q4.begin() + 64, expected_low.begin()));
+    REQUIRE(std::all_of(packed_q4.begin() + 64, packed_q4.begin() + 72,
+                        [](uint8_t value) { return value == 0x11; }));
+    REQUIRE(std::all_of(packed_q4.begin() + 72, packed_q4.begin() + 80,
+                        [](uint8_t value) { return value == 0x22; }));
+    REQUIRE(std::all_of(packed_q4.begin() + 80, packed_q4.begin() + 88,
+                        [](uint8_t value) { return value == 0x33; }));
+    REQUIRE(std::all_of(packed_q4.begin() + 88, packed_q4.begin() + 96,
+                        [](uint8_t value) { return value == 0x44; }));
+
+    ggml::hrx::kernel_storage_transform q4_tensor_plane;
+    q4_tensor_plane.kind        = ggml::hrx::kernel_storage_transform_kind::Q4KTensorPayloadHeader8;
+    q4_tensor_plane.outer_count = 1;
+    q4_tensor_plane.row_count   = 8;
+    q4_tensor_plane.block_count = 2;
+    q4_tensor_plane.field_count = 9;
+    q4_tensor_plane.unit_bytes  = 16;
+    q4_tensor_plane.row_group   = 8;
+    std::array<uint8_t, 8 * 2 * sizeof(block_q4_K)> canonical_q4_plane = {};
+    for (size_t row = 0; row < q4_tensor_plane.row_count; ++row) {
+        for (size_t block = 0; block < q4_tensor_plane.block_count; ++block) {
+            const size_t base = (row * q4_tensor_plane.block_count + block) * sizeof(block_q4_K);
+            for (size_t byte = 0; byte < sizeof(block_q4_K); ++byte) {
+                canonical_q4_plane[base + byte] =
+                    static_cast<uint8_t>((row * 37 + block * 19 + byte) & 0xff);
+            }
+        }
+    }
+    std::array<uint8_t, canonical_q4_plane.size()> expected_q4_plane = {};
+    constexpr size_t q4_header_bytes  = 16;
+    constexpr size_t q4_payload_bytes = sizeof(block_q4_K) - q4_header_bytes;
+    const size_t payload_row_bytes = q4_tensor_plane.block_count * q4_payload_bytes;
+    const size_t payload_bytes_all = q4_tensor_plane.row_count * payload_row_bytes;
+    for (size_t row = 0; row < q4_tensor_plane.row_count; ++row) {
+        for (size_t block = 0; block < q4_tensor_plane.block_count; ++block) {
+            const size_t source = (row * q4_tensor_plane.block_count + block) * sizeof(block_q4_K);
+            std::copy_n(canonical_q4_plane.begin() + source + q4_header_bytes, q4_payload_bytes,
+                        expected_q4_plane.begin() + row * payload_row_bytes + block * q4_payload_bytes);
+            std::copy_n(canonical_q4_plane.begin() + source, q4_header_bytes,
+                        expected_q4_plane.begin() + payload_bytes_all +
+                            (block * q4_tensor_plane.row_group + row) * q4_header_bytes);
+        }
+    }
+    std::array<uint8_t, canonical_q4_plane.size()> packed_q4_plane = {};
+    REQUIRE(ggml::hrx::kernel_storage_transform_pack(
+        q4_tensor_plane, canonical_q4_plane.data(), canonical_q4_plane.size(),
+        packed_q4_plane.data(), packed_q4_plane.size()));
+    REQUIRE(packed_q4_plane == expected_q4_plane);
+
+    constexpr size_t symmetric_rows   = 64;
+    constexpr size_t symmetric_blocks = 2;
+    std::array<float, symmetric_rows * symmetric_blocks * QK_K> symmetric_source_values = {};
+    for (size_t i = 0; i < symmetric_source_values.size(); ++i) {
+        symmetric_source_values[i] = static_cast<float>(
+            (static_cast<int>((i * 13 + i / QK_K * 7) % 101) - 50) * 0.015625);
+    }
+    std::array<block_q4_K, symmetric_rows * symmetric_blocks> symmetric_source = {};
+    quantize_row_q4_K_ref(symmetric_source_values.data(), symmetric_source.data(),
+                          symmetric_source_values.size());
+
+    ggml::hrx::kernel_storage_transform symmetric_row_group;
+    symmetric_row_group.kind =
+        ggml::hrx::kernel_storage_transform_kind::Q4KRowGroupSymmetricI4Interleave;
+    symmetric_row_group.outer_count = 1;
+    symmetric_row_group.row_count   = symmetric_rows;
+    symmetric_row_group.block_count = symmetric_blocks;
+    symmetric_row_group.field_count = 9;
+    symmetric_row_group.unit_bytes  = 16;
+    symmetric_row_group.row_group   = symmetric_rows;
+    std::array<uint8_t, sizeof(symmetric_source)> packed_symmetric_row_group = {};
+    REQUIRE(ggml::hrx::kernel_storage_transform_pack(
+        symmetric_row_group, symmetric_source.data(), sizeof(symmetric_source),
+        packed_symmetric_row_group.data(), packed_symmetric_row_group.size()));
+
+    ggml::hrx::kernel_storage_transform symmetric_tensor_plane = symmetric_row_group;
+    symmetric_tensor_plane.kind =
+        ggml::hrx::kernel_storage_transform_kind::Q4KTensorSymmetricI4K64;
+    symmetric_tensor_plane.row_group = 8;
+    std::array<uint8_t, sizeof(symmetric_source)> packed_symmetric_tensor_plane = {};
+    REQUIRE(ggml::hrx::kernel_storage_transform_pack(
+        symmetric_tensor_plane, symmetric_source.data(), sizeof(symmetric_source),
+        packed_symmetric_tensor_plane.data(), packed_symmetric_tensor_plane.size()));
+
+    constexpr size_t symmetric_payload_bytes = 128;
+    constexpr size_t symmetric_header_bytes  = 8;
+    const size_t symmetric_payload_bytes_all =
+        symmetric_rows * symmetric_blocks * symmetric_payload_bytes;
+    for (size_t row = 0; row < symmetric_rows; ++row) {
+        for (size_t block = 0; block < symmetric_blocks; ++block) {
+            for (size_t group = 0; group < 8; ++group) {
+                const size_t row_group_offset =
+                    ((block * 9 + 1 + group) * symmetric_rows + row) * 16;
+                const size_t tensor_plane_offset =
+                    (row * symmetric_blocks + block) * symmetric_payload_bytes + group * 16;
+                REQUIRE(std::equal(
+                    packed_symmetric_row_group.begin() + row_group_offset,
+                    packed_symmetric_row_group.begin() + row_group_offset + 16,
+                    packed_symmetric_tensor_plane.begin() + tensor_plane_offset));
+            }
+            const size_t row_group_header = (block * 9 * symmetric_rows + row) * 16;
+            const size_t tensor_plane_header = symmetric_payload_bytes_all +
+                (((row / 8) * symmetric_blocks + block) * 8 + row % 8) * symmetric_header_bytes;
+            for (size_t pair = 0; pair < 4; ++pair) {
+                REQUIRE(std::equal(
+                    packed_symmetric_row_group.begin() + row_group_header + pair * 4,
+                    packed_symmetric_row_group.begin() + row_group_header + pair * 4 + 2,
+                    packed_symmetric_tensor_plane.begin() + tensor_plane_header + pair * 2));
+            }
+        }
+    }
+    const size_t symmetric_useful_bytes = symmetric_payload_bytes_all +
+        symmetric_rows * symmetric_blocks * symmetric_header_bytes;
+    REQUIRE(std::all_of(
+        packed_symmetric_tensor_plane.begin() + symmetric_useful_bytes,
+        packed_symmetric_tensor_plane.end(), [](uint8_t value) { return value == 0; }));
+
+    q4_tensor_plane.row_count = 7;
+    REQUIRE(!ggml::hrx::kernel_storage_transform_pack(
+        q4_tensor_plane, canonical_q4_plane.data(), canonical_q4_plane.size(),
+        packed_q4_plane.data(), packed_q4_plane.size()));
 }
 
 int main() {

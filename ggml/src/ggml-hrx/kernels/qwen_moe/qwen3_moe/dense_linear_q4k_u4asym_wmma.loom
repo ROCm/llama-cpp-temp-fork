@@ -1,0 +1,972 @@
+// Exact WMMA-packed Q4_K x affine-U4 IU4-WMMA kernel.
+// M128xN64/WG128 with in-place K32-half activation overlap.
+func.decl @qwen3_moe_q4k_scale_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q4_group: index) -> (i32, i32)
+
+config.decl @qwen3.dense_q4_u4asym.shape_k : %value: index where [range(%value, 32, 32768), mul(%value, 32)]
+
+config.decl @qwen3.dense_q4_u4asym.shape_rows : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3.dense_q4_u4asym.shape_cols : %value: index where [range(%value, 1, 32768)]
+
+// Affine-U4 activation and exact Q4_K WMMA contraction schedule.
+// QAct storage is normalized before this compile-time template is applied.
+func.template<qwen3.dense.q4.u4asym.wmmai4.body> device @qwen3_dense_q4_u4asym_wmmai4_body(%src0_na: buffer, %dst_na: buffer, %aq_na: buffer, %as_na: buffer, %asum_na: buffer, %base: offset, %qact_scale_base: offset, %zero: index, %one: index, %two: index, %four: index, %eight: index, %sixteen: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index) {
+  %aq_flat = buffer.view %aq_na[%base] : buffer -> view<1073741824xi8>
+  %as_flat = buffer.view %as_na[%qact_scale_base] : buffer -> view<33554432xf32>
+  %asum_flat = buffer.view %asum_na[%base] : buffer -> view<67108864xi32>
+  %zero_i32 = scalar.constant 0 : i32
+  %q4_k_block = index.constant 256 : index
+  %q4_shift4v = vector.constant 4 : vector<4xi32>
+  %q4_shift8v = vector.constant 8 : vector<4xi32>
+  %q4_shift16v = vector.constant 16 : vector<4xi32>
+  %q4_nibble_mask = vector.constant 252645135 : vector<4xi32>
+  %q4_pair_mask = vector.constant 16711935 : vector<4xi32>
+  %q4_half_mask = vector.constant 65535 : vector<4xi32>
+  %q4_f32_32 = scalar.constant 32.0 : f32
+  // dst is [rows, cols] with rows contiguous, and C is [cols, rows].
+  %dst_view = buffer.view %dst_na[%base] : buffer -> view<[%cols_b]x[%rows_b]xf32>
+
+  // Packed I4 operands use 32 payload bytes per logical K64 row.
+  // A 40-byte LDS stride retains the conflict-avoiding padding of the IU8 body.
+  %lds_bytes = index.constant 12288 : offset
+  %scratch = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
+  %u4a_schema = encoding.define #encoding.operand<element_format=i4, payload_elements=16, payload_registers=2> : encoding<schema>
+  %u4_schema = encoding.define #encoding.operand<element_format=u4, payload_elements=16, payload_registers=2> : encoding<schema>
+  %al_flat = buffer.view %scratch[%base] : buffer -> view<5120xi8>
+  %w_off = index.constant 5120 : offset
+  %wl_flat = buffer.view %scratch[%w_off] : buffer -> view<2560xi8>
+  %as_off = index.constant 7680 : offset
+  %asl_view = buffer.view %scratch[%as_off] : buffer -> view<256xf32>
+  %azp_off = index.constant 8704 : offset
+  %azpl_view = buffer.view %scratch[%azp_off] : buffer -> view<256xf32>
+  %asum_off = index.constant 9728 : offset
+  %asuml_view = buffer.view %scratch[%asum_off] : buffer -> view<256xf32>
+  %ws_off = index.constant 10752 : offset
+  %wsl_view = buffer.view %scratch[%ws_off] : buffer -> view<128xf32>
+  %wc_off = index.constant 11264 : offset
+  %wcl_view = buffer.view %scratch[%wc_off] : buffer -> view<128xf32>
+  %wbc_off = index.constant 11776 : offset
+  %wbcl_view = buffer.view %scratch[%wbc_off] : buffer -> view<128xf32>
+
+  %col_base = index.mul %col_tile, %k_m : index
+  %row_base = index.mul %row_tile, %k_n : index
+
+  %k_asn = index.constant 256 : index
+  %k_lanes0 = index.constant 0 : index
+  %k_lanes1 = index.constant 128 : index
+
+  // Four waves own four 32-token blocks and share one 64-row weight tile.
+  %wcol = index.rem %wave, %k_wm : index
+  %wrow = index.div %wave, %k_wm : index
+  %k_mspan = index.constant 32 : index
+  %k_nspan = index.constant 64 : index
+  %wm_off = index.mul %wcol, %k_mspan : index
+  %wn_off = index.mul %wrow, %k_nspan : index
+  %m_out = index.add %col_base, %wm_off : index
+  %n_out = index.add %row_base, %wn_off : index
+  // RDNA3 WMMA RHS payload lanes map to columns lane % 16. Point each
+  // lane at its own output row before constructing the four N fragments.
+  %lane = index.rem %tid, %k_wave : index
+  %lane_lo = index.rem %lane, %sixteen : index
+  %lane_hi = index.div %lane, %sixteen : index
+  %wn_lane = index.add %wn_off, %lane_lo : index
+  %lm0 = index.add %wm_off, %zero : index
+  %gm0 = index.add %m_out, %zero : index
+  %k_ma1 = index.constant 16 : index
+  %lm1 = index.add %wm_off, %k_ma1 : index
+  %gm1 = index.add %m_out, %k_ma1 : index
+  %ln0 = index.add %wn_lane, %zero : index
+  %gn0 = index.add %n_out, %zero : index
+  %k_nb1 = index.constant 16 : index
+  %ln1 = index.add %wn_lane, %k_nb1 : index
+  %gn1 = index.add %n_out, %k_nb1 : index
+  %k_nb2 = index.constant 32 : index
+  %ln2 = index.add %wn_lane, %k_nb2 : index
+  %gn2 = index.add %n_out, %k_nb2 : index
+  %k_nb3 = index.constant 48 : index
+  %ln3 = index.add %wn_lane, %k_nb3 : index
+  %gn3 = index.add %n_out, %k_nb3 : index
+  %wsb0_0 = index.add %ln0, %zero : index
+  %wsb0 = index.mul %wsb0_0, %k_blocks : index
+  %wsb1_0 = index.add %ln1, %zero : index
+  %wsb1 = index.mul %wsb1_0, %k_blocks : index
+  %wsb2_0 = index.add %ln2, %zero : index
+  %wsb2 = index.mul %wsb2_0, %k_blocks : index
+  %wsb3_0 = index.add %ln3, %zero : index
+  %wsb3 = index.mul %wsb3_0, %k_blocks : index
+  // Activation scale metadata is [tile][block][lane-half][register].
+  %as_tile0 = index.div %lm0, %sixteen : index
+  %asb0 = index.mul %as_tile0, %k_blocks : index
+  // Activation scale metadata is [tile][block][lane-half][register].
+  %as_tile1 = index.div %lm1, %sixteen : index
+  %asb1 = index.mul %as_tile1, %k_blocks : index
+
+  // Seed the first K64 payload before the loop. Thereafter each K32 half is
+  // overwritten in place only after every current consumer of that half ends.
+  %q4a_row0 = index.add %col_base, %tid : index
+  %q4a_row = index.assume %q4a_row0 [range(%q4a_row0, 0, 32767)] : index
+  %q4a_row_bytes = index.div %k_b, %two : index
+  %q4a_row_base = index.mul %q4a_row, %q4a_row_bytes : index
+  %q4a_initial_src0 = index.assume %q4a_row_base [range(%q4a_row_base, 0, 536870896)] : index
+  %q4a_initial_v0 = vector.load %aq_flat[%q4a_initial_src0] : view<1073741824xi8> -> vector<16xi8>
+  %q4a_c16 = index.constant 16 : index
+  %q4a_initial_src1_0 = index.add %q4a_initial_src0, %q4a_c16 : index
+  %q4a_initial_src1 = index.assume %q4a_initial_src1_0 [range(%q4a_initial_src1_0, 16, 536870912)] : index
+  %q4a_initial_v1 = vector.load %aq_flat[%q4a_initial_src1] : view<1073741824xi8> -> vector<16xi8>
+  %q4a_zero = vector.constant 0 : vector<16xi8>
+  %q4a_dst0_0 = index.mul %tid, %k_astride : index
+  %q4a_dst0 = index.assume %q4a_dst0_0 [range(%q4a_dst0_0, 0, 5080)] : index
+  vector.store %q4a_initial_v0, %al_flat[%q4a_dst0] : vector<16xi8>, view<5120xi8>
+  %q4a_dst1_0 = index.add %q4a_dst0, %q4a_c16 : index
+  %q4a_dst1 = index.assume %q4a_dst1_0 [range(%q4a_dst1_0, 16, 5096)] : index
+  vector.store %q4a_initial_v1, %al_flat[%q4a_dst1] : vector<16xi8>, view<5120xi8>
+
+  %f0_0, %f0_1, %f0_2, %f0_3, %f1_0, %f1_1, %f1_2, %f1_3 = scf.for %chunk = [%zero to %nchunks step %one](%fc0_0 = %fzero : vector<8xf32>, %fc0_1 = %fzero : vector<8xf32>, %fc0_2 = %fzero : vector<8xf32>, %fc0_3 = %fzero : vector<8xf32>, %fc1_0 = %fzero : vector<8xf32>, %fc1_1 = %fzero : vector<8xf32>, %fc1_2 = %fzero : vector<8xf32>, %fc1_3 = %fzero : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+    %chunk_blk = index.mul %chunk, %k_blocks : index
+    %q4a_next_chunk = index.add %chunk, %one : index
+    %q4a_has_next = index.cmp ult, %q4a_next_chunk, %nchunks : index
+
+    // ---- stage weights and both metadata planes; activation stays resident ----
+    // One lane owns one output row. Native Q4_K stores adjacent K32
+    // groups in the low/high nibbles of the same 32-byte code plane; extract
+    // each group and bitpack it directly into its 16-byte IU4 LDS payload.
+    %q4_weight_lane_count = index.constant 64 : index
+    %q4_weight_lane_active = index.cmp ult, %tid, %q4_weight_lane_count : index
+    scf.if %q4_weight_lane_active {
+      %q4_weight_tid0 = index.rem %tid, %q4_weight_lane_count : index
+      %q4_weight_tid = index.assume %q4_weight_tid0 [range(%q4_weight_tid0, 0, 63)] : index
+      %q4_block_count = index.div %k_b, %q4_k_block : index
+      %q4_block = index.div %chunk, %four : index
+      %q4_pair = index.rem %chunk, %four : index
+      %q4_row0 = index.add %row_base, %q4_weight_tid : index
+      %q4_row = index.assume %q4_row0 [range(%q4_row0, 0, 262143)] : index
+      // Capacity-neutral WMMA packing: one header and eight packed K32
+      // payload fields, each interleaved across a 64-row output tile.
+      %q4_row_group_size = index.constant 64 : index
+      %q4_field_count = index.constant 9 : index
+      %q4_field_bytes = index.constant 16 : index
+      %q4_row_group = index.div %q4_row, %q4_row_group_size : index
+      %q4_row_lane = index.rem %q4_row, %q4_row_group_size : index
+      %q4_group_block0 = index.mul %q4_row_group, %q4_block_count : index
+      %q4_group_block = index.add %q4_group_block0, %q4_block : index
+      %q4_group_field_base = index.mul %q4_group_block, %q4_field_count : index
+      %q4_header_lane_base = index.mul %q4_group_field_base, %q4_row_group_size : index
+      %q4_header_lane = index.add %q4_header_lane_base, %q4_row_lane : index
+      %q4_header_byte_index = index.mul %q4_header_lane, %q4_field_bytes : index
+      %q4_header_byte_base = index.cast %q4_header_byte_index : index to offset
+      %q4_header_view = buffer.view %src0_na[%q4_header_byte_base] : buffer -> view<4xi32>
+      %q4_header = vector.load %q4_header_view[%zero] : view<4xi32> -> vector<4xi32>
+      %q4_header_halves = vector.bitcast %q4_header : vector<4xi32> to vector<8xf16>
+      %q4_d_f16 = vector.extract %q4_header_halves[0] : vector<8xf16> -> f16
+      %q4_dmin_f16 = vector.extract %q4_header_halves[1] : vector<8xf16> -> f16
+      %q4_scale0 = vector.extract %q4_header[1] : vector<4xi32> -> i32
+      %q4_scale1 = vector.extract %q4_header[2] : vector<4xi32> -> i32
+      %q4_scale2 = vector.extract %q4_header[3] : vector<4xi32> -> i32
+      %q4_d = scalar.extf %q4_d_f16 : f16 to f32
+      %q4_dmin = scalar.extf %q4_dmin_f16 : f16 to f32
+      %q4_low_group = index.mul %q4_pair, %two : index
+      %q4_high_group = index.add %q4_low_group, %one : index
+      %q4_scale_low, %q4_min_low = func.call @qwen3_moe_q4k_scale_from_header(%q4_scale0, %q4_scale1, %q4_scale2, %q4_low_group) : (i32, i32, i32, index) -> (i32, i32)
+      %q4_scale_high, %q4_min_high = func.call @qwen3_moe_q4k_scale_from_header(%q4_scale0, %q4_scale1, %q4_scale2, %q4_high_group) : (i32, i32, i32, index) -> (i32, i32)
+      %q4_scale_low_f32 = scalar.uitofp %q4_scale_low : i32 to f32
+      %q4_scale_high_f32 = scalar.uitofp %q4_scale_high : i32 to f32
+      %q4_min_low_f32 = scalar.uitofp %q4_min_low : i32 to f32
+      %q4_min_high_f32 = scalar.uitofp %q4_min_high : i32 to f32
+      %q4_d0 = scalar.mulf %q4_d, %q4_scale_low_f32 : f32
+      %q4_d1 = scalar.mulf %q4_d, %q4_scale_high_f32 : f32
+      %q4_m0 = scalar.mulf %q4_dmin, %q4_min_low_f32 : f32
+      %q4_m1 = scalar.mulf %q4_dmin, %q4_min_high_f32 : f32
+      // The capacity-neutral storage transform has already materialized one
+      // packed 16-byte U4 payload per logical K32 group. Sum both nibbles of
+      // every packed byte for the affine activation correction while those
+      // payload registers are live.
+      %q4_low_field0 = index.add %q4_low_group, %one : index
+      %q4_high_field0 = index.add %q4_high_group, %one : index
+      %q4_low_field = index.add %q4_group_field_base, %q4_low_field0 : index
+      %q4_high_field = index.add %q4_group_field_base, %q4_high_field0 : index
+      %q4_low_lane_base = index.mul %q4_low_field, %q4_row_group_size : index
+      %q4_high_lane_base = index.mul %q4_high_field, %q4_row_group_size : index
+      %q4_low_lane = index.add %q4_low_lane_base, %q4_row_lane : index
+      %q4_high_lane = index.add %q4_high_lane_base, %q4_row_lane : index
+      %q4_low_byte_index = index.mul %q4_low_lane, %q4_field_bytes : index
+      %q4_high_byte_index = index.mul %q4_high_lane, %q4_field_bytes : index
+      %q4_low_byte_base = index.cast %q4_low_byte_index : index to offset
+      %q4_high_byte_base = index.cast %q4_high_byte_index : index to offset
+      %q4_low_view = buffer.view %src0_na[%q4_low_byte_base] : buffer -> view<4xi32>
+      %q4_high_view = buffer.view %src0_na[%q4_high_byte_base] : buffer -> view<4xi32>
+      %q4_low_words = vector.load %q4_low_view[%zero] : view<4xi32> -> vector<4xi32>
+      %q4_high_words = vector.load %q4_high_view[%zero] : view<4xi32> -> vector<4xi32>
+      %q4_low_packed = vector.bitcast %q4_low_words : vector<4xi32> to vector<16xi8>
+      %q4_high_packed = vector.bitcast %q4_high_words : vector<4xi32> to vector<16xi8>
+      %q4_low_lo = vector.andi %q4_low_words, %q4_nibble_mask : vector<4xi32>
+      %q4_low_hi0 = vector.shrui %q4_low_words, %q4_shift4v : vector<4xi32>
+      %q4_low_hi = vector.andi %q4_low_hi0, %q4_nibble_mask : vector<4xi32>
+      %q4_low_bytes = vector.addi %q4_low_lo, %q4_low_hi : vector<4xi32>
+      %q4_low_pair0 = vector.andi %q4_low_bytes, %q4_pair_mask : vector<4xi32>
+      %q4_low_pair_shift = vector.shrui %q4_low_bytes, %q4_shift8v : vector<4xi32>
+      %q4_low_pair1 = vector.andi %q4_low_pair_shift, %q4_pair_mask : vector<4xi32>
+      %q4_low_pairs = vector.addi %q4_low_pair0, %q4_low_pair1 : vector<4xi32>
+      %q4_low_half0 = vector.andi %q4_low_pairs, %q4_half_mask : vector<4xi32>
+      %q4_low_half1 = vector.shrui %q4_low_pairs, %q4_shift16v : vector<4xi32>
+      %q4_low_word_sums = vector.addi %q4_low_half0, %q4_low_half1 : vector<4xi32>
+      %q4_sum_low = vector.reduce<addi> %q4_low_word_sums, %zero_i32 : vector<4xi32>, i32
+      %q4_high_lo = vector.andi %q4_high_words, %q4_nibble_mask : vector<4xi32>
+      %q4_high_hi0 = vector.shrui %q4_high_words, %q4_shift4v : vector<4xi32>
+      %q4_high_hi = vector.andi %q4_high_hi0, %q4_nibble_mask : vector<4xi32>
+      %q4_high_bytes = vector.addi %q4_high_lo, %q4_high_hi : vector<4xi32>
+      %q4_high_pair0 = vector.andi %q4_high_bytes, %q4_pair_mask : vector<4xi32>
+      %q4_high_pair_shift = vector.shrui %q4_high_bytes, %q4_shift8v : vector<4xi32>
+      %q4_high_pair1 = vector.andi %q4_high_pair_shift, %q4_pair_mask : vector<4xi32>
+      %q4_high_pairs = vector.addi %q4_high_pair0, %q4_high_pair1 : vector<4xi32>
+      %q4_high_half0 = vector.andi %q4_high_pairs, %q4_half_mask : vector<4xi32>
+      %q4_high_half1 = vector.shrui %q4_high_pairs, %q4_shift16v : vector<4xi32>
+      %q4_high_word_sums = vector.addi %q4_high_half0, %q4_high_half1 : vector<4xi32>
+      %q4_sum_high = vector.reduce<addi> %q4_high_word_sums, %zero_i32 : vector<4xi32>, i32
+      %q4_weight_row_base = index.mul %q4_weight_tid, %k_wstride : index
+      %q4_w0 = index.assume %q4_weight_row_base [range(%q4_weight_row_base, 0, 2520)] : index
+      %q4_w1_0 = index.add %q4_weight_row_base, %sixteen : index
+      %q4_w1 = index.assume %q4_w1_0 [range(%q4_w1_0, 16, 2536)] : index
+      vector.store %q4_low_packed, %wl_flat[%q4_w0] : vector<16xi8>, view<2560xi8>
+      vector.store %q4_high_packed, %wl_flat[%q4_w1] : vector<16xi8>, view<2560xi8>
+      %q4_meta0_0 = index.mul %q4_weight_tid, %two : index
+      %q4_meta0 = index.assume %q4_meta0_0 [range(%q4_meta0_0, 0, 126)] : index
+      %q4_meta1_0 = index.add %q4_meta0, %one : index
+      %q4_meta1 = index.assume %q4_meta1_0 [range(%q4_meta1_0, 1, 127)] : index
+      %q4_neg_m0 = scalar.negf %q4_m0 : f32
+      %q4_neg_m1 = scalar.negf %q4_m1 : f32
+      %q4_sum_low_f32 = scalar.uitofp %q4_sum_low : i32 to f32
+      %q4_sum_high_f32 = scalar.uitofp %q4_sum_high : i32 to f32
+      %q4_dsum0 = scalar.mulf %q4_d0, %q4_sum_low_f32 : f32
+      %q4_dsum1 = scalar.mulf %q4_d1, %q4_sum_high_f32 : f32
+      %q4_m32_0 = scalar.mulf %q4_m0, %q4_f32_32 : f32
+      %q4_m32_1 = scalar.mulf %q4_m1, %q4_f32_32 : f32
+      %q4_bias_coeff0 = scalar.subf %q4_m32_0, %q4_dsum0 : f32
+      %q4_bias_coeff1 = scalar.subf %q4_m32_1, %q4_dsum1 : f32
+      view.store %q4_d0, %wsl_view[%q4_meta0] : f32, view<128xf32>
+      view.store %q4_d1, %wsl_view[%q4_meta1] : f32, view<128xf32>
+      view.store %q4_neg_m0, %wcl_view[%q4_meta0] : f32, view<128xf32>
+      view.store %q4_neg_m1, %wcl_view[%q4_meta1] : f32, view<128xf32>
+      view.store %q4_bias_coeff0, %wbcl_view[%q4_meta0] : f32, view<128xf32>
+      view.store %q4_bias_coeff1, %wbcl_view[%q4_meta1] : f32, view<128xf32>
+    }
+    // Scale planes: 256 activation and 128 weight entries.
+    %sca0_slot0 = index.add %tid, %k_lanes0 : index
+    %sca0_slot = index.assume %sca0_slot0 [range(%sca0_slot0, 0, 255)] : index
+    %scin_a0 = index.cmp ult, %sca0_slot, %k_asn : index
+    scf.if %scin_a0 {
+      %sc0_col = index.div %sca0_slot, %k_blocks : index
+      %sc0_blk = index.rem %sca0_slot, %k_blocks : index
+      %sca0_c = index.add %col_base, %sc0_col : index
+      %sca0_0 = index.mul %sca0_c, %kblocks : index
+      %sca0_1 = index.add %sca0_0, %chunk_blk : index
+      %sca0_2 = index.add %sca0_1, %sc0_blk : index
+      %sca0 = index.assume %sca0_2 [range(%sca0_2, 0, 33554431)] : index
+      %scav0 = view.load %as_flat[%sca0] : view<33554432xf32> -> f32
+      %sca0_tile = index.div %sc0_col, %sixteen : index
+      %sca0_inner = index.rem %sc0_col, %sixteen : index
+      %sca0_par = index.rem %sca0_inner, %two : index
+      %sca0_v = index.div %sca0_inner, %two : index
+      %sca0_dst0 = index.mul %sca0_tile, %k_blocks : index
+      %sca0_dst1 = index.add %sca0_dst0, %sc0_blk : index
+      %sca0_dst2 = index.mul %sca0_dst1, %two : index
+      %sca0_dst3 = index.add %sca0_dst2, %sca0_par : index
+      %sca0_dst4 = index.mul %sca0_dst3, %eight : index
+      %sca0_dst5 = index.add %sca0_dst4, %sca0_v : index
+      %sca0_dst = index.assume %sca0_dst5 [range(%sca0_dst5, 0, 255)] : index
+      view.store %scav0, %asl_view[%sca0_dst] : f32, view<256xf32>
+      %scas0_meta0_0 = index.mul %sca0, %two : index
+      %scas0_meta0 = index.assume %scas0_meta0_0 [range(%scas0_meta0_0, 0, 67108862)] : index
+      %scas0_meta1_0 = index.add %scas0_meta0, %one : index
+      %scas0_meta1 = index.assume %scas0_meta1_0 [range(%scas0_meta1_0, 1, 67108863)] : index
+      %scas0_sum = view.load %asum_flat[%scas0_meta0] : view<67108864xi32> -> i32
+      %scas0_zp = view.load %asum_flat[%scas0_meta1] : view<67108864xi32> -> i32
+      %scas0_sum_f32 = scalar.sitofp %scas0_sum : i32 to f32
+      %scas0_zp_f32 = scalar.sitofp %scas0_zp : i32 to f32
+      %scas0_scaled = scalar.mulf %scas0_sum_f32, %scav0 : f32
+      %scas0_zp_scaled = scalar.mulf %scas0_zp_f32, %scav0 : f32
+      view.store %scas0_scaled, %asuml_view[%sca0_dst] : f32, view<256xf32>
+      view.store %scas0_zp_scaled, %azpl_view[%sca0_dst] : f32, view<256xf32>
+    }
+    %sca1_slot0 = index.add %tid, %k_lanes1 : index
+    %sca1_slot = index.assume %sca1_slot0 [range(%sca1_slot0, 128, 255)] : index
+    %scin_a1 = index.cmp ult, %sca1_slot, %k_asn : index
+    scf.if %scin_a1 {
+      %sc1_col = index.div %sca1_slot, %k_blocks : index
+      %sc1_blk = index.rem %sca1_slot, %k_blocks : index
+      %sca1_c = index.add %col_base, %sc1_col : index
+      %sca1_0 = index.mul %sca1_c, %kblocks : index
+      %sca1_1 = index.add %sca1_0, %chunk_blk : index
+      %sca1_2 = index.add %sca1_1, %sc1_blk : index
+      %sca1 = index.assume %sca1_2 [range(%sca1_2, 0, 33554431)] : index
+      %scav1 = view.load %as_flat[%sca1] : view<33554432xf32> -> f32
+      %sca1_tile = index.div %sc1_col, %sixteen : index
+      %sca1_inner = index.rem %sc1_col, %sixteen : index
+      %sca1_par = index.rem %sca1_inner, %two : index
+      %sca1_v = index.div %sca1_inner, %two : index
+      %sca1_dst0 = index.mul %sca1_tile, %k_blocks : index
+      %sca1_dst1 = index.add %sca1_dst0, %sc1_blk : index
+      %sca1_dst2 = index.mul %sca1_dst1, %two : index
+      %sca1_dst3 = index.add %sca1_dst2, %sca1_par : index
+      %sca1_dst4 = index.mul %sca1_dst3, %eight : index
+      %sca1_dst5 = index.add %sca1_dst4, %sca1_v : index
+      %sca1_dst = index.assume %sca1_dst5 [range(%sca1_dst5, 0, 255)] : index
+      view.store %scav1, %asl_view[%sca1_dst] : f32, view<256xf32>
+      %scas1_meta0_0 = index.mul %sca1, %two : index
+      %scas1_meta0 = index.assume %scas1_meta0_0 [range(%scas1_meta0_0, 0, 67108862)] : index
+      %scas1_meta1_0 = index.add %scas1_meta0, %one : index
+      %scas1_meta1 = index.assume %scas1_meta1_0 [range(%scas1_meta1_0, 1, 67108863)] : index
+      %scas1_sum = view.load %asum_flat[%scas1_meta0] : view<67108864xi32> -> i32
+      %scas1_zp = view.load %asum_flat[%scas1_meta1] : view<67108864xi32> -> i32
+      %scas1_sum_f32 = scalar.sitofp %scas1_sum : i32 to f32
+      %scas1_zp_f32 = scalar.sitofp %scas1_zp : i32 to f32
+      %scas1_scaled = scalar.mulf %scas1_sum_f32, %scav1 : f32
+      %scas1_zp_scaled = scalar.mulf %scas1_zp_f32, %scav1 : f32
+      view.store %scas1_scaled, %asuml_view[%sca1_dst] : f32, view<256xf32>
+      view.store %scas1_zp_scaled, %azpl_view[%sca1_dst] : f32, view<256xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+    // Two K32 blocks explicitly unrolled. Arithmetic order and the
+    // enclosing K64 staging/barrier cadence are unchanged.
+    %blk_k_u0 = index.mul %zero, %sixteen : index
+    %blk_k16_u0 = index.add %blk_k_u0, %eight : index
+    %iz_u0 = vector.fragment<init> %izero shape [%sixteen, %sixteen] : vector<8xi32>
+    %wsi0_2_u0 = index.add %wsb0, %zero : index
+    %wsi0_u0 = index.assume %wsi0_2_u0 [range(%wsi0_2_u0, 0, 127)] : index
+    %wsc0_u0 = view.load %wsl_view[%wsi0_u0] : view<128xf32> -> f32
+    %wsv0_u0 = vector.splat %wsc0_u0 : vector<8xf32>
+    %wc0_u0 = view.load %wcl_view[%wsi0_u0] : view<128xf32> -> f32
+    %wcv0_u0 = vector.splat %wc0_u0 : vector<8xf32>
+    %wbc0_u0 = view.load %wbcl_view[%wsi0_u0] : view<128xf32> -> f32
+    %wbcv0_u0 = vector.splat %wbc0_u0 : vector<8xf32>
+    %wsi1_2_u0 = index.add %wsb1, %zero : index
+    %wsi1_u0 = index.assume %wsi1_2_u0 [range(%wsi1_2_u0, 0, 127)] : index
+    %wsc1_u0 = view.load %wsl_view[%wsi1_u0] : view<128xf32> -> f32
+    %wsv1_u0 = vector.splat %wsc1_u0 : vector<8xf32>
+    %wc1_u0 = view.load %wcl_view[%wsi1_u0] : view<128xf32> -> f32
+    %wcv1_u0 = vector.splat %wc1_u0 : vector<8xf32>
+    %wbc1_u0 = view.load %wbcl_view[%wsi1_u0] : view<128xf32> -> f32
+    %wbcv1_u0 = vector.splat %wbc1_u0 : vector<8xf32>
+    %wsi2_2_u0 = index.add %wsb2, %zero : index
+    %wsi2_u0 = index.assume %wsi2_2_u0 [range(%wsi2_2_u0, 0, 127)] : index
+    %wsc2_u0 = view.load %wsl_view[%wsi2_u0] : view<128xf32> -> f32
+    %wsv2_u0 = vector.splat %wsc2_u0 : vector<8xf32>
+    %wc2_u0 = view.load %wcl_view[%wsi2_u0] : view<128xf32> -> f32
+    %wcv2_u0 = vector.splat %wc2_u0 : vector<8xf32>
+    %wbc2_u0 = view.load %wbcl_view[%wsi2_u0] : view<128xf32> -> f32
+    %wbcv2_u0 = vector.splat %wbc2_u0 : vector<8xf32>
+    %wsi3_2_u0 = index.add %wsb3, %zero : index
+    %wsi3_u0 = index.assume %wsi3_2_u0 [range(%wsi3_2_u0, 0, 127)] : index
+    %wsc3_u0 = view.load %wsl_view[%wsi3_u0] : view<128xf32> -> f32
+    %wsv3_u0 = vector.splat %wsc3_u0 : vector<8xf32>
+    %wc3_u0 = view.load %wcl_view[%wsi3_u0] : view<128xf32> -> f32
+    %wcv3_u0 = vector.splat %wc3_u0 : vector<8xf32>
+    %wbc3_u0 = view.load %wbcl_view[%wsi3_u0] : view<128xf32> -> f32
+    %wbcv3_u0 = vector.splat %wbc3_u0 : vector<8xf32>
+    %lf0_0_lane_row_u0 = index.add %lm0, %lane_lo : index
+    %lf0_0_row_u0 = index.mul %lf0_0_lane_row_u0, %k_astride : index
+    %lf0_0_base_u0 = index.add %lf0_0_row_u0, %blk_k_u0 : index
+    %lf0_0_idx_u0 = index.assume %lf0_0_base_u0 [range(%lf0_0_base_u0, 0, 5112)] : index
+    %lf0_0_raw_u0 = vector.load %al_flat[%lf0_0_idx_u0] : view<5120xi8> -> vector<8xi8>
+    %lf0_0_words_u0 = vector.bitcast %lf0_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %lf0_0_u0 = vector.fragment<lhs> %lf0_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %lf0_1_lane_row_u0 = index.add %lm0, %lane_lo : index
+    %lf0_1_row_u0 = index.mul %lf0_1_lane_row_u0, %k_astride : index
+    %lf0_1_base_u0 = index.add %lf0_1_row_u0, %blk_k16_u0 : index
+    %lf0_1_idx_u0 = index.assume %lf0_1_base_u0 [range(%lf0_1_base_u0, 0, 5112)] : index
+    %lf0_1_raw_u0 = vector.load %al_flat[%lf0_1_idx_u0] : view<5120xi8> -> vector<8xi8>
+    %lf0_1_words_u0 = vector.bitcast %lf0_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %lf0_1_u0 = vector.fragment<lhs> %lf0_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %asi0_0_u0 = index.add %asb0, %zero : index
+    %asi0_1_u0 = index.mul %asi0_0_u0, %two : index
+    %asi0_2_u0 = index.add %asi0_1_u0, %lane_hi : index
+    %asi0_3_u0 = index.mul %asi0_2_u0, %eight : index
+    %asi0_u0 = index.assume %asi0_3_u0 [range(%asi0_3_u0, 0, 120)] : index
+    %asv0_u0 = vector.load %asl_view[%asi0_u0] : view<256xf32> -> vector<8xf32>
+    %auv0_u0 = vector.load %asuml_view[%asi0_u0] : view<256xf32> -> vector<8xf32>
+    %azpv0_u0 = vector.load %azpl_view[%asi0_u0] : view<256xf32> -> vector<8xf32>
+    %rfs0_0_0_row_u0 = index.mul %ln0, %k_wstride : index
+    %rfs0_0_0_base_u0 = index.add %rfs0_0_0_row_u0, %blk_k_u0 : index
+    %rfs0_0_0_idx_u0 = index.assume %rfs0_0_0_base_u0 [range(%rfs0_0_0_base_u0, 0, 2552)] : index
+    %rfs0_0_0_raw_u0 = vector.load %wl_flat[%rfs0_0_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_0_0_words_u0 = vector.bitcast %rfs0_0_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_0_0_u0 = vector.fragment<rhs> %rfs0_0_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_0_1_row_u0 = index.mul %ln0, %k_wstride : index
+    %rfs0_0_1_base_u0 = index.add %rfs0_0_1_row_u0, %blk_k16_u0 : index
+    %rfs0_0_1_idx_u0 = index.assume %rfs0_0_1_base_u0 [range(%rfs0_0_1_base_u0, 0, 2552)] : index
+    %rfs0_0_1_raw_u0 = vector.load %wl_flat[%rfs0_0_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_0_1_words_u0 = vector.bitcast %rfs0_0_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_0_1_u0 = vector.fragment<rhs> %rfs0_0_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_0_u0 = vector.mma %lf0_0_u0, %rfs0_0_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_0_u0 = vector.mma %lf0_1_u0, %rfs0_0_1_u0, %i0_0_0_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_0_u0 = vector.sitofp %i1_0_0_u0 : vector<8xi32> to vector<8xf32>
+    %sv0_0_u0 = vector.mulf %asv0_u0, %wsv0_u0 : vector<8xf32>
+    %corr_fn0_0_u0 = vector.mulf %auv0_u0, %wcv0_u0 : vector<8xf32>
+    %zcorr_fn0_0_u0 = vector.mulf %azpv0_u0, %wbcv0_u0 : vector<8xf32>
+
+    %base_sum_fn0_0_u0 = vector.addf %fc0_0, %corr_fn0_0_u0 : vector<8xf32>
+    %base_fn0_0_u0 = vector.addf %base_sum_fn0_0_u0, %zcorr_fn0_0_u0 : vector<8xf32>
+
+    %fn0_0_u0 = vector.fmaf %ff0_0_u0, %sv0_0_u0, %base_fn0_0_u0 : vector<8xf32>
+    %rfs0_1_0_row_u0 = index.mul %ln1, %k_wstride : index
+    %rfs0_1_0_base_u0 = index.add %rfs0_1_0_row_u0, %blk_k_u0 : index
+    %rfs0_1_0_idx_u0 = index.assume %rfs0_1_0_base_u0 [range(%rfs0_1_0_base_u0, 0, 2552)] : index
+    %rfs0_1_0_raw_u0 = vector.load %wl_flat[%rfs0_1_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_1_0_words_u0 = vector.bitcast %rfs0_1_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_1_0_u0 = vector.fragment<rhs> %rfs0_1_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_1_1_row_u0 = index.mul %ln1, %k_wstride : index
+    %rfs0_1_1_base_u0 = index.add %rfs0_1_1_row_u0, %blk_k16_u0 : index
+    %rfs0_1_1_idx_u0 = index.assume %rfs0_1_1_base_u0 [range(%rfs0_1_1_base_u0, 0, 2552)] : index
+    %rfs0_1_1_raw_u0 = vector.load %wl_flat[%rfs0_1_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_1_1_words_u0 = vector.bitcast %rfs0_1_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_1_1_u0 = vector.fragment<rhs> %rfs0_1_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_1_u0 = vector.mma %lf0_0_u0, %rfs0_1_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_1_u0 = vector.mma %lf0_1_u0, %rfs0_1_1_u0, %i0_0_1_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_1_u0 = vector.sitofp %i1_0_1_u0 : vector<8xi32> to vector<8xf32>
+    %sv0_1_u0 = vector.mulf %asv0_u0, %wsv1_u0 : vector<8xf32>
+    %corr_fn0_1_u0 = vector.mulf %auv0_u0, %wcv1_u0 : vector<8xf32>
+    %zcorr_fn0_1_u0 = vector.mulf %azpv0_u0, %wbcv1_u0 : vector<8xf32>
+
+    %base_sum_fn0_1_u0 = vector.addf %fc0_1, %corr_fn0_1_u0 : vector<8xf32>
+    %base_fn0_1_u0 = vector.addf %base_sum_fn0_1_u0, %zcorr_fn0_1_u0 : vector<8xf32>
+
+    %fn0_1_u0 = vector.fmaf %ff0_1_u0, %sv0_1_u0, %base_fn0_1_u0 : vector<8xf32>
+    %rfs0_2_0_row_u0 = index.mul %ln2, %k_wstride : index
+    %rfs0_2_0_base_u0 = index.add %rfs0_2_0_row_u0, %blk_k_u0 : index
+    %rfs0_2_0_idx_u0 = index.assume %rfs0_2_0_base_u0 [range(%rfs0_2_0_base_u0, 0, 2552)] : index
+    %rfs0_2_0_raw_u0 = vector.load %wl_flat[%rfs0_2_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_2_0_words_u0 = vector.bitcast %rfs0_2_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_2_0_u0 = vector.fragment<rhs> %rfs0_2_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_2_1_row_u0 = index.mul %ln2, %k_wstride : index
+    %rfs0_2_1_base_u0 = index.add %rfs0_2_1_row_u0, %blk_k16_u0 : index
+    %rfs0_2_1_idx_u0 = index.assume %rfs0_2_1_base_u0 [range(%rfs0_2_1_base_u0, 0, 2552)] : index
+    %rfs0_2_1_raw_u0 = vector.load %wl_flat[%rfs0_2_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_2_1_words_u0 = vector.bitcast %rfs0_2_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_2_1_u0 = vector.fragment<rhs> %rfs0_2_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_2_u0 = vector.mma %lf0_0_u0, %rfs0_2_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_2_u0 = vector.mma %lf0_1_u0, %rfs0_2_1_u0, %i0_0_2_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_2_u0 = vector.sitofp %i1_0_2_u0 : vector<8xi32> to vector<8xf32>
+    %sv0_2_u0 = vector.mulf %asv0_u0, %wsv2_u0 : vector<8xf32>
+    %corr_fn0_2_u0 = vector.mulf %auv0_u0, %wcv2_u0 : vector<8xf32>
+    %zcorr_fn0_2_u0 = vector.mulf %azpv0_u0, %wbcv2_u0 : vector<8xf32>
+
+    %base_sum_fn0_2_u0 = vector.addf %fc0_2, %corr_fn0_2_u0 : vector<8xf32>
+    %base_fn0_2_u0 = vector.addf %base_sum_fn0_2_u0, %zcorr_fn0_2_u0 : vector<8xf32>
+
+    %fn0_2_u0 = vector.fmaf %ff0_2_u0, %sv0_2_u0, %base_fn0_2_u0 : vector<8xf32>
+    %rfs0_3_0_row_u0 = index.mul %ln3, %k_wstride : index
+    %rfs0_3_0_base_u0 = index.add %rfs0_3_0_row_u0, %blk_k_u0 : index
+    %rfs0_3_0_idx_u0 = index.assume %rfs0_3_0_base_u0 [range(%rfs0_3_0_base_u0, 0, 2552)] : index
+    %rfs0_3_0_raw_u0 = vector.load %wl_flat[%rfs0_3_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_3_0_words_u0 = vector.bitcast %rfs0_3_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_3_0_u0 = vector.fragment<rhs> %rfs0_3_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_3_1_row_u0 = index.mul %ln3, %k_wstride : index
+    %rfs0_3_1_base_u0 = index.add %rfs0_3_1_row_u0, %blk_k16_u0 : index
+    %rfs0_3_1_idx_u0 = index.assume %rfs0_3_1_base_u0 [range(%rfs0_3_1_base_u0, 0, 2552)] : index
+    %rfs0_3_1_raw_u0 = vector.load %wl_flat[%rfs0_3_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs0_3_1_words_u0 = vector.bitcast %rfs0_3_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs0_3_1_u0 = vector.fragment<rhs> %rfs0_3_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_3_u0 = vector.mma %lf0_0_u0, %rfs0_3_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_3_u0 = vector.mma %lf0_1_u0, %rfs0_3_1_u0, %i0_0_3_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_3_u0 = vector.sitofp %i1_0_3_u0 : vector<8xi32> to vector<8xf32>
+    %sv0_3_u0 = vector.mulf %asv0_u0, %wsv3_u0 : vector<8xf32>
+    %corr_fn0_3_u0 = vector.mulf %auv0_u0, %wcv3_u0 : vector<8xf32>
+    %zcorr_fn0_3_u0 = vector.mulf %azpv0_u0, %wbcv3_u0 : vector<8xf32>
+
+    %base_sum_fn0_3_u0 = vector.addf %fc0_3, %corr_fn0_3_u0 : vector<8xf32>
+    %base_fn0_3_u0 = vector.addf %base_sum_fn0_3_u0, %zcorr_fn0_3_u0 : vector<8xf32>
+
+    %fn0_3_u0 = vector.fmaf %ff0_3_u0, %sv0_3_u0, %base_fn0_3_u0 : vector<8xf32>
+    scf.schedule.fence
+    // M0 has released current K32-half zero. Issue the next half now and
+    // keep it live across the independent M1xN64 band.
+    %q4a_next_v0 = scf.if %q4a_has_next -> (vector<16xi8>) {
+      %q4a_next_chunk_k0 = index.mul %q4a_next_chunk, %k_kc : index
+      %q4a_next_chunk_bytes0 = index.div %q4a_next_chunk_k0, %two : index
+      %q4a_next_src0_0 = index.add %q4a_row_base, %q4a_next_chunk_bytes0 : index
+      %q4a_next_src0 = index.assume %q4a_next_src0_0 [range(%q4a_next_src0_0, 0, 536870896)] : index
+      %q4a_loaded_v0 = vector.load %aq_flat[%q4a_next_src0] : view<1073741824xi8> -> vector<16xi8>
+      scf.yield %q4a_loaded_v0 : vector<16xi8>
+    } else {
+      scf.yield %q4a_zero : vector<16xi8>
+    }
+    scf.schedule.fence
+    %lf1_0_lane_row_u0 = index.add %lm1, %lane_lo : index
+    %lf1_0_row_u0 = index.mul %lf1_0_lane_row_u0, %k_astride : index
+    %lf1_0_base_u0 = index.add %lf1_0_row_u0, %blk_k_u0 : index
+    %lf1_0_idx_u0 = index.assume %lf1_0_base_u0 [range(%lf1_0_base_u0, 0, 5112)] : index
+    %lf1_0_raw_u0 = vector.load %al_flat[%lf1_0_idx_u0] : view<5120xi8> -> vector<8xi8>
+    %lf1_0_words_u0 = vector.bitcast %lf1_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %lf1_0_u0 = vector.fragment<lhs> %lf1_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %lf1_1_lane_row_u0 = index.add %lm1, %lane_lo : index
+    %lf1_1_row_u0 = index.mul %lf1_1_lane_row_u0, %k_astride : index
+    %lf1_1_base_u0 = index.add %lf1_1_row_u0, %blk_k16_u0 : index
+    %lf1_1_idx_u0 = index.assume %lf1_1_base_u0 [range(%lf1_1_base_u0, 0, 5112)] : index
+    %lf1_1_raw_u0 = vector.load %al_flat[%lf1_1_idx_u0] : view<5120xi8> -> vector<8xi8>
+    %lf1_1_words_u0 = vector.bitcast %lf1_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %lf1_1_u0 = vector.fragment<lhs> %lf1_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %asi1_0_u0 = index.add %asb1, %zero : index
+    %asi1_1_u0 = index.mul %asi1_0_u0, %two : index
+    %asi1_2_u0 = index.add %asi1_1_u0, %lane_hi : index
+    %asi1_3_u0 = index.mul %asi1_2_u0, %eight : index
+    %asi1_u0 = index.assume %asi1_3_u0 [range(%asi1_3_u0, 0, 120)] : index
+    %asv1_u0 = vector.load %asl_view[%asi1_u0] : view<256xf32> -> vector<8xf32>
+    %auv1_u0 = vector.load %asuml_view[%asi1_u0] : view<256xf32> -> vector<8xf32>
+    %azpv1_u0 = vector.load %azpl_view[%asi1_u0] : view<256xf32> -> vector<8xf32>
+    %rfs1_0_0_row_u0 = index.mul %ln0, %k_wstride : index
+    %rfs1_0_0_base_u0 = index.add %rfs1_0_0_row_u0, %blk_k_u0 : index
+    %rfs1_0_0_idx_u0 = index.assume %rfs1_0_0_base_u0 [range(%rfs1_0_0_base_u0, 0, 2552)] : index
+    %rfs1_0_0_raw_u0 = vector.load %wl_flat[%rfs1_0_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_0_0_words_u0 = vector.bitcast %rfs1_0_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_0_0_u0 = vector.fragment<rhs> %rfs1_0_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_0_1_row_u0 = index.mul %ln0, %k_wstride : index
+    %rfs1_0_1_base_u0 = index.add %rfs1_0_1_row_u0, %blk_k16_u0 : index
+    %rfs1_0_1_idx_u0 = index.assume %rfs1_0_1_base_u0 [range(%rfs1_0_1_base_u0, 0, 2552)] : index
+    %rfs1_0_1_raw_u0 = vector.load %wl_flat[%rfs1_0_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_0_1_words_u0 = vector.bitcast %rfs1_0_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_0_1_u0 = vector.fragment<rhs> %rfs1_0_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_0_u0 = vector.mma %lf1_0_u0, %rfs1_0_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_0_u0 = vector.mma %lf1_1_u0, %rfs1_0_1_u0, %i0_1_0_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_0_u0 = vector.sitofp %i1_1_0_u0 : vector<8xi32> to vector<8xf32>
+    %sv1_0_u0 = vector.mulf %asv1_u0, %wsv0_u0 : vector<8xf32>
+    %corr_fn1_0_u0 = vector.mulf %auv1_u0, %wcv0_u0 : vector<8xf32>
+    %zcorr_fn1_0_u0 = vector.mulf %azpv1_u0, %wbcv0_u0 : vector<8xf32>
+
+    %base_sum_fn1_0_u0 = vector.addf %fc1_0, %corr_fn1_0_u0 : vector<8xf32>
+    %base_fn1_0_u0 = vector.addf %base_sum_fn1_0_u0, %zcorr_fn1_0_u0 : vector<8xf32>
+
+    %fn1_0_u0 = vector.fmaf %ff1_0_u0, %sv1_0_u0, %base_fn1_0_u0 : vector<8xf32>
+    %rfs1_1_0_row_u0 = index.mul %ln1, %k_wstride : index
+    %rfs1_1_0_base_u0 = index.add %rfs1_1_0_row_u0, %blk_k_u0 : index
+    %rfs1_1_0_idx_u0 = index.assume %rfs1_1_0_base_u0 [range(%rfs1_1_0_base_u0, 0, 2552)] : index
+    %rfs1_1_0_raw_u0 = vector.load %wl_flat[%rfs1_1_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_1_0_words_u0 = vector.bitcast %rfs1_1_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_1_0_u0 = vector.fragment<rhs> %rfs1_1_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_1_1_row_u0 = index.mul %ln1, %k_wstride : index
+    %rfs1_1_1_base_u0 = index.add %rfs1_1_1_row_u0, %blk_k16_u0 : index
+    %rfs1_1_1_idx_u0 = index.assume %rfs1_1_1_base_u0 [range(%rfs1_1_1_base_u0, 0, 2552)] : index
+    %rfs1_1_1_raw_u0 = vector.load %wl_flat[%rfs1_1_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_1_1_words_u0 = vector.bitcast %rfs1_1_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_1_1_u0 = vector.fragment<rhs> %rfs1_1_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_1_u0 = vector.mma %lf1_0_u0, %rfs1_1_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_1_u0 = vector.mma %lf1_1_u0, %rfs1_1_1_u0, %i0_1_1_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_1_u0 = vector.sitofp %i1_1_1_u0 : vector<8xi32> to vector<8xf32>
+    %sv1_1_u0 = vector.mulf %asv1_u0, %wsv1_u0 : vector<8xf32>
+    %corr_fn1_1_u0 = vector.mulf %auv1_u0, %wcv1_u0 : vector<8xf32>
+    %zcorr_fn1_1_u0 = vector.mulf %azpv1_u0, %wbcv1_u0 : vector<8xf32>
+
+    %base_sum_fn1_1_u0 = vector.addf %fc1_1, %corr_fn1_1_u0 : vector<8xf32>
+    %base_fn1_1_u0 = vector.addf %base_sum_fn1_1_u0, %zcorr_fn1_1_u0 : vector<8xf32>
+
+    %fn1_1_u0 = vector.fmaf %ff1_1_u0, %sv1_1_u0, %base_fn1_1_u0 : vector<8xf32>
+    %rfs1_2_0_row_u0 = index.mul %ln2, %k_wstride : index
+    %rfs1_2_0_base_u0 = index.add %rfs1_2_0_row_u0, %blk_k_u0 : index
+    %rfs1_2_0_idx_u0 = index.assume %rfs1_2_0_base_u0 [range(%rfs1_2_0_base_u0, 0, 2552)] : index
+    %rfs1_2_0_raw_u0 = vector.load %wl_flat[%rfs1_2_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_2_0_words_u0 = vector.bitcast %rfs1_2_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_2_0_u0 = vector.fragment<rhs> %rfs1_2_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_2_1_row_u0 = index.mul %ln2, %k_wstride : index
+    %rfs1_2_1_base_u0 = index.add %rfs1_2_1_row_u0, %blk_k16_u0 : index
+    %rfs1_2_1_idx_u0 = index.assume %rfs1_2_1_base_u0 [range(%rfs1_2_1_base_u0, 0, 2552)] : index
+    %rfs1_2_1_raw_u0 = vector.load %wl_flat[%rfs1_2_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_2_1_words_u0 = vector.bitcast %rfs1_2_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_2_1_u0 = vector.fragment<rhs> %rfs1_2_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_2_u0 = vector.mma %lf1_0_u0, %rfs1_2_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_2_u0 = vector.mma %lf1_1_u0, %rfs1_2_1_u0, %i0_1_2_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_2_u0 = vector.sitofp %i1_1_2_u0 : vector<8xi32> to vector<8xf32>
+    %sv1_2_u0 = vector.mulf %asv1_u0, %wsv2_u0 : vector<8xf32>
+    %corr_fn1_2_u0 = vector.mulf %auv1_u0, %wcv2_u0 : vector<8xf32>
+    %zcorr_fn1_2_u0 = vector.mulf %azpv1_u0, %wbcv2_u0 : vector<8xf32>
+
+    %base_sum_fn1_2_u0 = vector.addf %fc1_2, %corr_fn1_2_u0 : vector<8xf32>
+    %base_fn1_2_u0 = vector.addf %base_sum_fn1_2_u0, %zcorr_fn1_2_u0 : vector<8xf32>
+
+    %fn1_2_u0 = vector.fmaf %ff1_2_u0, %sv1_2_u0, %base_fn1_2_u0 : vector<8xf32>
+    %rfs1_3_0_row_u0 = index.mul %ln3, %k_wstride : index
+    %rfs1_3_0_base_u0 = index.add %rfs1_3_0_row_u0, %blk_k_u0 : index
+    %rfs1_3_0_idx_u0 = index.assume %rfs1_3_0_base_u0 [range(%rfs1_3_0_base_u0, 0, 2552)] : index
+    %rfs1_3_0_raw_u0 = vector.load %wl_flat[%rfs1_3_0_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_3_0_words_u0 = vector.bitcast %rfs1_3_0_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_3_0_u0 = vector.fragment<rhs> %rfs1_3_0_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_3_1_row_u0 = index.mul %ln3, %k_wstride : index
+    %rfs1_3_1_base_u0 = index.add %rfs1_3_1_row_u0, %blk_k16_u0 : index
+    %rfs1_3_1_idx_u0 = index.assume %rfs1_3_1_base_u0 [range(%rfs1_3_1_base_u0, 0, 2552)] : index
+    %rfs1_3_1_raw_u0 = vector.load %wl_flat[%rfs1_3_1_idx_u0] : view<2560xi8> -> vector<8xi8>
+    %rfs1_3_1_words_u0 = vector.bitcast %rfs1_3_1_raw_u0 : vector<8xi8> to vector<2xi32>
+    %rfs1_3_1_u0 = vector.fragment<rhs> %rfs1_3_1_words_u0 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_3_u0 = vector.mma %lf1_0_u0, %rfs1_3_0_u0, %iz_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_3_u0 = vector.mma %lf1_1_u0, %rfs1_3_1_u0, %i0_1_3_u0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_3_u0 = vector.sitofp %i1_1_3_u0 : vector<8xi32> to vector<8xf32>
+    %sv1_3_u0 = vector.mulf %asv1_u0, %wsv3_u0 : vector<8xf32>
+    %corr_fn1_3_u0 = vector.mulf %auv1_u0, %wcv3_u0 : vector<8xf32>
+    %zcorr_fn1_3_u0 = vector.mulf %azpv1_u0, %wbcv3_u0 : vector<8xf32>
+
+    %base_sum_fn1_3_u0 = vector.addf %fc1_3, %corr_fn1_3_u0 : vector<8xf32>
+    %base_fn1_3_u0 = vector.addf %base_sum_fn1_3_u0, %zcorr_fn1_3_u0 : vector<8xf32>
+
+    %fn1_3_u0 = vector.fmaf %ff1_3_u0, %sv1_3_u0, %base_fn1_3_u0 : vector<8xf32>
+    scf.schedule.fence
+    // All consumers of current half zero are complete; publish next half
+    // zero into the same slots while half one remains live.
+    scf.if %q4a_has_next {
+      vector.store %q4a_next_v0, %al_flat[%q4a_dst0] : vector<16xi8>, view<5120xi8>
+    }
+    %blk_k_u1 = index.mul %one, %sixteen : index
+    %blk_k16_u1 = index.add %blk_k_u1, %eight : index
+    %iz_u1 = vector.fragment<init> %izero shape [%sixteen, %sixteen] : vector<8xi32>
+    %wsi0_2_u1 = index.add %wsb0, %one : index
+    %wsi0_u1 = index.assume %wsi0_2_u1 [range(%wsi0_2_u1, 0, 127)] : index
+    %wsc0_u1 = view.load %wsl_view[%wsi0_u1] : view<128xf32> -> f32
+    %wsv0_u1 = vector.splat %wsc0_u1 : vector<8xf32>
+    %wc0_u1 = view.load %wcl_view[%wsi0_u1] : view<128xf32> -> f32
+    %wcv0_u1 = vector.splat %wc0_u1 : vector<8xf32>
+    %wbc0_u1 = view.load %wbcl_view[%wsi0_u1] : view<128xf32> -> f32
+    %wbcv0_u1 = vector.splat %wbc0_u1 : vector<8xf32>
+    %wsi1_2_u1 = index.add %wsb1, %one : index
+    %wsi1_u1 = index.assume %wsi1_2_u1 [range(%wsi1_2_u1, 0, 127)] : index
+    %wsc1_u1 = view.load %wsl_view[%wsi1_u1] : view<128xf32> -> f32
+    %wsv1_u1 = vector.splat %wsc1_u1 : vector<8xf32>
+    %wc1_u1 = view.load %wcl_view[%wsi1_u1] : view<128xf32> -> f32
+    %wcv1_u1 = vector.splat %wc1_u1 : vector<8xf32>
+    %wbc1_u1 = view.load %wbcl_view[%wsi1_u1] : view<128xf32> -> f32
+    %wbcv1_u1 = vector.splat %wbc1_u1 : vector<8xf32>
+    %wsi2_2_u1 = index.add %wsb2, %one : index
+    %wsi2_u1 = index.assume %wsi2_2_u1 [range(%wsi2_2_u1, 0, 127)] : index
+    %wsc2_u1 = view.load %wsl_view[%wsi2_u1] : view<128xf32> -> f32
+    %wsv2_u1 = vector.splat %wsc2_u1 : vector<8xf32>
+    %wc2_u1 = view.load %wcl_view[%wsi2_u1] : view<128xf32> -> f32
+    %wcv2_u1 = vector.splat %wc2_u1 : vector<8xf32>
+    %wbc2_u1 = view.load %wbcl_view[%wsi2_u1] : view<128xf32> -> f32
+    %wbcv2_u1 = vector.splat %wbc2_u1 : vector<8xf32>
+    %wsi3_2_u1 = index.add %wsb3, %one : index
+    %wsi3_u1 = index.assume %wsi3_2_u1 [range(%wsi3_2_u1, 0, 127)] : index
+    %wsc3_u1 = view.load %wsl_view[%wsi3_u1] : view<128xf32> -> f32
+    %wsv3_u1 = vector.splat %wsc3_u1 : vector<8xf32>
+    %wc3_u1 = view.load %wcl_view[%wsi3_u1] : view<128xf32> -> f32
+    %wcv3_u1 = vector.splat %wc3_u1 : vector<8xf32>
+    %wbc3_u1 = view.load %wbcl_view[%wsi3_u1] : view<128xf32> -> f32
+    %wbcv3_u1 = vector.splat %wbc3_u1 : vector<8xf32>
+    %lf0_0_lane_row_u1 = index.add %lm0, %lane_lo : index
+    %lf0_0_row_u1 = index.mul %lf0_0_lane_row_u1, %k_astride : index
+    %lf0_0_base_u1 = index.add %lf0_0_row_u1, %blk_k_u1 : index
+    %lf0_0_idx_u1 = index.assume %lf0_0_base_u1 [range(%lf0_0_base_u1, 0, 5112)] : index
+    %lf0_0_raw_u1 = vector.load %al_flat[%lf0_0_idx_u1] : view<5120xi8> -> vector<8xi8>
+    %lf0_0_words_u1 = vector.bitcast %lf0_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %lf0_0_u1 = vector.fragment<lhs> %lf0_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %lf0_1_lane_row_u1 = index.add %lm0, %lane_lo : index
+    %lf0_1_row_u1 = index.mul %lf0_1_lane_row_u1, %k_astride : index
+    %lf0_1_base_u1 = index.add %lf0_1_row_u1, %blk_k16_u1 : index
+    %lf0_1_idx_u1 = index.assume %lf0_1_base_u1 [range(%lf0_1_base_u1, 0, 5112)] : index
+    %lf0_1_raw_u1 = vector.load %al_flat[%lf0_1_idx_u1] : view<5120xi8> -> vector<8xi8>
+    %lf0_1_words_u1 = vector.bitcast %lf0_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %lf0_1_u1 = vector.fragment<lhs> %lf0_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %asi0_0_u1 = index.add %asb0, %one : index
+    %asi0_1_u1 = index.mul %asi0_0_u1, %two : index
+    %asi0_2_u1 = index.add %asi0_1_u1, %lane_hi : index
+    %asi0_3_u1 = index.mul %asi0_2_u1, %eight : index
+    %asi0_u1 = index.assume %asi0_3_u1 [range(%asi0_3_u1, 0, 120)] : index
+    %asv0_u1 = vector.load %asl_view[%asi0_u1] : view<256xf32> -> vector<8xf32>
+    %auv0_u1 = vector.load %asuml_view[%asi0_u1] : view<256xf32> -> vector<8xf32>
+    %azpv0_u1 = vector.load %azpl_view[%asi0_u1] : view<256xf32> -> vector<8xf32>
+    %rfs0_0_0_row_u1 = index.mul %ln0, %k_wstride : index
+    %rfs0_0_0_base_u1 = index.add %rfs0_0_0_row_u1, %blk_k_u1 : index
+    %rfs0_0_0_idx_u1 = index.assume %rfs0_0_0_base_u1 [range(%rfs0_0_0_base_u1, 0, 2552)] : index
+    %rfs0_0_0_raw_u1 = vector.load %wl_flat[%rfs0_0_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_0_0_words_u1 = vector.bitcast %rfs0_0_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_0_0_u1 = vector.fragment<rhs> %rfs0_0_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_0_1_row_u1 = index.mul %ln0, %k_wstride : index
+    %rfs0_0_1_base_u1 = index.add %rfs0_0_1_row_u1, %blk_k16_u1 : index
+    %rfs0_0_1_idx_u1 = index.assume %rfs0_0_1_base_u1 [range(%rfs0_0_1_base_u1, 0, 2552)] : index
+    %rfs0_0_1_raw_u1 = vector.load %wl_flat[%rfs0_0_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_0_1_words_u1 = vector.bitcast %rfs0_0_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_0_1_u1 = vector.fragment<rhs> %rfs0_0_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_0_u1 = vector.mma %lf0_0_u1, %rfs0_0_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_0_u1 = vector.mma %lf0_1_u1, %rfs0_0_1_u1, %i0_0_0_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_0_u1 = vector.sitofp %i1_0_0_u1 : vector<8xi32> to vector<8xf32>
+    %sv0_0_u1 = vector.mulf %asv0_u1, %wsv0_u1 : vector<8xf32>
+    %corr_fn0_0 = vector.mulf %auv0_u1, %wcv0_u1 : vector<8xf32>
+    %zcorr_fn0_0 = vector.mulf %azpv0_u1, %wbcv0_u1 : vector<8xf32>
+
+    %base_sum_fn0_0 = vector.addf %fn0_0_u0, %corr_fn0_0 : vector<8xf32>
+    %base_fn0_0 = vector.addf %base_sum_fn0_0, %zcorr_fn0_0 : vector<8xf32>
+
+    %fn0_0 = vector.fmaf %ff0_0_u1, %sv0_0_u1, %base_fn0_0 : vector<8xf32>
+    %rfs0_1_0_row_u1 = index.mul %ln1, %k_wstride : index
+    %rfs0_1_0_base_u1 = index.add %rfs0_1_0_row_u1, %blk_k_u1 : index
+    %rfs0_1_0_idx_u1 = index.assume %rfs0_1_0_base_u1 [range(%rfs0_1_0_base_u1, 0, 2552)] : index
+    %rfs0_1_0_raw_u1 = vector.load %wl_flat[%rfs0_1_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_1_0_words_u1 = vector.bitcast %rfs0_1_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_1_0_u1 = vector.fragment<rhs> %rfs0_1_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_1_1_row_u1 = index.mul %ln1, %k_wstride : index
+    %rfs0_1_1_base_u1 = index.add %rfs0_1_1_row_u1, %blk_k16_u1 : index
+    %rfs0_1_1_idx_u1 = index.assume %rfs0_1_1_base_u1 [range(%rfs0_1_1_base_u1, 0, 2552)] : index
+    %rfs0_1_1_raw_u1 = vector.load %wl_flat[%rfs0_1_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_1_1_words_u1 = vector.bitcast %rfs0_1_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_1_1_u1 = vector.fragment<rhs> %rfs0_1_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_1_u1 = vector.mma %lf0_0_u1, %rfs0_1_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_1_u1 = vector.mma %lf0_1_u1, %rfs0_1_1_u1, %i0_0_1_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_1_u1 = vector.sitofp %i1_0_1_u1 : vector<8xi32> to vector<8xf32>
+    %sv0_1_u1 = vector.mulf %asv0_u1, %wsv1_u1 : vector<8xf32>
+    %corr_fn0_1 = vector.mulf %auv0_u1, %wcv1_u1 : vector<8xf32>
+    %zcorr_fn0_1 = vector.mulf %azpv0_u1, %wbcv1_u1 : vector<8xf32>
+
+    %base_sum_fn0_1 = vector.addf %fn0_1_u0, %corr_fn0_1 : vector<8xf32>
+    %base_fn0_1 = vector.addf %base_sum_fn0_1, %zcorr_fn0_1 : vector<8xf32>
+
+    %fn0_1 = vector.fmaf %ff0_1_u1, %sv0_1_u1, %base_fn0_1 : vector<8xf32>
+    %rfs0_2_0_row_u1 = index.mul %ln2, %k_wstride : index
+    %rfs0_2_0_base_u1 = index.add %rfs0_2_0_row_u1, %blk_k_u1 : index
+    %rfs0_2_0_idx_u1 = index.assume %rfs0_2_0_base_u1 [range(%rfs0_2_0_base_u1, 0, 2552)] : index
+    %rfs0_2_0_raw_u1 = vector.load %wl_flat[%rfs0_2_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_2_0_words_u1 = vector.bitcast %rfs0_2_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_2_0_u1 = vector.fragment<rhs> %rfs0_2_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_2_1_row_u1 = index.mul %ln2, %k_wstride : index
+    %rfs0_2_1_base_u1 = index.add %rfs0_2_1_row_u1, %blk_k16_u1 : index
+    %rfs0_2_1_idx_u1 = index.assume %rfs0_2_1_base_u1 [range(%rfs0_2_1_base_u1, 0, 2552)] : index
+    %rfs0_2_1_raw_u1 = vector.load %wl_flat[%rfs0_2_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_2_1_words_u1 = vector.bitcast %rfs0_2_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_2_1_u1 = vector.fragment<rhs> %rfs0_2_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_2_u1 = vector.mma %lf0_0_u1, %rfs0_2_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_2_u1 = vector.mma %lf0_1_u1, %rfs0_2_1_u1, %i0_0_2_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_2_u1 = vector.sitofp %i1_0_2_u1 : vector<8xi32> to vector<8xf32>
+    %sv0_2_u1 = vector.mulf %asv0_u1, %wsv2_u1 : vector<8xf32>
+    %corr_fn0_2 = vector.mulf %auv0_u1, %wcv2_u1 : vector<8xf32>
+    %zcorr_fn0_2 = vector.mulf %azpv0_u1, %wbcv2_u1 : vector<8xf32>
+
+    %base_sum_fn0_2 = vector.addf %fn0_2_u0, %corr_fn0_2 : vector<8xf32>
+    %base_fn0_2 = vector.addf %base_sum_fn0_2, %zcorr_fn0_2 : vector<8xf32>
+
+    %fn0_2 = vector.fmaf %ff0_2_u1, %sv0_2_u1, %base_fn0_2 : vector<8xf32>
+    %rfs0_3_0_row_u1 = index.mul %ln3, %k_wstride : index
+    %rfs0_3_0_base_u1 = index.add %rfs0_3_0_row_u1, %blk_k_u1 : index
+    %rfs0_3_0_idx_u1 = index.assume %rfs0_3_0_base_u1 [range(%rfs0_3_0_base_u1, 0, 2552)] : index
+    %rfs0_3_0_raw_u1 = vector.load %wl_flat[%rfs0_3_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_3_0_words_u1 = vector.bitcast %rfs0_3_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_3_0_u1 = vector.fragment<rhs> %rfs0_3_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs0_3_1_row_u1 = index.mul %ln3, %k_wstride : index
+    %rfs0_3_1_base_u1 = index.add %rfs0_3_1_row_u1, %blk_k16_u1 : index
+    %rfs0_3_1_idx_u1 = index.assume %rfs0_3_1_base_u1 [range(%rfs0_3_1_base_u1, 0, 2552)] : index
+    %rfs0_3_1_raw_u1 = vector.load %wl_flat[%rfs0_3_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs0_3_1_words_u1 = vector.bitcast %rfs0_3_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs0_3_1_u1 = vector.fragment<rhs> %rfs0_3_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_0_3_u1 = vector.mma %lf0_0_u1, %rfs0_3_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_0_3_u1 = vector.mma %lf0_1_u1, %rfs0_3_1_u1, %i0_0_3_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff0_3_u1 = vector.sitofp %i1_0_3_u1 : vector<8xi32> to vector<8xf32>
+    %sv0_3_u1 = vector.mulf %asv0_u1, %wsv3_u1 : vector<8xf32>
+    %corr_fn0_3 = vector.mulf %auv0_u1, %wcv3_u1 : vector<8xf32>
+    %zcorr_fn0_3 = vector.mulf %azpv0_u1, %wbcv3_u1 : vector<8xf32>
+
+    %base_sum_fn0_3 = vector.addf %fn0_3_u0, %corr_fn0_3 : vector<8xf32>
+    %base_fn0_3 = vector.addf %base_sum_fn0_3, %zcorr_fn0_3 : vector<8xf32>
+
+    %fn0_3 = vector.fmaf %ff0_3_u1, %sv0_3_u1, %base_fn0_3 : vector<8xf32>
+    scf.schedule.fence
+    // Repeat the same bounded live range for K32-half one.
+    %q4a_next_v1 = scf.if %q4a_has_next -> (vector<16xi8>) {
+      %q4a_next_chunk_k1 = index.mul %q4a_next_chunk, %k_kc : index
+      %q4a_next_chunk_bytes1 = index.div %q4a_next_chunk_k1, %two : index
+      %q4a_next_src1_base = index.add %q4a_row_base, %q4a_next_chunk_bytes1 : index
+      %q4a_next_src1_0 = index.add %q4a_next_src1_base, %q4a_c16 : index
+      %q4a_next_src1 = index.assume %q4a_next_src1_0 [range(%q4a_next_src1_0, 16, 536870912)] : index
+      %q4a_loaded_v1 = vector.load %aq_flat[%q4a_next_src1] : view<1073741824xi8> -> vector<16xi8>
+      scf.yield %q4a_loaded_v1 : vector<16xi8>
+    } else {
+      scf.yield %q4a_zero : vector<16xi8>
+    }
+    scf.schedule.fence
+    %lf1_0_lane_row_u1 = index.add %lm1, %lane_lo : index
+    %lf1_0_row_u1 = index.mul %lf1_0_lane_row_u1, %k_astride : index
+    %lf1_0_base_u1 = index.add %lf1_0_row_u1, %blk_k_u1 : index
+    %lf1_0_idx_u1 = index.assume %lf1_0_base_u1 [range(%lf1_0_base_u1, 0, 5112)] : index
+    %lf1_0_raw_u1 = vector.load %al_flat[%lf1_0_idx_u1] : view<5120xi8> -> vector<8xi8>
+    %lf1_0_words_u1 = vector.bitcast %lf1_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %lf1_0_u1 = vector.fragment<lhs> %lf1_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %lf1_1_lane_row_u1 = index.add %lm1, %lane_lo : index
+    %lf1_1_row_u1 = index.mul %lf1_1_lane_row_u1, %k_astride : index
+    %lf1_1_base_u1 = index.add %lf1_1_row_u1, %blk_k16_u1 : index
+    %lf1_1_idx_u1 = index.assume %lf1_1_base_u1 [range(%lf1_1_base_u1, 0, 5112)] : index
+    %lf1_1_raw_u1 = vector.load %al_flat[%lf1_1_idx_u1] : view<5120xi8> -> vector<8xi8>
+    %lf1_1_words_u1 = vector.bitcast %lf1_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %lf1_1_u1 = vector.fragment<lhs> %lf1_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4a_schema : encoding<schema>} : vector<2xi32>
+    %asi1_0_u1 = index.add %asb1, %one : index
+    %asi1_1_u1 = index.mul %asi1_0_u1, %two : index
+    %asi1_2_u1 = index.add %asi1_1_u1, %lane_hi : index
+    %asi1_3_u1 = index.mul %asi1_2_u1, %eight : index
+    %asi1_u1 = index.assume %asi1_3_u1 [range(%asi1_3_u1, 0, 120)] : index
+    %asv1_u1 = vector.load %asl_view[%asi1_u1] : view<256xf32> -> vector<8xf32>
+    %auv1_u1 = vector.load %asuml_view[%asi1_u1] : view<256xf32> -> vector<8xf32>
+    %azpv1_u1 = vector.load %azpl_view[%asi1_u1] : view<256xf32> -> vector<8xf32>
+    %rfs1_0_0_row_u1 = index.mul %ln0, %k_wstride : index
+    %rfs1_0_0_base_u1 = index.add %rfs1_0_0_row_u1, %blk_k_u1 : index
+    %rfs1_0_0_idx_u1 = index.assume %rfs1_0_0_base_u1 [range(%rfs1_0_0_base_u1, 0, 2552)] : index
+    %rfs1_0_0_raw_u1 = vector.load %wl_flat[%rfs1_0_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_0_0_words_u1 = vector.bitcast %rfs1_0_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_0_0_u1 = vector.fragment<rhs> %rfs1_0_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_0_1_row_u1 = index.mul %ln0, %k_wstride : index
+    %rfs1_0_1_base_u1 = index.add %rfs1_0_1_row_u1, %blk_k16_u1 : index
+    %rfs1_0_1_idx_u1 = index.assume %rfs1_0_1_base_u1 [range(%rfs1_0_1_base_u1, 0, 2552)] : index
+    %rfs1_0_1_raw_u1 = vector.load %wl_flat[%rfs1_0_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_0_1_words_u1 = vector.bitcast %rfs1_0_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_0_1_u1 = vector.fragment<rhs> %rfs1_0_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_0_u1 = vector.mma %lf1_0_u1, %rfs1_0_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_0_u1 = vector.mma %lf1_1_u1, %rfs1_0_1_u1, %i0_1_0_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_0_u1 = vector.sitofp %i1_1_0_u1 : vector<8xi32> to vector<8xf32>
+    %sv1_0_u1 = vector.mulf %asv1_u1, %wsv0_u1 : vector<8xf32>
+    %corr_fn1_0 = vector.mulf %auv1_u1, %wcv0_u1 : vector<8xf32>
+    %zcorr_fn1_0 = vector.mulf %azpv1_u1, %wbcv0_u1 : vector<8xf32>
+
+    %base_sum_fn1_0 = vector.addf %fn1_0_u0, %corr_fn1_0 : vector<8xf32>
+    %base_fn1_0 = vector.addf %base_sum_fn1_0, %zcorr_fn1_0 : vector<8xf32>
+
+    %fn1_0 = vector.fmaf %ff1_0_u1, %sv1_0_u1, %base_fn1_0 : vector<8xf32>
+    %rfs1_1_0_row_u1 = index.mul %ln1, %k_wstride : index
+    %rfs1_1_0_base_u1 = index.add %rfs1_1_0_row_u1, %blk_k_u1 : index
+    %rfs1_1_0_idx_u1 = index.assume %rfs1_1_0_base_u1 [range(%rfs1_1_0_base_u1, 0, 2552)] : index
+    %rfs1_1_0_raw_u1 = vector.load %wl_flat[%rfs1_1_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_1_0_words_u1 = vector.bitcast %rfs1_1_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_1_0_u1 = vector.fragment<rhs> %rfs1_1_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_1_1_row_u1 = index.mul %ln1, %k_wstride : index
+    %rfs1_1_1_base_u1 = index.add %rfs1_1_1_row_u1, %blk_k16_u1 : index
+    %rfs1_1_1_idx_u1 = index.assume %rfs1_1_1_base_u1 [range(%rfs1_1_1_base_u1, 0, 2552)] : index
+    %rfs1_1_1_raw_u1 = vector.load %wl_flat[%rfs1_1_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_1_1_words_u1 = vector.bitcast %rfs1_1_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_1_1_u1 = vector.fragment<rhs> %rfs1_1_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_1_u1 = vector.mma %lf1_0_u1, %rfs1_1_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_1_u1 = vector.mma %lf1_1_u1, %rfs1_1_1_u1, %i0_1_1_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_1_u1 = vector.sitofp %i1_1_1_u1 : vector<8xi32> to vector<8xf32>
+    %sv1_1_u1 = vector.mulf %asv1_u1, %wsv1_u1 : vector<8xf32>
+    %corr_fn1_1 = vector.mulf %auv1_u1, %wcv1_u1 : vector<8xf32>
+    %zcorr_fn1_1 = vector.mulf %azpv1_u1, %wbcv1_u1 : vector<8xf32>
+
+    %base_sum_fn1_1 = vector.addf %fn1_1_u0, %corr_fn1_1 : vector<8xf32>
+    %base_fn1_1 = vector.addf %base_sum_fn1_1, %zcorr_fn1_1 : vector<8xf32>
+
+    %fn1_1 = vector.fmaf %ff1_1_u1, %sv1_1_u1, %base_fn1_1 : vector<8xf32>
+    %rfs1_2_0_row_u1 = index.mul %ln2, %k_wstride : index
+    %rfs1_2_0_base_u1 = index.add %rfs1_2_0_row_u1, %blk_k_u1 : index
+    %rfs1_2_0_idx_u1 = index.assume %rfs1_2_0_base_u1 [range(%rfs1_2_0_base_u1, 0, 2552)] : index
+    %rfs1_2_0_raw_u1 = vector.load %wl_flat[%rfs1_2_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_2_0_words_u1 = vector.bitcast %rfs1_2_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_2_0_u1 = vector.fragment<rhs> %rfs1_2_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_2_1_row_u1 = index.mul %ln2, %k_wstride : index
+    %rfs1_2_1_base_u1 = index.add %rfs1_2_1_row_u1, %blk_k16_u1 : index
+    %rfs1_2_1_idx_u1 = index.assume %rfs1_2_1_base_u1 [range(%rfs1_2_1_base_u1, 0, 2552)] : index
+    %rfs1_2_1_raw_u1 = vector.load %wl_flat[%rfs1_2_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_2_1_words_u1 = vector.bitcast %rfs1_2_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_2_1_u1 = vector.fragment<rhs> %rfs1_2_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_2_u1 = vector.mma %lf1_0_u1, %rfs1_2_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_2_u1 = vector.mma %lf1_1_u1, %rfs1_2_1_u1, %i0_1_2_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_2_u1 = vector.sitofp %i1_1_2_u1 : vector<8xi32> to vector<8xf32>
+    %sv1_2_u1 = vector.mulf %asv1_u1, %wsv2_u1 : vector<8xf32>
+    %corr_fn1_2 = vector.mulf %auv1_u1, %wcv2_u1 : vector<8xf32>
+    %zcorr_fn1_2 = vector.mulf %azpv1_u1, %wbcv2_u1 : vector<8xf32>
+
+    %base_sum_fn1_2 = vector.addf %fn1_2_u0, %corr_fn1_2 : vector<8xf32>
+    %base_fn1_2 = vector.addf %base_sum_fn1_2, %zcorr_fn1_2 : vector<8xf32>
+
+    %fn1_2 = vector.fmaf %ff1_2_u1, %sv1_2_u1, %base_fn1_2 : vector<8xf32>
+    %rfs1_3_0_row_u1 = index.mul %ln3, %k_wstride : index
+    %rfs1_3_0_base_u1 = index.add %rfs1_3_0_row_u1, %blk_k_u1 : index
+    %rfs1_3_0_idx_u1 = index.assume %rfs1_3_0_base_u1 [range(%rfs1_3_0_base_u1, 0, 2552)] : index
+    %rfs1_3_0_raw_u1 = vector.load %wl_flat[%rfs1_3_0_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_3_0_words_u1 = vector.bitcast %rfs1_3_0_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_3_0_u1 = vector.fragment<rhs> %rfs1_3_0_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %rfs1_3_1_row_u1 = index.mul %ln3, %k_wstride : index
+    %rfs1_3_1_base_u1 = index.add %rfs1_3_1_row_u1, %blk_k16_u1 : index
+    %rfs1_3_1_idx_u1 = index.assume %rfs1_3_1_base_u1 [range(%rfs1_3_1_base_u1, 0, 2552)] : index
+    %rfs1_3_1_raw_u1 = vector.load %wl_flat[%rfs1_3_1_idx_u1] : view<2560xi8> -> vector<8xi8>
+    %rfs1_3_1_words_u1 = vector.bitcast %rfs1_3_1_raw_u1 : vector<8xi8> to vector<2xi32>
+    %rfs1_3_1_u1 = vector.fragment<rhs> %rfs1_3_1_words_u1 shape [%sixteen, %sixteen] using {schema = %u4_schema : encoding<schema>} : vector<2xi32>
+    %i0_1_3_u1 = vector.mma %lf1_0_u1, %rfs1_3_0_u1, %iz_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %i1_1_3_u1 = vector.mma %lf1_1_u1, %rfs1_3_1_u1, %i0_1_3_u1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+    %ff1_3_u1 = vector.sitofp %i1_1_3_u1 : vector<8xi32> to vector<8xf32>
+    %sv1_3_u1 = vector.mulf %asv1_u1, %wsv3_u1 : vector<8xf32>
+    %corr_fn1_3 = vector.mulf %auv1_u1, %wcv3_u1 : vector<8xf32>
+    %zcorr_fn1_3 = vector.mulf %azpv1_u1, %wbcv3_u1 : vector<8xf32>
+
+    %base_sum_fn1_3 = vector.addf %fn1_3_u0, %corr_fn1_3 : vector<8xf32>
+    %base_fn1_3 = vector.addf %base_sum_fn1_3, %zcorr_fn1_3 : vector<8xf32>
+
+    %fn1_3 = vector.fmaf %ff1_3_u1, %sv1_3_u1, %base_fn1_3 : vector<8xf32>
+    scf.schedule.fence
+    scf.if %q4a_has_next {
+      vector.store %q4a_next_v1, %al_flat[%q4a_dst1] : vector<16xi8>, view<5120xi8>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %fn0_0, %fn0_1, %fn0_2, %fn0_3, %fn1_0, %fn1_1, %fn1_2, %fn1_3 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+
+  vector.fragment.store<result> %f0_0, %dst_view[%gm0, %gn0] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %f0_1, %dst_view[%gm0, %gn1] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %f0_2, %dst_view[%gm0, %gn2] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %f0_3, %dst_view[%gm0, %gn3] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %f1_0, %dst_view[%gm1, %gn0] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %f1_1, %dst_view[%gm1, %gn1] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %f1_2, %dst_view[%gm1, %gn2] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %f1_3, %dst_view[%gm1, %gn3] shape [%sixteen, %sixteen] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  func.return
+}
+
+kernel.def export("qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x128x64") @qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x128x64() {
+  %unit = index.constant 1 : index
+  %k_n = index.constant 64 : index
+  %k_m = index.constant 128 : index
+  %n_m1 = index.constant 63 : index
+  %m_m1 = index.constant 127 : index
+  %wg = index.constant 128 : index
+  %rows = config.get @qwen3.dense_q4_u4asym.shape_rows : index
+  %cols = config.get @qwen3.dense_q4_u4asym.shape_cols : index
+  %rows_up = index.add %rows, %n_m1 : index
+  %row_tiles = index.div %rows_up, %k_n : index
+  %cols_up = index.add %cols, %m_m1 : index
+  %col_tiles = index.div %cols_up, %k_m : index
+  kernel.launch.config workgroups(%col_tiles, %row_tiles, %unit) workgroup_size(%wg, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer, %aq: buffer, %as: buffer, %asum: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %sixteen = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c17 = index.constant 17 : index
+  %c34 = index.constant 34 : index
+  %k_kc = index.constant 64 : index
+  %k_astride = index.constant 40 : index
+  %k_wstride = index.constant 40 : index
+  %k_m = index.constant 128 : index
+  %k_n = index.constant 64 : index
+  %k_blocks = index.constant 2 : index
+  %k_wave = index.constant 32 : index
+  %k_wm = index.constant 4 : index
+  %fzero = vector.constant 0.0 : vector<8xf32>
+  %izero = vector.constant 0 : vector<8xi32>
+
+  %k = config.get @qwen3.dense_q4_u4asym.shape_k : index
+  %rows = config.get @qwen3.dense_q4_u4asym.shape_rows : index
+  %cols = config.get @qwen3.dense_q4_u4asym.shape_cols : index
+  %k_b = index.assume %k [range(%k, 64, 32768)] : index
+  %rows_b = index.assume %rows [range(%rows, 1, 262144)] : index
+  %cols_b = index.assume %cols [range(%cols, 1, 32768)] : index
+  %nchunks = index.div %k_b, %k_kc : index
+  %kblocks = index.div %k_b, %c32 : index
+
+  %col_tile0 = kernel.workgroup.id<x> : index
+  %row_tile0 = kernel.workgroup.id<y> : index
+  %tid0 = kernel.workitem.id<x> : index
+  %col_tile = index.assume %col_tile0 [range(%col_tile0, 0, 511)] : index
+  %row_tile = index.assume %row_tile0 [range(%row_tile0, 0, 4095)] : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 127)] : index
+  %wave = index.div %tid, %k_wave : index
+
+  %src0_g = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %aq_g = buffer.assume.memory_space<global> %aq : buffer
+  %as_g = buffer.assume.memory_space<global> %as : buffer
+  %asum_g = buffer.assume.memory_space<global> %asum : buffer
+  %src0_na, %dst_na, %aq_na, %as_na, %asum_na = buffer.assume.noalias %src0_g, %dst_g, %aq_g, %as_g, %asum_g : buffer, buffer, buffer, buffer, buffer
+
+  func.apply<qwen3.dense.q4.u4asym.wmmai4.body>(%src0_na, %dst_na, %aq_na, %as_na, %asum_na, %base, %base, %zero, %one, %two, %four, %eight, %sixteen, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %k_b, %rows_b, %cols_b, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave) : (buffer, buffer, buffer, buffer, buffer, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index)
+  kernel.return
+}

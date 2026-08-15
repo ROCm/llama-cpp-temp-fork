@@ -120,13 +120,16 @@ bool has_attention_ancestor(const GraphIndex & index, ValueId value) {
 }
 
 struct BlockHeroes {
+    QwenHybridFeedForwardKind feed_forward_kind  = QwenHybridFeedForwardKind::RoutedExperts;
+    OperationId               feed_forward_hero  = kInvalidId;
+    ValueId                   feed_forward_input = kInvalidId;
     OperationId router             = kInvalidId;
     OperationId attention_residual = kInvalidId;
     OperationId final_residual     = kInvalidId;
     ValueId     route_ids          = kInvalidId;
 };
 
-bool recover_block_heroes(const GraphIndex & index, OperationId router, BlockHeroes & result) {
+bool recover_routed_block_heroes(const GraphIndex & index, OperationId router, BlockHeroes & result) {
     const Graph &     graph      = index.graph();
     const Operation & projection = graph.operations[router];
     if (projection.op != GGML_OP_MUL_MAT || projection.inputs.size() < 2) {
@@ -164,10 +167,65 @@ bool recover_block_heroes(const GraphIndex & index, OperationId router, BlockHer
         return false;
     }
 
+    result.feed_forward_kind  = QwenHybridFeedForwardKind::RoutedExperts;
+    result.feed_forward_hero  = router;
+    result.feed_forward_input = projection.inputs[1];
     result.router             = router;
     result.attention_residual = attention_residual;
     result.final_residual     = final.front();
     result.route_ids          = graph.operations[route_views.front()].output;
+    return true;
+}
+
+bool recover_dense_block_heroes(const GraphIndex & index, OperationId glu, BlockHeroes & result) {
+    const Graph &     graph      = index.graph();
+    const Operation & activation = graph.operations[glu];
+    if (activation.op != GGML_OP_GLU || activation.inputs.size() != 2) {
+        return false;
+    }
+
+    const OperationId gate = producer(graph, activation.inputs[0]);
+    const OperationId up   = producer(graph, activation.inputs[1]);
+    if (gate == kInvalidId || up == kInvalidId || gate == up || graph.operations[gate].op != GGML_OP_MUL_MAT ||
+        graph.operations[up].op != GGML_OP_MUL_MAT || graph.operations[gate].inputs.size() < 2 ||
+        graph.operations[up].inputs.size() < 2 || graph.operations[gate].inputs[1] != graph.operations[up].inputs[1]) {
+        return false;
+    }
+    const ValueId prepared_value = graph.operations[gate].inputs[1];
+    const OperationId prepared   = producer(graph, prepared_value);
+    if (prepared == kInvalidId || graph.operations[prepared].op != GGML_OP_MUL ||
+        graph.operations[prepared].inputs.empty()) {
+        return false;
+    }
+    const OperationId normalization = producer(graph, graph.operations[prepared].inputs[0]);
+    if (normalization == kInvalidId || graph.operations[normalization].op != GGML_OP_RMS_NORM ||
+        graph.operations[normalization].inputs.empty()) {
+        return false;
+    }
+    const OperationId attention_residual = producer(graph, graph.operations[normalization].inputs[0]);
+    if (attention_residual == kInvalidId || graph.operations[attention_residual].op != GGML_OP_ADD) {
+        return false;
+    }
+
+    const auto down = consumers_of_kind(index, activation.output, GGML_OP_MUL_MAT);
+    if (down.size() != 1) {
+        return false;
+    }
+    const auto final = consumers_of_kind(index, graph.operations[down.front()].output, GGML_OP_ADD);
+    if (final.size() != 1 || !precedes(index, glu, final.front())) {
+        return false;
+    }
+    const Operation & final_residual = graph.operations[final.front()];
+    if (std::find(final_residual.inputs.begin(), final_residual.inputs.end(),
+                  graph.operations[attention_residual].output) == final_residual.inputs.end()) {
+        return false;
+    }
+
+    result.feed_forward_kind  = QwenHybridFeedForwardKind::DenseSwiGLU;
+    result.feed_forward_hero  = glu;
+    result.feed_forward_input = prepared_value;
+    result.attention_residual = attention_residual;
+    result.final_residual     = final.front();
     return true;
 }
 
@@ -219,17 +277,18 @@ QwenHybridTransformerModel QwenHybridTransformerModel::analyze(const GraphIndex 
     std::set<OperationId>    final_residuals;
     for (const Operation & operation : graph.operations) {
         BlockHeroes candidate;
-        if (!recover_block_heroes(index, operation.id, candidate)) {
+        if (!recover_routed_block_heroes(index, operation.id, candidate) &&
+            !recover_dense_block_heroes(index, operation.id, candidate)) {
             continue;
         }
         if (!final_residuals.insert(candidate.final_residual).second) {
-            model.errors.push_back("Qwen hybrid block has multiple router projections");
+            model.errors.push_back("Qwen hybrid block has multiple feed-forward anchors");
             return model;
         }
         heroes.push_back(candidate);
     }
     if (heroes.empty()) {
-        model.errors.push_back("graph contains no hybrid routed-transformer blocks");
+        model.errors.push_back("graph contains no Qwen hybrid transformer blocks");
         return model;
     }
 
@@ -335,12 +394,16 @@ QwenHybridTransformerModel QwenHybridTransformerModel::analyze(const GraphIndex 
         const OperationId           stop    = producer(graph, hidden);
         const std::set<OperationId> closure =
             block_closure(index, recovered.final_residual, stop, block_ownership);
-        if (closure.count(recovered.router) == 0 || closure.count(recovered.attention_residual) == 0) {
+        if (closure.count(recovered.feed_forward_hero) == 0 ||
+            closure.count(recovered.attention_residual) == 0) {
             model.errors.push_back("Qwen hybrid block closure misses a structural hero");
             return model;
         }
         QwenHybridBlock block;
         block.ordinal            = ordinal;
+        block.feed_forward_kind  = recovered.feed_forward_kind;
+        block.feed_forward_hero  = recovered.feed_forward_hero;
+        block.feed_forward_input = recovered.feed_forward_input;
         block.router_projection  = recovered.router;
         block.attention_residual = recovered.attention_residual;
         block.final_residual     = recovered.final_residual;
@@ -354,7 +417,7 @@ QwenHybridTransformerModel QwenHybridTransformerModel::analyze(const GraphIndex 
         }
         QwenHybridComponent component;
         component.kind       = QwenHybridComponentKind::Block;
-        component.hero       = recovered.router;
+        component.hero       = recovered.feed_forward_hero;
         component.operations = block.operations;
         block.components.push_back(std::move(component));
         model.blocks.push_back(std::move(block));
@@ -457,20 +520,22 @@ QwenHybridTransformerModel QwenHybridTransformerModel::analyze(const GraphIndex 
                      std::move(preamble), index);
     for (QwenHybridBlock & block : model.blocks) {
         assign_component(block.components.front(), component_id++, QwenHybridComponentKind::Block,
-                         block.router_projection, block.operations, index);
+                         block.feed_forward_hero, block.operations, index);
     }
     assign_component(model.endpoint, component_id++, QwenHybridComponentKind::ProgramEndpoint, endpoint.front(),
                      std::move(endpoint), index);
 
-    const QwenHybridBlock & first         = model.blocks.front();
-    const Operation &       first_router  = graph.operations[first.router_projection];
-    const Value &           prepared      = graph.values[first_router.inputs[1]];
-    const Value &           router_output = graph.values[first_router.output];
-    const Value &           route_ids     = graph.values[first.route_ids];
-    model.hidden_size                     = prepared.access.shape[0];
-    model.token_count                     = prepared.access.shape[1];
-    model.expert_count                    = router_output.access.shape[0];
-    model.route_count                     = route_ids.access.shape[0];
+    const QwenHybridBlock & first    = model.blocks.front();
+    const Value &           prepared = graph.values[first.feed_forward_input];
+    model.hidden_size                = prepared.access.shape[0];
+    model.token_count                = prepared.access.shape[1];
+    if (first.feed_forward_kind == QwenHybridFeedForwardKind::RoutedExperts) {
+        const Operation & first_router  = graph.operations[first.router_projection];
+        const Value &     router_output = graph.values[first_router.output];
+        const Value &     route_ids     = graph.values[first.route_ids];
+        model.expert_count              = router_output.access.shape[0];
+        model.route_count               = route_ids.access.shape[0];
+    }
 
     const VerificationResult verification = verify(index, model);
     model.errors.insert(model.errors.end(), verification.errors.begin(), verification.errors.end());
@@ -514,12 +579,20 @@ VerificationResult QwenHybridTransformerModel::verify(const GraphIndex &        
             result.errors.push_back("Qwen hybrid block has invalid logical ownership");
             continue;
         }
-        const Operation & router   = graph.operations[block.router_projection];
-        const Value &     prepared = graph.values[router.inputs[1]];
-        const Value &     logits   = graph.values[router.output];
-        const Value &     routes   = graph.values[block.route_ids];
-        if (prepared.access.shape[0] != model.hidden_size || prepared.access.shape[1] != model.token_count ||
-            logits.access.shape[0] != model.expert_count || routes.access.shape[0] != model.route_count) {
+        const Value & prepared = graph.values[block.feed_forward_input];
+        bool          geometry_matches = prepared.access.shape[0] == model.hidden_size &&
+                                prepared.access.shape[1] == model.token_count;
+        if (block.feed_forward_kind == QwenHybridFeedForwardKind::RoutedExperts) {
+            const Operation & router = graph.operations[block.router_projection];
+            const Value &     logits = graph.values[router.output];
+            const Value &     routes = graph.values[block.route_ids];
+            geometry_matches = geometry_matches && logits.access.shape[0] == model.expert_count &&
+                               routes.access.shape[0] == model.route_count;
+        } else {
+            geometry_matches = geometry_matches && block.router_projection == kInvalidId &&
+                               block.route_ids == kInvalidId && model.expert_count == 0 && model.route_count == 0;
+        }
+        if (!geometry_matches) {
             result.errors.push_back("Qwen hybrid block disagrees with recovered model geometry");
         }
         verify_component(block.components.front());
@@ -635,13 +708,13 @@ Decision QwenHybridTransformerProvider::discover(const GraphIndex & index, FactD
         return Decision::reject(DecisionReason::ProviderError,
                                 model.errors.empty() ? "Qwen hybrid analysis failed" : model.errors.front());
     }
-    const uint32_t hero = model.blocks.front().router_projection;
+    const uint32_t hero = model.blocks.front().feed_forward_hero;
     Decision       failure;
     if (!observe(facts, "llm.layer_count", model.blocks.size(), "Qwen hybrid blocks", hero, failure) ||
         !observe(facts, "llm.query_token_count", model.token_count, "Qwen hybrid input", hero, failure) ||
         !observe(facts, "llm.hidden_size", model.hidden_size, "Qwen hybrid input", hero, failure) ||
-        !observe(facts, "llm.expert_count", model.expert_count, "router projection", hero, failure) ||
-        !observe(facts, "llm.route_count", model.route_count, "expert route IDs", hero, failure)) {
+        !observe(facts, "llm.expert_count", model.expert_count, "Qwen hybrid feed-forward", hero, failure) ||
+        !observe(facts, "llm.route_count", model.route_count, "Qwen hybrid feed-forward", hero, failure)) {
         return failure;
     }
     return Decision::allow();
@@ -733,10 +806,12 @@ QwenHybridTransformerProgramProof QwenHybridTransformerProgramProof::recover(Gra
     const bool has_full_attention =
         std::any_of(graph.operations.begin(), graph.operations.end(),
                     [](const Operation & operation) { return operation.op == GGML_OP_FLASH_ATTN_EXT; });
-    const bool has_routed_experts =
-        std::any_of(graph.operations.begin(), graph.operations.end(),
-                    [](const Operation & operation) { return operation.op == GGML_OP_MUL_MAT_ID; });
-    result.structurally_recognized = has_recurrent_attention && has_full_attention && has_routed_experts;
+    const bool has_feed_forward = std::any_of(graph.operations.begin(), graph.operations.end(),
+                                              [](const Operation & operation) {
+                                                  return operation.op == GGML_OP_MUL_MAT_ID ||
+                                                         operation.op == GGML_OP_GLU;
+                                              });
+    result.structurally_recognized = has_recurrent_attention && has_full_attention && has_feed_forward;
     if (!result.structurally_recognized) {
         return result;
     }

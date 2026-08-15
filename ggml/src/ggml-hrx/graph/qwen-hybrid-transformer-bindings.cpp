@@ -466,7 +466,7 @@ VerificationResult materialize_qwen_hybrid_recipe(Graph &                       
 
     for (const nlohmann::json & physical : recipe.definition->at("dispatches")) {
         Dispatch dispatch;
-        dispatch.kernel.family    = "qwen36";
+        dispatch.kernel.family    = physical.value("family", std::string("qwen36"));
         dispatch.kernel.variant   = physical.at("definition").get<std::string>();
         dispatch.kernel.kernel_id = kernel_catalog_id(dispatch.kernel.family.c_str(), dispatch.kernel.variant.c_str());
         dispatch.kernel.execution_kind = KernelSpecialization::ExecutionKind::Native;

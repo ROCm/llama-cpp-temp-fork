@@ -355,7 +355,7 @@ if (TARGET ggml-hrx-graph)
         add_test(NAME test-hrx-executable COMMAND test-hrx-executable)
 
         add_executable(test-hrx-transfer test-hrx-transfer.cpp)
-        target_link_libraries(test-hrx-transfer PRIVATE ggml-hrx-transfer)
+        target_link_libraries(test-hrx-transfer PRIVATE ggml-hrx-transfer ggml-base)
         target_include_directories(test-hrx-transfer PRIVATE ../ggml/src/ggml-hrx)
         add_test(NAME test-hrx-transfer COMMAND test-hrx-transfer)
     endif()

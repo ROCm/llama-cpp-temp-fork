@@ -863,6 +863,127 @@
       ]
     },
     {
+      "name": "qwen3_moe_dense_linear_q4k_i4_dual_gate_up_swiglu_m32n32_f16out",
+      "symbol": "qwen3_moe_dense_linear_q4k_i4_dual_gate_up_swiglu_m32n32_f16out",
+      "source": "qwen3_moe/dense_linear_q4k_i4_wmma.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "gate_weight",
+        "up_weight",
+        "input",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "gfx1151",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_q4k_i4_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_q4k_i4_wmma.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_dense_linear_q4k_i4_dual_gate_up_swiglu_m32n32_u4out",
+      "symbol": "qwen3_moe_dense_linear_q4k_i4_dual_gate_up_swiglu_m32n32_u4out",
+      "source": "qwen3_moe/dense_linear_q4k_i4_wmma.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "gate_weight",
+        "up_weight",
+        "input",
+        "dst",
+        "aq",
+        "as",
+        "asum",
+        "qout_qs",
+        "qout_ds",
+        "qout_sums"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "target_selector": "gfx1151",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_q4k_i4_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_q4k_i4_wmma.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x128x64",
+      "symbol": "qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x128x64",
+      "source": "qwen3_moe/dense_linear_q4k_u4asym_wmma.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "src0",
+        "src1",
+        "dst",
+        "aq",
+        "as",
+        "asum"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write",
+        "read",
+        "read",
+        "read"
+      ],
+      "target_selector": "gfx1151",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_q4k_u4asym_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_q4k_u4asym_wmma.loom"
+        ],
+        "library_sources": [
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+      ]
+    },
+    {
       "name": "qwen3_moe_dense_linear_q4k_q8_1_x4",
       "symbol": "qwen3_moe_dense_linear_q4k_q8_1_x4",
       "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
@@ -889,6 +1010,101 @@
         "read_write"
       ],
       "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_dense_linear_q4k_q8_1_x4_tensor_plane",
+      "symbol": "qwen3_moe_dense_linear_q4k_q8_1_x4_tensor_plane",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "family": "qwen36",
+      "name": "qwen3_moe_dense_linear_q4k_symi4_i4_tensor_plane",
+      "symbol": "qwen3_moe_dense_linear_q4k_symi4_i4_tensor_plane",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "qact",
+        "qact_scales",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "gfx1151",
       "compile_recipe": {
         "mode": "archive",
         "link_module": "dense_linear_quantized_f16_wmma_linked",
@@ -975,6 +1191,108 @@
     {
       "name": "qwen3_moe_dense_linear_q6k_f16_wmma",
       "symbol": "qwen3_moe_dense_linear_q6k_f16_wmma",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_dense_linear_q6k_f16_wmma_pp_wave32",
+      "symbol": "qwen3_moe_dense_linear_q6k_f16_wmma_pp_wave32",
+      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "dense_linear_quantized_f16_wmma_linked",
+        "primary_sources": [
+          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom",
+          "qwen3_moe/attention_prepare_quantized.loom",
+          "qwen3_moe/model_config.loom",
+          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+          "ggml/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ggml/linear_q6k_q8_1_x4.loom",
+        "qwen3_moe/attention_prepare_quantized.loom",
+        "qwen3_moe/model_config.loom",
+        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+        "ggml/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "qwen3_moe_dense_linear_q6k_f16_input_wmma_pp_wave32",
+      "symbol": "qwen3_moe_dense_linear_q6k_f16_input_wmma_pp_wave32",
       "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
@@ -4145,6 +4463,64 @@
       "name": "mmid_table",
       "source": "qwen3_moe/expert_table_partition_fused.loom",
       "symbol": "hrx2_mmid_table",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "qs",
+        "ds",
+        "sums"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "qwen3_moe/quantize_act_i4.loom"
+        ],
+        "library_sources": []
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "quant_act_i4",
+      "source": "qwen3_moe/quantize_act_i4.loom",
+      "symbol": "qwen3_quant_act_i4",
+      "target_selector": "gfx1151",
+      "workload_parameters": []
+    },
+    {
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "bindings": [
+        "src",
+        "qs",
+        "ds",
+        "meta"
+      ],
+      "compile_dependencies": [],
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "qwen3_moe/quantize_act_u4asym.loom"
+        ],
+        "library_sources": []
+      },
+      "family": "qwen36",
+      "launch_parameters": [],
+      "name": "quant_act_u4asym",
+      "source": "qwen3_moe/quantize_act_u4asym.loom",
+      "symbol": "qwen3_quant_act_u4asym",
       "target_selector": "gfx1151",
       "workload_parameters": []
     },

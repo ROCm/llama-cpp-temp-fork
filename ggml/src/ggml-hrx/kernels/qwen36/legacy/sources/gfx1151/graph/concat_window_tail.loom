@@ -15,15 +15,25 @@
 // proves that state, x, destination, and cache do not overlap.
 
 config.decl @hrx2_shape_concat_tail_d_conv : %value: index where [range(%value, 4, 4)]
-config.decl @hrx2_shape_concat_tail_d_inner : %value: index where [range(%value, 8192, 8192)]
+
+config.decl @hrx2_shape_concat_tail_d_inner : %value: index where [range(%value, 8192, 65536), mul(%value, 32)]
+
 config.decl @hrx2_shape_concat_tail_n_t : %value: index where [range(%value, 512, 512)]
+
 config.decl @hrx2_shape_concat_tail_n_s : %value: index where [range(%value, 1, 1)]
+
 config.decl @hrx2_shape_concat_tail_state_row_stride : %value: index where [range(%value, 1, 1)]
+
 config.decl @hrx2_shape_concat_tail_state_channel_stride : %value: index where [range(%value, 3, 3)]
+
 config.decl @hrx2_shape_concat_tail_x_row_stride : %value: index where [range(%value, 1, 16777216)]
+
 config.decl @hrx2_shape_concat_tail_dst_row_stride : %value: index where [range(%value, 1, 16777216)]
+
 config.decl @hrx2_shape_concat_tail_cache_row_stride : %value: index where [range(%value, 1, 1)]
+
 config.decl @hrx2_shape_concat_tail_cache_channel_stride : %value: index where [range(%value, 3, 3)]
+
 config.decl @hrx2_tuning_concat_tail_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 
 kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
@@ -59,7 +69,7 @@ kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
   %ccs = config.get @hrx2_shape_concat_tail_cache_channel_stride : index
   %wg = config.get @hrx2_tuning_concat_tail_workgroup_size : index
 
-  %di = index.assume %d_inner [range(%d_inner, 8192, 8192)] : index
+  %di = index.assume %d_inner [range(%d_inner, 8192, 65536), mul(%d_inner, 32)] : index
   %nt = index.assume %n_t [range(%n_t, 512, 512)] : index
   %ns = index.assume %n_s [range(%n_s, 1, 1)] : index
   %srsb = index.assume %srs [range(%srs, 1, 1)] : index
@@ -142,12 +152,9 @@ kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
       %ci2 = index.add %ci1, %ci_chan : index
       %ci = index.assume %ci2 [range(%ci2, 0, 1073741823)] : index
 
-      %old_state = view.load %state_view[%si] :
-          view<1073741824xf32> -> f32
-      %new_state = view.load %x_view[%xi] :
-          view<1073741824xf32> -> f32
-      view.store %new_state, %c_view[%ci] :
-          f32, view<1073741824xf32>
+      %old_state = view.load %state_view[%si] : view<1073741824xf32> -> f32
+      %new_state = view.load %x_view[%xi] : view<1073741824xf32> -> f32
+      view.store %new_state, %c_view[%ci] : f32, view<1073741824xf32>
       scf.yield %old_state : f32
     } else {
       // Rows 3..63 snapshot x rows 0..60 before their arena span is reused.
@@ -158,12 +165,10 @@ kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
       %xi1 = index.add %xi0, %x_seq : index
       %xi2 = index.add %xi1, %chan : index
       %xi = index.assume %xi2 [range(%xi2, 0, 1073741823)] : index
-      %x_value = view.load %x_view[%xi] :
-          view<1073741824xf32> -> f32
+      %x_value = view.load %x_view[%xi] : view<1073741824xf32> -> f32
       scf.yield %x_value : f32
     }
-    view.store %snapshot, %dst_view[%oi] :
-        f32, view<1073741824xf32>
+    view.store %snapshot, %dst_view[%oi] : f32, view<1073741824xf32>
   }
   kernel.return
 }
