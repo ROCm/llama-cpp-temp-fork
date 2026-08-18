@@ -722,8 +722,14 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
 }  // namespace
 
 ggml_backend_reg_t ggml_backend_hrx_reg() {
-    static std::unique_ptr<ggml_backend_hrx_reg_context> context = create_registry_context();
-    static ggml_backend_reg registry = { GGML_BACKEND_API_VERSION, registry_i, context.get() };
+#if defined(_WIN32) && defined(GGML_BACKEND_SHARED)
+    // Shared backends stay loaded for process lifetime, so avoid HSA teardown during DLL termination.
+    static ggml_backend_hrx_reg_context * context = create_registry_context().release();
+#else
+    static std::unique_ptr<ggml_backend_hrx_reg_context> context_owner = create_registry_context();
+    ggml_backend_hrx_reg_context *                       context       = context_owner.get();
+#endif
+    static ggml_backend_reg registry = { GGML_BACKEND_API_VERSION, registry_i, context };
     for (auto & device : context->devices) {
         device.reg = &registry;
     }

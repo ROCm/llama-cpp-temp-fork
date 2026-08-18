@@ -10,6 +10,10 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr size_t kMaxInlineUploadBytes = 63 * 1024;
+#if defined(_WIN32)
+// Leave half of HRX's 16 MiB kernarg ring available for submission overhead.
+static constexpr size_t kMaxInlineUploadBatchBytes = 8 * 1024 * 1024;
+#endif
 
 static Status allocate_device_buffer(hrx_device_t device, size_t size, hrx_buffer_t & buffer) {
     Status status;
@@ -84,16 +88,43 @@ Status HostTransferManager::upload_async(hrx_stream_t stream,
 
     const uint8_t * host_bytes = static_cast<const uint8_t *>(host_source);
     size_t          uploaded   = 0;
+#if defined(_WIN32)
+    size_t pending_upload_bytes = 0;
+    if (ErrorResult error = take_status(hrx_stream_flush(stream))) {
+        status.log("flush before HRX async host upload failed: %s", error->c_str());
+        return status;
+    }
+#endif
     while (uploaded < size) {
         const size_t remaining  = size - uploaded;
         const size_t chunk_size = remaining < kMaxInlineUploadBytes ? remaining : kMaxInlineUploadBytes;
+#if defined(_WIN32)
+        if (pending_upload_bytes != 0 && pending_upload_bytes + chunk_size > kMaxInlineUploadBatchBytes) {
+            if (ErrorResult error = take_status(hrx_stream_flush(stream))) {
+                status.log("flush HRX async host upload batch failed: %s", error->c_str());
+                return status;
+            }
+            pending_upload_bytes = 0;
+        }
+#endif
         if (ErrorResult error = take_status(
                 hrx_stream_update_buffer(stream, host_bytes + uploaded, chunk_size, destination, offset + uploaded))) {
             status.log("HRX async host upload failed: %s", error->c_str());
             return status;
         }
         uploaded += chunk_size;
+#if defined(_WIN32)
+        pending_upload_bytes += chunk_size;
+#endif
     }
+#if defined(_WIN32)
+    if (pending_upload_bytes != 0) {
+        if (ErrorResult error = take_status(hrx_stream_flush(stream))) {
+            status.log("flush final HRX async host upload batch failed: %s", error->c_str());
+            return status;
+        }
+    }
+#endif
 
     std::lock_guard<std::mutex> lock(mutex_);
     ++stats_.uploads;

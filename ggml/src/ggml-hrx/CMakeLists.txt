@@ -1,6 +1,19 @@
 set(HRX_SOURCE_DIR "" CACHE PATH "Optional HRX source tree to build instead of using installed hrx and loomc packages")
+option(GGML_HRX_STATIC_RUNTIME "Link HRX and Loom into the backend statically" OFF)
 
-if(HRX_SOURCE_DIR)
+if(GGML_HRX_STATIC_RUNTIME)
+    if(NOT TARGET hrx::hrx_static OR NOT TARGET loomc::loomc_static)
+        message(FATAL_ERROR "GGML_HRX_STATIC_RUNTIME requires llama.cpp to be added to the HRX build tree")
+    endif()
+    if(NOT TARGET loom_tools_loom-link_loom-link OR NOT TARGET loom_tools_loom-format_loom-format)
+        message(FATAL_ERROR "GGML_HRX_STATIC_RUNTIME requires the in-tree Loom tools")
+    endif()
+    set(GGML_HRX_RUNTIME_TARGET hrx::hrx_static)
+    set(GGML_LOOMC_RUNTIME_TARGET loomc::loomc_static)
+    set(GGML_HRX_LOOM_LINK "$<TARGET_FILE:loom_tools_loom-link_loom-link>")
+    set(GGML_HRX_LOOM_FORMAT "$<TARGET_FILE:loom_tools_loom-format_loom-format>")
+    set(GGML_HRX_DEPS_TARGET loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format)
+elseif(HRX_SOURCE_DIR)
     include(ExternalProject)
     include(GNUInstallDirs)
 
@@ -59,11 +72,17 @@ if(HRX_SOURCE_DIR)
         INTERFACE_INCLUDE_DIRECTORIES "${HRX_SOURCE_DIR}/loom/binding/c/include"
         INTERFACE_COMPILE_DEFINITIONS LOOMC_USING_SHARED_LIBRARY)
     add_dependencies(loomc::loomc ggml-hrx-deps)
+    set(GGML_HRX_RUNTIME_TARGET hrx::hrx)
+    set(GGML_LOOMC_RUNTIME_TARGET loomc::loomc)
 else()
     find_package(hrx CONFIG REQUIRED)
     find_package(loomc CONFIG REQUIRED)
+    set_property(TARGET hrx::hrx PROPERTY IMPORTED_GLOBAL TRUE)
+    set_property(TARGET loomc::loomc PROPERTY IMPORTED_GLOBAL TRUE)
     find_program(GGML_HRX_LOOM_LINK NAMES loom-link)
     find_program(GGML_HRX_LOOM_FORMAT NAMES loom-format)
+    set(GGML_HRX_RUNTIME_TARGET hrx::hrx)
+    set(GGML_LOOMC_RUNTIME_TARGET loomc::loomc)
 endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -217,7 +236,7 @@ ggml_add_backend_library(ggml-hrx
     runtime/host-buffer-registry.cpp
     runtime/host-buffer-registry.h
 )
-target_link_libraries(ggml-hrx PRIVATE ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
+target_link_libraries(ggml-hrx PRIVATE ggml-hrx-kernel-corpus ${GGML_HRX_RUNTIME_TARGET} ${GGML_LOOMC_RUNTIME_TARGET})
 target_include_directories(ggml-hrx PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}" ../../../vendor)
 target_compile_definitions(ggml-hrx PRIVATE GGML_USE_HRX)
 
@@ -231,7 +250,7 @@ add_executable(ggml-hrx-compile-kernel
     tools/tool-utils.h
     loom-jit.cpp
 )
-target_link_libraries(ggml-hrx-compile-kernel PRIVATE hrx::hrx loomc::loomc)
+target_link_libraries(ggml-hrx-compile-kernel PRIVATE ${GGML_HRX_RUNTIME_TARGET} ${GGML_LOOMC_RUNTIME_TARGET})
 target_include_directories(ggml-hrx-compile-kernel PRIVATE .)
 target_compile_features(ggml-hrx-compile-kernel PRIVATE cxx_std_17)
 

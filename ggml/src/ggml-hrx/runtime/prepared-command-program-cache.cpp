@@ -44,10 +44,6 @@ static void apply_graph_replay_result(PreparedCommandProgramCacheExecutionResult
     result.graph_replay_transient_allocation_changed = replay.transient_allocation_changed;
 }
 
-static bool graph_replay_should_fallback(HrxGraphReplayEvent event) {
-    return event == HrxGraphReplayEvent::Ineligible || event == HrxGraphReplayEvent::BuildFailed;
-}
-
 }  // namespace
 
 size_t PreparedCommandProgramCache::KeyHash::operator()(const Key & key) const {
@@ -126,7 +122,7 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
             result.success = true;
             return result;
         }
-        if (!graph_replay_should_fallback(replay.event)) {
+        if (!hrx_graph_replay_should_fallback(replay.event)) {
             result.status.append(replay.status);
             if (result.status.success()) {
                 result.status.log("execute cached HRX graph replay failed");
@@ -163,7 +159,7 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         result.success = true;
         return result;
     }
-    if (!graph_replay_should_fallback(replay.event)) {
+    if (!hrx_graph_replay_should_fallback(replay.event)) {
         result.status.append(replay.status);
         if (result.status.success()) {
             result.status.log("execute prepared HRX graph replay failed");

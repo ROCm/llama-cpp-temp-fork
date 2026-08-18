@@ -140,11 +140,18 @@ def require_tool(command: List[str]) -> None:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(command)}\n{result.stderr}")
 
 
-def convert_source_to_bytecode(source_path: pathlib.Path, loom_link: pathlib.Path, loom_format: pathlib.Path) -> bytes:
+def convert_source_to_bytecode(
+    source_path: pathlib.Path,
+    source_data: bytes,
+    loom_link: pathlib.Path,
+    loom_format: pathlib.Path,
+) -> bytes:
     with tempfile.TemporaryDirectory(prefix="ggml-hrx-loom-") as temp_dir_name:
         temp_dir = pathlib.Path(temp_dir_name)
+        source_input = temp_dir / source_path.name
         stripped = temp_dir / "stripped.loom"
         bytecode = temp_dir / "stripped.loombc"
+        source_input.write_bytes(source_data)
         require_tool([
             str(loom_link),
             "--verify=false",
@@ -152,7 +159,7 @@ def convert_source_to_bytecode(source_path: pathlib.Path, loom_link: pathlib.Pat
             "--strip-check",
             "--to=text",
             f"--output={stripped}",
-            str(source_path),
+            str(source_input),
         ])
         format_result = run_tool([
             str(loom_format),
@@ -169,7 +176,7 @@ def convert_source_to_bytecode(source_path: pathlib.Path, loom_link: pathlib.Pat
                 "--strip-check",
                 "--to=bc",
                 f"--output={bytecode}",
-                str(source_path),
+                str(source_input),
             ])
         return read_bytes(bytecode)
 
@@ -419,11 +426,13 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
         path = corpus_dir / source
         input_files.append(path)
         data = read_bytes(path)
+        # Manifest digests use LF even when Git materializes Loom sources with CRLF.
+        data = data.replace(b"\r\n", b"\n")
         digest = sha256(data)
         if digest != digests[source]:
             raise RuntimeError(f"manifest digest mismatch for {source}: got {digest}, expected {digests[source]}")
         if args.source_format == "binary":
-            data = convert_source_to_bytecode(path, args.loom_link, args.loom_format)
+            data = convert_source_to_bytecode(pathlib.Path(source), data, args.loom_link, args.loom_format)
         source_bytes[source] = data
 
     source_symbols: Dict[str, str] = {}

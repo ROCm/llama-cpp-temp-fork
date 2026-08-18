@@ -724,6 +724,13 @@ static void run_graph_import_checks() {
     REQUIRE(std::string(ggml::hrx::hrx_graph_replay_event_name(ggml::hrx::HrxGraphReplayEvent::Disabled)) ==
             "disabled");
     REQUIRE(std::string(ggml::hrx::hrx_graph_replay_event_name(ggml::hrx::HrxGraphReplayEvent::Hit)) == "hit");
+    REQUIRE(ggml::hrx::hrx_graph_replay_should_fallback(ggml::hrx::HrxGraphReplayEvent::Disabled));
+    REQUIRE(!ggml::hrx::hrx_graph_replay_should_fallback(ggml::hrx::HrxGraphReplayEvent::LaunchFailed));
+#if defined(_WIN32)
+    REQUIRE(!ggml::hrx::hrx_graph_replay_enabled_by_default());
+#else
+    REQUIRE(ggml::hrx::hrx_graph_replay_enabled_by_default());
+#endif
     REQUIRE(string_contains(binding_text, "range=[0, "));
     REQUIRE(string_contains(binding_text, std::to_string(a_value->byte_count).c_str()));
 
@@ -3960,6 +3967,10 @@ static void run_chained_dispatch_requires_transients() {
 }
 
 static void run_graph_replay_host_staging_is_not_ineligible() {
+#if defined(_WIN32)
+    REQUIRE(_putenv_s("GGML_HRX_ENABLE_GRAPH_REPLAY", "1") == 0);
+    REQUIRE(ggml::hrx::hrx_graph_replay_enabled_from_environment());
+#endif
     ggml::hrx::CommandProgram commands;
 
     std::vector<uint8_t> source0(64, 1);
@@ -4002,6 +4013,10 @@ static void run_graph_replay_host_staging_is_not_ineligible() {
     REQUIRE(prepared.host_staging[0].buffer == dummy_hrx_buffer(0x1000));
     REQUIRE(prepared.host_staging[0].host_data == source1.data());
     prepared.host_staging[0].buffer = nullptr;
+#if defined(_WIN32)
+    REQUIRE(_putenv_s("GGML_HRX_ENABLE_GRAPH_REPLAY", "") == 0);
+    REQUIRE(!ggml::hrx::hrx_graph_replay_enabled_from_environment());
+#endif
 }
 
 static void run_multiple_transient_plan_checks() {

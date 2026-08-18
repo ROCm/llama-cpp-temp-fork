@@ -1077,6 +1077,9 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     PreparedCommandProgram &               prepared,
     RecordedCommandGraph &                 recorded) {
     RecordedCommandGraphExecutionResult result;
+    if (!hrx_graph_replay_enabled_from_environment()) {
+        return result;
+    }
     result.event = HrxGraphReplayEvent::Ineligible;
 
     if (!prepared.valid()) {
