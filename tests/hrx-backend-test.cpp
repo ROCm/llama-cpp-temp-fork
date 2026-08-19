@@ -727,6 +727,7 @@ static void run_graph_import_checks() {
     REQUIRE(ggml::hrx::hrx_graph_replay_should_fallback(ggml::hrx::HrxGraphReplayEvent::Disabled));
     REQUIRE(!ggml::hrx::hrx_graph_replay_should_fallback(ggml::hrx::HrxGraphReplayEvent::LaunchFailed));
 #if defined(_WIN32)
+    // Verify the stable direct-execution default while Windows replay is under investigation.
     REQUIRE(!ggml::hrx::hrx_graph_replay_enabled_by_default());
 #else
     REQUIRE(ggml::hrx::hrx_graph_replay_enabled_by_default());
@@ -3968,6 +3969,7 @@ static void run_chained_dispatch_requires_transients() {
 
 static void run_graph_replay_host_staging_is_not_ineligible() {
 #if defined(_WIN32)
+    // This replay-specific test opts in despite the Windows default.
     REQUIRE(_putenv_s("GGML_HRX_ENABLE_GRAPH_REPLAY", "1") == 0);
     REQUIRE(ggml::hrx::hrx_graph_replay_enabled_from_environment());
 #endif

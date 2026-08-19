@@ -18,6 +18,8 @@ enum class HrxGraphReplayEvent {
 
 inline constexpr bool hrx_graph_replay_enabled_by_default() {
 #if defined(_WIN32)
+    // Windows replay has unresolved lifetime and binding behavior that can cause GPU timeouts.
+    // Use direct execution by default until replay is fixed.
     return false;
 #else
     return true;
