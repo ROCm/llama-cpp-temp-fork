@@ -53,10 +53,6 @@ static void apply_graph_replay_result(PreparedCommandProgramCacheExecutionResult
     result.graph_replay_transient_allocation_changed = replay.transient_allocation_changed;
 }
 
-static bool graph_replay_should_fallback(HrxGraphReplayEvent event) {
-    return event == HrxGraphReplayEvent::Ineligible || event == HrxGraphReplayEvent::BuildFailed;
-}
-
 static Status bind_current_value(const ValueMap &                                   values,
                                  ValueId                                            expected,
                                  const ggml_tensor *                                tensor,
@@ -329,7 +325,7 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
         result.success = true;
         return result;
     }
-    if (!graph_replay_should_fallback(replay.event)) {
+    if (!hrx_graph_replay_should_fallback(replay.event)) {
         result.status.append(replay.status);
         if (result.status.success()) {
             result.status.log("execute cached HRX graph replay failed");

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 
 namespace ggml::hrx {
 
@@ -14,6 +15,30 @@ enum class HrxGraphReplayEvent {
     BuildFailed,
     LaunchFailed,
 };
+
+inline constexpr bool hrx_graph_replay_enabled_by_default() {
+#if defined(_WIN32)
+    // Windows replay has unresolved lifetime and binding behavior that can cause GPU timeouts.
+    // Use direct execution by default until replay is fixed.
+    return false;
+#else
+    return true;
+#endif
+}
+
+inline bool hrx_graph_replay_enabled_from_environment() {
+#if defined(_WIN32)
+    const char * value = std::getenv("GGML_HRX_ENABLE_GRAPH_REPLAY");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+#else
+    return hrx_graph_replay_enabled_by_default();
+#endif
+}
+
+inline bool hrx_graph_replay_should_fallback(HrxGraphReplayEvent event) {
+    return event == HrxGraphReplayEvent::Disabled || event == HrxGraphReplayEvent::Ineligible ||
+           event == HrxGraphReplayEvent::BuildFailed;
+}
 
 inline const char * hrx_graph_replay_event_name(HrxGraphReplayEvent event) {
     switch (event) {
