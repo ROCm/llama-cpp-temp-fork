@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -24,6 +26,9 @@ static constexpr KernelCatalogRef kQwenAttentionContextBaseCaptureKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_attention_context_base_capture");
 static constexpr KernelCatalogRef kQwenAttentionMetadataKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_attention_metadata");
+static constexpr KernelCatalogRef kQwenRmsNormStridedMulRopeF32Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "hrx2_rms_norm_strided_mul_rope_f32");
+static constexpr KernelCatalogRef kQwenSetRowsF32F16Kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "hrx2_set_rows_f32_f16");
 static constexpr int64_t kQwenAttentionHeadSize = 128;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -36,6 +41,37 @@ static bool is_shape(const Value & value, int64_t ne0, int64_t ne1, int64_t ne2,
 
 static bool is_2d(const Value & value) {
     return value.ne[0] > 0 && value.ne[1] > 0 && value.ne[2] == 1 && value.ne[3] == 1;
+}
+
+static bool value_ranges_are_disjoint(const Value & lhs, const Value & rhs) {
+    if (lhs.storage != rhs.storage) {
+        return true;
+    }
+    if (lhs.storage_offset > std::numeric_limits<size_t>::max() - lhs.byte_count ||
+        rhs.storage_offset > std::numeric_limits<size_t>::max() - rhs.byte_count) {
+        return false;
+    }
+    return lhs.storage_offset + lhs.byte_count <= rhs.storage_offset ||
+           rhs.storage_offset + rhs.byte_count <= lhs.storage_offset;
+}
+
+static bool tensor_span_fits(const Value & value, size_t element_size, uint64_t element_capacity) {
+    if (element_size == 0 || element_capacity == 0 || value.byte_count < element_size) {
+        return false;
+    }
+    uint64_t maximum_element = 0;
+    for (int dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
+        if (value.ne[dimension] <= 0 || value.nb[dimension] % element_size != 0) {
+            return false;
+        }
+        const uint64_t stride = value.nb[dimension] / element_size;
+        const uint64_t count  = static_cast<uint64_t>(value.ne[dimension] - 1);
+        if (count != 0 && stride > (element_capacity - 1 - maximum_element) / count) {
+            return false;
+        }
+        maximum_element += count * stride;
+    }
+    return maximum_element < element_capacity && maximum_element <= (value.byte_count - element_size) / element_size;
 }
 
 static size_t q8_1_x4_byte_count(int64_t token_count, int64_t hidden_size) {
@@ -108,6 +144,20 @@ static bool append_covered_node(const DispatchMatchContext & context, const Grap
 
 static std::string to_config_value(int64_t value) {
     return std::to_string(value);
+}
+
+static std::string to_config_value(int value) {
+    return std::to_string(value);
+}
+
+static std::string to_config_value(size_t value) {
+    return std::to_string(value);
+}
+
+static std::string to_config_value(float value) {
+    std::ostringstream stream;
+    stream << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
+    return stream.str();
 }
 
 static std::string value_summary(const Graph & graph, const Value * value) {
@@ -508,7 +558,7 @@ static bool match_key_publish_chain(const Graph & graph, const GraphNode * set_r
         return false;
     }
 
-    chain.key              = key_chain;
+    chain.key              = std::move(key_chain);
     chain.layout_node      = layout;
     chain.set_rows_node    = set_rows;
     chain.cache_indices    = cache_indices;
@@ -962,7 +1012,182 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
     return true;
 }
 
+static bool match_qwen_rms_norm_strided_mul_rope_f32_dispatch(const DispatchMatchContext & context,
+                                                              DispatchMatch &              dispatch_match) {
+    const GraphNode * rms = context.root_node;
+    if (rms == nullptr || rms->op != GGML_OP_RMS_NORM || rms->inputs.size() != 1) {
+        return false;
+    }
+
+    const std::vector<const GraphNode *> & rms_consumers = context.graph.index().consumers(rms->output);
+    if (rms_consumers.size() != 1 || rms_consumers.front() == nullptr || rms_consumers.front()->op != GGML_OP_MUL ||
+        rms_consumers.front()->inputs.size() != 2) {
+        return false;
+    }
+    const GraphNode *                      mul           = rms_consumers.front();
+    const std::vector<const GraphNode *> & mul_consumers = context.graph.index().consumers(mul->output);
+    if (mul_consumers.size() != 1 || mul_consumers.front() == nullptr || mul_consumers.front()->op != GGML_OP_ROPE ||
+        mul_consumers.front()->inputs.size() != 2 || mul_consumers.front()->inputs[0] != mul->output) {
+        return false;
+    }
+    const GraphNode * rope = mul_consumers.front();
+
+    const Value * src        = graph_value(context.graph, rms->inputs[0]);
+    const Value * rms_output = graph_value(context.graph, rms->output);
+    const Value * mul_output = graph_value(context.graph, mul->output);
+    const Value * output     = graph_value(context.graph, rope->output);
+    const Value * positions  = graph_value(context.graph, rope->inputs[1]);
+    const Value * weight     = nullptr;
+    if (mul->inputs[0] == rms->output) {
+        weight = graph_value(context.graph, mul->inputs[1]);
+    } else if (mul->inputs[1] == rms->output) {
+        weight = graph_value(context.graph, mul->inputs[0]);
+    }
+    const RmsNormParams * rms_params  = op_params_as<RmsNormParams>(rms->params);
+    const RopeParams *    rope_params = op_params_as<RopeParams>(rope->params);
+    if (src == nullptr || rms_output == nullptr || mul_output == nullptr || output == nullptr || positions == nullptr ||
+        weight == nullptr || rms_params == nullptr || rope_params == nullptr) {
+        return false;
+    }
+
+    if (src->type != GGML_TYPE_F32 || rms_output->type != GGML_TYPE_F32 || mul_output->type != GGML_TYPE_F32 ||
+        output->type != GGML_TYPE_F32 || weight->type != GGML_TYPE_F32 || positions->type != GGML_TYPE_I32 ||
+        src->ne != rms_output->ne || src->ne != mul_output->ne || src->ne != output->ne || !output->contiguous ||
+        !weight->contiguous || !positions->contiguous || weight->ne[0] != src->ne[0] || weight->ne[1] != 1 ||
+        weight->ne[2] != 1 || weight->ne[3] != 1 || src->ne[0] < 2 || src->ne[0] > 512 || src->ne[0] % 2 != 0 ||
+        src->ne[1] < 1 || src->ne[1] > 1048576 || src->ne[2] < 1 || src->ne[2] > 1048576 || src->ne[3] < 1 ||
+        src->ne[3] > 1024 || src->nb[0] != sizeof(float) || output->nb[0] != sizeof(float) ||
+        src->ne[2] > std::numeric_limits<int64_t>::max() / 4 || positions->element_count < 4 * src->ne[2]) {
+        return false;
+    }
+    if ((rope_params->mode != GGML_ROPE_TYPE_MROPE && rope_params->mode != GGML_ROPE_TYPE_IMROPE) ||
+        rope_params->n_dims < 2 || rope_params->n_dims > src->ne[0] || rope_params->n_dims % 2 != 0 ||
+        rope_params->sections[0] < 0 || rope_params->sections[1] < 0 || rope_params->sections[2] < 0 ||
+        rope_params->sections[3] < 0 ||
+        static_cast<int64_t>(rope_params->sections[0]) + rope_params->sections[1] + rope_params->sections[2] +
+                rope_params->sections[3] !=
+            rope_params->n_dims / 2 ||
+        !std::isfinite(rms_params->eps) || rms_params->eps <= 0.0f || !std::isfinite(rope_params->freq_base) ||
+        rope_params->freq_base <= 0.0f || !std::isfinite(rope_params->freq_scale) || rope_params->freq_scale <= 0.0f ||
+        !std::isfinite(rope_params->attn_factor) || rope_params->attn_factor <= 0.0f ||
+        rope_params->ext_factor != 0.0f) {
+        return false;
+    }
+    if (output->storage_root == src->storage_root || output->storage_root == weight->storage_root ||
+        output->storage_root == positions->storage_root) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kQwenRmsNormStridedMulRopeF32Kernel);
+    auto & config   = dispatch.kernel.compile_parameters;
+    config.emplace("hrx2_shape_attn_norm_rope_ncols", to_config_value(src->ne[0]));
+    config.emplace("hrx2_shape_attn_norm_rope_ne1", to_config_value(src->ne[1]));
+    config.emplace("hrx2_shape_attn_norm_rope_ne2", to_config_value(src->ne[2]));
+    config.emplace("hrx2_shape_attn_norm_rope_ne3", to_config_value(src->ne[3]));
+    config.emplace("hrx2_shape_attn_norm_rope_s1", to_config_value(src->nb[1] / sizeof(float)));
+    config.emplace("hrx2_shape_attn_norm_rope_s2", to_config_value(src->nb[2] / sizeof(float)));
+    config.emplace("hrx2_shape_attn_norm_rope_s3", to_config_value(src->nb[3] / sizeof(float)));
+    config.emplace("hrx2_shape_attn_norm_rope_d1", to_config_value(output->nb[1] / sizeof(float)));
+    config.emplace("hrx2_shape_attn_norm_rope_d2", to_config_value(output->nb[2] / sizeof(float)));
+    config.emplace("hrx2_shape_attn_norm_rope_d3", to_config_value(output->nb[3] / sizeof(float)));
+    config.emplace("hrx2_shape_attn_norm_rope_n_dims", to_config_value(rope_params->n_dims));
+    config.emplace("hrx2_shape_attn_norm_rope_sec0", to_config_value(rope_params->sections[0]));
+    config.emplace("hrx2_shape_attn_norm_rope_sec1", to_config_value(rope_params->sections[1]));
+    config.emplace("hrx2_shape_attn_norm_rope_sec2", to_config_value(rope_params->sections[2]));
+    config.emplace("hrx2_shape_attn_norm_rope_sec3", to_config_value(rope_params->sections[3]));
+    config.emplace("hrx2_shape_attn_norm_rope_mode", to_config_value(rope_params->mode));
+    config.emplace("hrx2_tuning_attn_norm_rope_workgroup_size", "256");
+    config.emplace("hrx2_attn_norm_rope_eps", to_config_value(rms_params->eps));
+    config.emplace("hrx2_attn_norm_rope_freq_base", to_config_value(rope_params->freq_base));
+    config.emplace("hrx2_attn_norm_rope_freq_scale", to_config_value(rope_params->freq_scale));
+    config.emplace("hrx2_attn_norm_rope_attn_factor", to_config_value(rope_params->attn_factor));
+    dispatch.bindings.push_back({ src->id, 0, src->byte_count });
+    dispatch.bindings.push_back({ weight->id, 0, weight->byte_count });
+    dispatch.bindings.push_back({ positions->id, 0, positions->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    if (!append_covered_node(context, mul, dispatch_match) || !append_covered_node(context, rope, dispatch_match)) {
+        return false;
+    }
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
+static bool match_qwen_set_rows_f32_f16_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
+        return false;
+    }
+    const Value * src    = graph_value(context.graph, node->inputs[0]);
+    const Value * idx    = graph_value(context.graph, node->inputs[1]);
+    const Value * base   = graph_value(context.graph, node->inputs[2]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (src == nullptr || idx == nullptr || base == nullptr || output == nullptr || src->type != GGML_TYPE_F32 ||
+        idx->type != GGML_TYPE_I64 || base->type != GGML_TYPE_F16 || output->type != GGML_TYPE_F16 ||
+        src->ne[0] != output->ne[0] || src->ne[1] != idx->ne[0] || src->ne[2] != output->ne[2] ||
+        src->ne[3] != output->ne[3] || src->ne[2] % idx->ne[1] != 0 || src->ne[3] % idx->ne[2] != 0 ||
+        idx->ne[3] != 1 || base->ne != output->ne || base->nb != output->nb || src->ne[0] < 1 || src->ne[0] > 65536 ||
+        src->ne[1] < 1 || src->ne[1] > 1048576 || src->ne[2] < 1 || src->ne[2] > 1048576 || src->ne[3] < 1 ||
+        src->ne[3] > 1048576 || output->ne[1] < 1 || output->ne[1] > 1048576 || idx->ne[1] < 1 ||
+        idx->ne[1] > 1048576 || idx->ne[2] < 1 || idx->ne[2] > 1048576 || src->element_count < 1 ||
+        static_cast<uint64_t>(src->element_count) > (uint64_t{ 1 } << 30) || src->nb[0] != sizeof(float) ||
+        idx->nb[0] != sizeof(int64_t) || output->nb[0] != sizeof(ggml_fp16_t) ||
+        !tensor_span_fits(*src, sizeof(float), uint64_t{ 1 } << 30) ||
+        !tensor_span_fits(*idx, sizeof(int64_t), uint64_t{ 1 } << 27) ||
+        !tensor_span_fits(*output, sizeof(ggml_fp16_t), uint64_t{ 1 } << 30) ||
+        !same_full_value_range(*base, *output) || !value_ranges_are_disjoint(*src, *idx) ||
+        !value_ranges_are_disjoint(*src, *output) || !value_ranges_are_disjoint(*idx, *output)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kQwenSetRowsF32F16Kernel);
+    auto & config   = dispatch.kernel.compile_parameters;
+    config.emplace("hrx2_shape_set_rows_nc", to_config_value(output->ne[0]));
+    config.emplace("hrx2_shape_set_rows_nr", to_config_value(src->ne[1]));
+    config.emplace("hrx2_shape_set_rows_ne02", to_config_value(src->ne[2]));
+    config.emplace("hrx2_shape_set_rows_ne03", to_config_value(src->ne[3]));
+    config.emplace("hrx2_shape_set_rows_ne1", to_config_value(output->ne[1]));
+    config.emplace("hrx2_shape_set_rows_ne11", to_config_value(idx->ne[1]));
+    config.emplace("hrx2_shape_set_rows_ne12", to_config_value(idx->ne[2]));
+    config.emplace("hrx2_stride_set_rows_src0_nb1", to_config_value(src->nb[1] / sizeof(float)));
+    config.emplace("hrx2_stride_set_rows_src0_nb2", to_config_value(src->nb[2] / sizeof(float)));
+    config.emplace("hrx2_stride_set_rows_src0_nb3", to_config_value(src->nb[3] / sizeof(float)));
+    config.emplace("hrx2_stride_set_rows_idx_nb0", to_config_value(idx->nb[0] / sizeof(int64_t)));
+    config.emplace("hrx2_stride_set_rows_idx_nb1", to_config_value(idx->nb[1] / sizeof(int64_t)));
+    config.emplace("hrx2_stride_set_rows_idx_nb2", to_config_value(idx->nb[2] / sizeof(int64_t)));
+    config.emplace("hrx2_stride_set_rows_dst_nb1", to_config_value(output->nb[1] / sizeof(ggml_fp16_t)));
+    config.emplace("hrx2_stride_set_rows_dst_nb2", to_config_value(output->nb[2] / sizeof(ggml_fp16_t)));
+    config.emplace("hrx2_stride_set_rows_dst_nb3", to_config_value(output->nb[3] / sizeof(ggml_fp16_t)));
+    config.emplace("hrx2_tuning_set_rows_workgroup_size", "256");
+    dispatch.bindings.push_back({ src->id, 0, src->byte_count });
+    dispatch.bindings.push_back({ idx->id, 0, idx->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 void register_qwen_attention_postprocess_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "qwen.rms_norm_strided_mul_rope_f32",
+        GGML_OP_RMS_NORM,
+        DispatchMatchKind::Fused,
+        1300,
+        DispatchSource::Qwen,
+        match_qwen_rms_norm_strided_mul_rope_f32_dispatch,
+    });
+    registry.add({
+        "qwen.set_rows_f32_f16",
+        GGML_OP_SET_ROWS,
+        DispatchMatchKind::SingleOp,
+        400,
+        DispatchSource::Qwen,
+        match_qwen_set_rows_f32_f16_dispatch,
+    });
     registry.add({
         "qwen.attention_qkv_postprocess_fused_decode",
         GGML_OP_MUL_MAT,

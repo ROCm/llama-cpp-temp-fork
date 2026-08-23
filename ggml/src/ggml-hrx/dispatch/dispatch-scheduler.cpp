@@ -115,6 +115,11 @@ static bool can_elide_layout_alias_node(const Graph &             graph,
     return is_layout_alias_node(graph, node) && value_is_available(graph, node.inputs[0], covered_nodes);
 }
 
+static bool can_elide_empty_node(const Graph & graph, const GraphNode & node) {
+    const Value * output = graph.values().find(node.output);
+    return output != nullptr && output->element_count == 0 && output->byte_count == 0;
+}
+
 static bool apply_value_aliases(Graph & graph, const DispatchMatch & match, Status & status) {
     for (const DispatchValueAliasRequest & alias : match.value_aliases) {
         Status alias_status = graph.values().alias_storage(alias.target_value, alias.source_value);
@@ -168,7 +173,7 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
         DispatchMatchDiagnostics match_diagnostics;
         if (!try_match_registration(graph, node, i, covered_nodes, plan_, *registry, next_plan_value, match,
                                     &match_diagnostics)) {
-            if (can_elide_layout_alias_node(graph, *node, covered_nodes)) {
+            if (can_elide_layout_alias_node(graph, *node, covered_nodes) || can_elide_empty_node(graph, *node)) {
                 pending_diagnostics.append(match.status);
                 covered_nodes[i] = true;
                 continue;
@@ -233,7 +238,7 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
     }
     for (size_t i = 0; i < nodes.size(); ++i) {
         if (!covered_nodes[i]) {
-            if (can_elide_layout_alias_node(graph, nodes[i], covered_nodes)) {
+            if (can_elide_layout_alias_node(graph, nodes[i], covered_nodes) || can_elide_empty_node(graph, nodes[i])) {
                 covered_nodes[i] = true;
                 continue;
             }

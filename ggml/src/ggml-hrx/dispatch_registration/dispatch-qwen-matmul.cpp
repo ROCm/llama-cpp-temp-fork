@@ -6,8 +6,10 @@
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ggml::hrx {
 namespace {
@@ -16,10 +18,23 @@ static constexpr KernelCatalogRef kQwenDenseLinearQ4KF16WmmaKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_f16_wmma");
 static constexpr KernelCatalogRef kQwenDenseLinearQ6KF16WmmaKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q6k_f16_wmma");
+static constexpr KernelCatalogRef kQwenDenseLinearQ6KPackedRawF16WmmaToken1Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q6k_packed_raw_f16_wmma_token1_scalerow_64x16");
 static constexpr KernelCatalogRef kQwenDenseLinearQ4KQ8NextQ8Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
 static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4");
+static constexpr KernelCatalogRef kQwenQuantizeActI4Kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_quant_act_i4");
+static constexpr KernelCatalogRef kQwenDenseLinearSymmetricI2LowRowKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi2_i4_adjacent_m16n16_wg64");
+static constexpr KernelCatalogRef kGgmlTopK64F32PartitionsRegisterKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_top_k64_f32_partitions_register");
+static constexpr KernelCatalogRef kGgmlTopK64F32ReduceGatherRegisterKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_top_k64_f32_reduce_gather_register");
+static constexpr KernelCatalogRef kQwenDenseQ6KPackedRawSelectedRefineKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_q6k_packed_raw_selected_refine_64x16");
+static constexpr KernelCatalogRef kQwenFillNegativeF32Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_fill_negative_f32");
 
 static constexpr int64_t kQwenHiddenSize      = kQwen30BMoeDispatchProfile.hidden_size;
 static constexpr int64_t kQwenVocabularyCount = 151936;
@@ -48,6 +63,152 @@ static std::string to_config_value(int64_t value) {
     return std::to_string(value);
 }
 
+static bool multiply_size(size_t lhs, size_t rhs, size_t & result) {
+    if (rhs != 0 && lhs > std::numeric_limits<size_t>::max() / rhs) {
+        return false;
+    }
+    result = lhs * rhs;
+    return true;
+}
+
+static bool q6_symmetric_i2_composite_layout_sizes(int64_t  input_size,
+                                                   int64_t  output_size,
+                                                   size_t & symmetric_i2_bytes,
+                                                   size_t & materialized_bytes) {
+    if (input_size <= 0 || input_size % 256 != 0 || output_size <= 0 || output_size % 64 != 0) {
+        return false;
+    }
+
+    const size_t logical_rows    = static_cast<size_t>(output_size);
+    const size_t row_group       = ((logical_rows + 255) / 256) * 32;
+    const size_t physical_rows   = (logical_rows + row_group - 1) / row_group * row_group;
+    const size_t block_count     = static_cast<size_t>(input_size / 256);
+    size_t       packed_q6_bytes = 0;
+    if (!multiply_size(physical_rows, block_count, symmetric_i2_bytes) ||
+        !multiply_size(symmetric_i2_bytes, size_t{ 68 }, symmetric_i2_bytes) ||
+        !multiply_size(logical_rows, block_count, packed_q6_bytes) ||
+        !multiply_size(packed_q6_bytes, ggml_type_size(GGML_TYPE_Q6_K), packed_q6_bytes) ||
+        symmetric_i2_bytes > std::numeric_limits<size_t>::max() - packed_q6_bytes ||
+        symmetric_i2_bytes > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+        symmetric_i2_bytes % 256 != 0) {
+        return false;
+    }
+    materialized_bytes = symmetric_i2_bytes + packed_q6_bytes;
+    return true;
+}
+
+static const Value * match_mtp_normalized_branch(const Graph & graph,
+                                                 ValueId       branch_id,
+                                                 int64_t       hidden_size,
+                                                 int64_t       token_count) {
+    const Value *     branch = graph_value(graph, branch_id);
+    const GraphNode * mul    = graph.index().producer(branch_id);
+    if (branch == nullptr || mul == nullptr || mul->op != GGML_OP_MUL || mul->inputs.size() != 2 ||
+        branch->type != GGML_TYPE_F32 || !is_2d(*branch) || branch->ne[0] != hidden_size ||
+        branch->ne[1] != token_count) {
+        return nullptr;
+    }
+
+    const GraphNode * rms   = nullptr;
+    const Value *     scale = nullptr;
+    for (ValueId input_id : mul->inputs) {
+        const GraphNode * producer = graph.index().producer(input_id);
+        if (producer != nullptr && producer->op == GGML_OP_RMS_NORM) {
+            if (rms != nullptr) {
+                return nullptr;
+            }
+            rms = producer;
+        } else {
+            scale = graph_value(graph, input_id);
+        }
+    }
+    if (rms == nullptr || rms->inputs.size() != 1 || scale == nullptr || scale->type != GGML_TYPE_F32 ||
+        !is_2d(*scale) || scale->ne[0] != hidden_size || scale->ne[1] != 1) {
+        return nullptr;
+    }
+
+    const Value * normalized = graph_value(graph, rms->output);
+    const Value * source     = graph_value(graph, rms->inputs[0]);
+    if (normalized == nullptr || source == nullptr || normalized->id != rms->output ||
+        normalized->type != GGML_TYPE_F32 || source->type != GGML_TYPE_F32 || !is_2d(*normalized) || !is_2d(*source) ||
+        normalized->ne[0] != hidden_size || normalized->ne[1] != token_count || source->ne[0] != hidden_size ||
+        source->ne[1] != token_count) {
+        return nullptr;
+    }
+    return source;
+}
+
+static bool value_depends_on(const Graph & graph, ValueId value, ValueId ancestor) {
+    if (value.value < 0 || ancestor.value < 0) {
+        return false;
+    }
+    std::vector<bool>    visited(graph.values().size(), false);
+    std::vector<ValueId> pending = { value };
+    while (!pending.empty()) {
+        const ValueId current = pending.back();
+        pending.pop_back();
+        if (current == ancestor) {
+            return true;
+        }
+        if (current.value < 0 || static_cast<size_t>(current.value) >= visited.size() || visited[current.value]) {
+            continue;
+        }
+        visited[current.value]     = true;
+        const GraphNode * producer = graph.index().producer(current);
+        if (producer != nullptr) {
+            pending.insert(pending.end(), producer->inputs.begin(), producer->inputs.end());
+        }
+    }
+    return false;
+}
+
+static bool graph_has_mtp_preamble_ancestor(const Graph & graph, ValueId endpoint_input, int64_t hidden_size) {
+    if (!graph.has_index() || hidden_size <= 0) {
+        return false;
+    }
+
+    for (const GraphNode & projection : graph.nodes()) {
+        if (projection.op != GGML_OP_MUL_MAT || projection.inputs.size() != 2) {
+            continue;
+        }
+        const Value * weight      = graph_value(graph, projection.inputs[0]);
+        const Value * input       = graph_value(graph, projection.inputs[1]);
+        const Value * output      = graph_value(graph, projection.output);
+        const int64_t token_count = input != nullptr ? input->ne[1] : 0;
+        if (weight == nullptr || input == nullptr || output == nullptr || weight->type != GGML_TYPE_Q6_K ||
+            input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 || !is_2d(*weight) || !is_2d(*input) ||
+            !is_2d(*output) || weight->ne[0] != 2 * hidden_size || weight->ne[1] != hidden_size ||
+            input->ne[0] != 2 * hidden_size || token_count != 1 || output->ne[0] != hidden_size ||
+            output->ne[1] != token_count) {
+            continue;
+        }
+
+        const GraphNode * concat = graph.index().producer(input->id);
+        if (concat == nullptr || concat->op != GGML_OP_CONCAT || concat->inputs.size() != 2) {
+            continue;
+        }
+        const Value * first_source  = match_mtp_normalized_branch(graph, concat->inputs[0], hidden_size, token_count);
+        const Value * second_source = match_mtp_normalized_branch(graph, concat->inputs[1], hidden_size, token_count);
+        if (first_source == nullptr || second_source == nullptr) {
+            continue;
+        }
+
+        const GraphNode * first_producer  = graph.index().producer(first_source->id);
+        const GraphNode * second_producer = graph.index().producer(second_source->id);
+        const bool        first_is_embedding =
+            first_producer != nullptr && first_producer->op == GGML_OP_GET_ROWS && first_producer->inputs.size() == 2;
+        const bool second_is_embedding = second_producer != nullptr && second_producer->op == GGML_OP_GET_ROWS &&
+                                         second_producer->inputs.size() == 2;
+        const bool first_is_external  = first_producer == nullptr;
+        const bool second_is_external = second_producer == nullptr;
+        if (((first_is_embedding && second_is_external) || (second_is_embedding && first_is_external)) &&
+            value_depends_on(graph, endpoint_input, projection.output)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct QwenMatmulMatch {
     const Value *    input       = nullptr;
     const Value *    weight      = nullptr;
@@ -58,7 +219,8 @@ struct QwenMatmulMatch {
     int64_t          input_size  = 0;
     int64_t          output_size = 0;
     int64_t          token_count = 0;
-    bool             dense       = false;
+    bool             dense        = false;
+    bool             draft_refine = false;
 
     bool matched() const {
         return input != nullptr && weight != nullptr && output != nullptr && kernel.id != kUncatalogedKernelId;
@@ -241,21 +403,32 @@ static QwenMatmulMatch match_qwen_decode_endpoint_q6k_matmul(const Graph & graph
     const int64_t output_size = weight->ne[1];
     const int64_t token_count = input->ne[1];
     if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
-        !is_qwen_decode_query_length(token_count) || !is_qwen_endpoint_projection(input_size, output_size) ||
+        !is_qwen_decode_query_length(token_count) || !graph.index().consumers(output->id).empty() ||
         !is_supported_dense_input_size(input_size) || !is_supported_dense_output_size(output_size)) {
         return {};
     }
+
+    size_t     symmetric_i2_bytes     = 0;
+    size_t     composite_weight_bytes = 0;
+    const bool draft_refine =
+        token_count == 1 && output_size >= 65536 && output_size % 64 == 0 &&
+        graph_has_mtp_preamble_ancestor(graph, input->id, input_size) &&
+        q6_symmetric_i2_composite_layout_sizes(input_size, output_size, symmetric_i2_bytes, composite_weight_bytes);
 
     match.input       = input;
     match.weight      = weight;
     match.output      = output;
     match.input_value = input->id;
     match.input_bytes = input->byte_count;
-    match.kernel      = kQwenDenseLinearQ6KF16WmmaKernel;
+    match.kernel       = draft_refine ? kQwenDenseLinearSymmetricI2LowRowKernel :
+                         token_count == 1 && output_size >= 65536 && output_size % 64 == 0 ?
+                                        kQwenDenseLinearQ6KPackedRawF16WmmaToken1Kernel :
+                                        kQwenDenseLinearQ6KF16WmmaKernel;
     match.input_size  = input_size;
     match.output_size = output_size;
     match.token_count = token_count;
     match.dense       = true;
+    match.draft_refine = draft_refine;
     return match;
 }
 
@@ -440,6 +613,127 @@ static QwenAttentionOutputAccumulateMatch match_qwen_attention_output_accumulate
 
 }  // namespace
 
+static bool build_qwen_draft_refinement_dispatch(const QwenMatmulMatch &      match,
+                                                 DispatchMatch &              dispatch_match,
+                                                 const DispatchMatchContext & context) {
+    constexpr int64_t candidate_count       = 64;
+    constexpr size_t  partition_entry_count = 512;
+    constexpr size_t  candidate_capacity    = 64;
+
+    size_t symmetric_i2_bytes        = 0;
+    size_t materialized_weight_bytes = 0;
+    if (!q6_symmetric_i2_composite_layout_sizes(match.input_size, match.output_size, symmetric_i2_bytes,
+                                                materialized_weight_bytes)) {
+        dispatch_match.status.log("invalid Q6 draft refinement layout for K=%lld rows=%lld",
+                                  static_cast<long long>(match.input_size), static_cast<long long>(match.output_size));
+        return false;
+    }
+
+    const LlmSymmetricI4ActivationLayout activation_layout =
+        llm_symmetric_i4_activation_layout(match.input_size, match.token_count);
+    const CommandPlanAlternateValue * alternate = find_alternate_value(context.graph, context.plan, match.input->id,
+                                                                       GGML_TYPE_COUNT, activation_layout.total_bytes);
+    if (alternate != nullptr && alternate->name != kLlmSymmetricI4ActivationAlternateName) {
+        alternate = nullptr;
+    }
+
+    const ValueId activation     = alternate != nullptr ? alternate->alternate_value : context.next_plan_value;
+    const int32_t transient_base = context.next_plan_value.value + (alternate == nullptr ? 1 : 0);
+    const ValueId partial_values(transient_base);
+    const ValueId partial_ids(transient_base + 1);
+    const ValueId candidates(transient_base + 2);
+    const ValueId approximate_candidates(transient_base + 3);
+    const ValueId exact_candidates(transient_base + 4);
+
+    if (alternate == nullptr) {
+        dispatch_match.transients.push_back(
+            { activation, kLlmSymmetricI4ActivationAlternateName, activation_layout.total_bytes, 256 });
+
+        Dispatch quantize;
+        quantize.kernel = make_kernel_specialization(kQwenQuantizeActI4Kernel);
+        quantize.kernel.compile_parameters.emplace("qwen3.qact_i4.shape_k", to_config_value(match.input_size));
+        quantize.kernel.compile_parameters.emplace("qwen3.qact_i4.shape_cols", to_config_value(match.token_count));
+        quantize.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+        quantize.bindings.push_back({ activation, 0, activation_layout.payload_bytes });
+        quantize.bindings.push_back({ activation, activation_layout.scales_offset, activation_layout.metadata_bytes });
+        quantize.bindings.push_back({ activation, activation_layout.sums_offset, activation_layout.metadata_bytes });
+        dispatch_match.dispatches.push_back(std::move(quantize));
+    }
+
+    dispatch_match.transients.push_back(
+        { partial_values, "qwen.draft.endpoint.top_k.partial_values", partition_entry_count * sizeof(float), 256 });
+    dispatch_match.transients.push_back(
+        { partial_ids, "qwen.draft.endpoint.top_k.partial_ids", partition_entry_count * sizeof(int32_t), 256 });
+    dispatch_match.transients.push_back(
+        { candidates, "qwen.draft.endpoint.top_k.candidates", candidate_capacity * sizeof(int32_t), 256 });
+    dispatch_match.transients.push_back({ approximate_candidates, "qwen.draft.endpoint.top_k.approximate_values",
+                                          candidate_capacity * sizeof(float), 256 });
+    dispatch_match.transients.push_back(
+        { exact_candidates, "qwen.draft.endpoint.top_k.exact_values", candidate_capacity * sizeof(float), 256 });
+
+    Dispatch contraction;
+    contraction.kernel = make_kernel_specialization(kQwenDenseLinearSymmetricI2LowRowKernel);
+    contraction.kernel.compile_parameters.emplace("qwen3.dense_q4_i4.lowrow.shape_k",
+                                                  to_config_value(match.input_size));
+    contraction.kernel.compile_parameters.emplace("qwen3.dense_q4_i4.lowrow.shape_rows",
+                                                  to_config_value(match.output_size));
+    contraction.kernel.compile_parameters.emplace("qwen3.dense_q4_i4.lowrow.shape_cols",
+                                                  to_config_value(match.token_count));
+    contraction.bindings.push_back({ match.weight->id, 0, materialized_weight_bytes,
+                                     kQ6KSymmetricI2PackedScaleRowLayout, GGML_TYPE_Q6_K, match.input_size,
+                                     match.output_size, match.weight->byte_count });
+    contraction.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+    contraction.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    contraction.bindings.push_back({ activation, 0, activation_layout.payload_bytes });
+    contraction.bindings.push_back({ activation, activation_layout.scales_offset, activation_layout.metadata_bytes });
+    contraction.bindings.push_back({ activation, activation_layout.sums_offset, activation_layout.metadata_bytes });
+    dispatch_match.dispatches.push_back(std::move(contraction));
+
+    Dispatch partition_top_k;
+    partition_top_k.kernel = make_kernel_specialization(kGgmlTopK64F32PartitionsRegisterKernel);
+    partition_top_k.kernel.integer_parameters.emplace("element_count", match.output_size);
+    partition_top_k.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    partition_top_k.bindings.push_back({ partial_values, 0, partition_entry_count * sizeof(float) });
+    partition_top_k.bindings.push_back({ partial_ids, 0, partition_entry_count * sizeof(int32_t) });
+    dispatch_match.dispatches.push_back(std::move(partition_top_k));
+
+    Dispatch reduce_top_k;
+    reduce_top_k.kernel = make_kernel_specialization(kGgmlTopK64F32ReduceGatherRegisterKernel);
+    reduce_top_k.kernel.integer_parameters.emplace("element_count", match.output_size);
+    reduce_top_k.bindings.push_back({ partial_values, 0, partition_entry_count * sizeof(float) });
+    reduce_top_k.bindings.push_back({ partial_ids, 0, partition_entry_count * sizeof(int32_t) });
+    reduce_top_k.bindings.push_back({ candidates, 0, candidate_capacity * sizeof(int32_t) });
+    reduce_top_k.bindings.push_back({ approximate_candidates, 0, candidate_capacity * sizeof(float) });
+    dispatch_match.dispatches.push_back(std::move(reduce_top_k));
+
+    Dispatch fill;
+    fill.kernel = make_kernel_specialization(kQwenFillNegativeF32Kernel);
+    fill.kernel.integer_parameters.emplace("element_count", match.output_size);
+    fill.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    dispatch_match.dispatches.push_back(std::move(fill));
+
+    Dispatch refine;
+    refine.kernel = make_kernel_specialization(kQwenDenseQ6KPackedRawSelectedRefineKernel);
+    refine.kernel.integer_parameters.emplace("token_count", match.token_count);
+    refine.kernel.integer_parameters.emplace("candidate_count", candidate_count);
+    refine.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.input_size", to_config_value(match.input_size));
+    refine.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_size",
+                                             to_config_value(match.output_size));
+    refine.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_accumulation", "0");
+    refine.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.q6_refine_weight_offset",
+                                             to_config_value(static_cast<int64_t>(symmetric_i2_bytes)));
+    refine.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+    refine.bindings.push_back({ match.weight->id, 0, materialized_weight_bytes, kQ6KSymmetricI2PackedScaleRowLayout,
+                                GGML_TYPE_Q6_K, match.input_size, match.output_size, match.weight->byte_count });
+    refine.bindings.push_back({ candidates, 0, candidate_capacity * sizeof(int32_t) });
+    refine.bindings.push_back({ exact_candidates, 0, candidate_capacity * sizeof(float) });
+    refine.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    dispatch_match.dispatches.push_back(std::move(refine));
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 static void build_qwen_matmul_dispatch(const QwenMatmulMatch & match,
                                        DispatchMatch &         dispatch_match,
                                        size_t                  root_index) {
@@ -465,7 +759,15 @@ static void build_qwen_matmul_dispatch(const QwenMatmulMatch & match,
         dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_accumulation", "0");
     }
     dispatch.bindings.push_back({ match.input_value, 0, match.input_bytes });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    if (match.kernel.id == kQwenDenseLinearQ6KPackedRawF16WmmaToken1Kernel.id) {
+        const size_t block_count = static_cast<size_t>(match.input_size / ggml_blck_size(GGML_TYPE_Q6_K));
+        const size_t materialized_weight_bytes =
+            static_cast<size_t>(match.output_size) * block_count * ggml_type_size(GGML_TYPE_Q6_K);
+        dispatch.bindings.push_back({ match.weight->id, 0, materialized_weight_bytes, kQ6KPackedScaleRowLayout,
+                                      GGML_TYPE_Q6_K, match.input_size, match.output_size, match.weight->byte_count });
+    } else {
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    }
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     dispatch_match.covered_nodes.push_back(root_index);
@@ -486,6 +788,9 @@ static bool match_qwen_decode_endpoint_q6k_dispatch(const DispatchMatchContext &
     const QwenMatmulMatch match = match_qwen_decode_endpoint_q6k_matmul(context.graph, context.root_node);
     if (!match.matched()) {
         return false;
+    }
+    if (match.draft_refine) {
+        return build_qwen_draft_refinement_dispatch(match, dispatch_match, context);
     }
     build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
     return true;

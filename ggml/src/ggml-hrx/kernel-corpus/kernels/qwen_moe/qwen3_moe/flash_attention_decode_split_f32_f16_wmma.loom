@@ -1,3 +1,9 @@
+template.decl @qwen3_moe.attention.decode_split.pack_completed_q8(%key_value_head: index, %output: buffer, %q8_output: buffer)
+
+template.decl @qwen3_moe.attention.decode_split.produce_partials(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer)
+
+template.decl @qwen3_moe.attention.decode_split.reduce_fused(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer)
+
 // Qwen3 MoE grouped-query decode FlashAttention.
 //
 // Each workgroup processes one 64-token KV block for all GQA query heads that
@@ -21,7 +27,7 @@ config.decl @qwen3_moe.attention.key_value_token_capacity : %value: index where 
 // Partial storage retains its capacity-specialized block-axis stride while the
 // launched block count bounds issue-time work. Keeping those values distinct
 // preserves constant address arithmetic across changing visible prefixes.
-func.template<qwen3_moe.attention.decode_split.produce_partials.active> device @qwen3_moe_flash_attention_decode_split_produce_active_partials_body_f32_f16_wmma(%key_value_token_count: index, %partial_block_capacity0: index, %launched_block_count0: index, %query: buffer, %key: buffer, %value: buffer, %lane_mask: f32, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer) {
+func.def inline @qwen3_moe_flash_attention_decode_split_produce_active_partials_body_f32_f16_wmma(%key_value_token_count: index, %partial_block_capacity0: index, %launched_block_count0: index, %query: buffer, %key: buffer, %value: buffer, %lane_mask: f32, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer) {
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %partial_block_capacity, %launched_block_count = index.assume %partial_block_capacity0, %launched_block_count0 [range(%partial_block_capacity0, 1, 512), range(%launched_block_count0, 1, 512), le(%launched_block_count0, %partial_block_capacity0)] : index, index
   %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
@@ -150,7 +156,8 @@ func.template<qwen3_moe.attention.decode_split.produce_partials.active> device @
       // visible without treating physical tail padding as logical storage.
       %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
       %score_key_end0 = index.add %score_key_origin0, %c16 : index
-      %score_key_origin, %score_key_end = index.assume %score_key_origin0, %score_key_end0 [le(%score_key_end0, %bounded_key_value_token_count)] : index, index
+      %score_key_end = index.assume %score_key_end0 [le(%score_key_end0, %bounded_key_value_token_count)] : index
+      %score_key_origin = index.sub %score_key_end, %c16 : index
       %full_key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%score_key_end]x[%key_value_width]xf16>
       %key_channel = index.add %key_value_head_base, %head_tile : index
       %key_fragment = vector.fragment.load<lhs> %full_key_view[%score_key_origin, %key_channel] shape [%m, %k] : view<[%score_key_end]x[%key_value_width]xf16> -> vector<16xf16>
@@ -252,7 +259,8 @@ func.template<qwen3_moe.attention.decode_split.produce_partials.active> device @
       // Retain the same logical-extent contract for the full P*V tile.
       %value_token0 = index.add %key_origin, %key_tile : index
       %value_token_end0 = index.add %value_token0, %c16 : index
-      %value_token, %value_token_end = index.assume %value_token0, %value_token_end0 [le(%value_token_end0, %bounded_key_value_token_count)] : index, index
+      %value_token_end = index.assume %value_token_end0 [le(%value_token_end0, %bounded_key_value_token_count)] : index
+      %value_token = index.sub %value_token_end, %c16 : index
       %full_value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%value_token_end]x[%key_value_width]xf16>
       %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
       %value_fragment0 = vector.fragment.load<rhs> %full_value_view[%value_token, %value_channel0] shape [%k, %n] : view<[%value_token_end]x[%key_value_width]xf16> -> vector<16xf16>
@@ -347,7 +355,7 @@ func.template<qwen3_moe.attention.decode_split.produce_partials.active> device @
 // or P*V. Valid additive masks contain finite F16 values or negative infinity,
 // and every finite F16 value is greater than -1e30. Comparing after extension
 // therefore distinguishes active rows from masked rows exactly.
-func.template<qwen3_moe.attention.decode_split.produce_partials> device @qwen3_moe_flash_attention_decode_split_produce_partials_body_f32_f16_wmma(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer) {
+template.def<@qwen3_moe.attention.decode_split.produce_partials> device @qwen3_moe_flash_attention_decode_split_produce_partials_body_f32_f16_wmma(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer) {
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
   %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
@@ -453,12 +461,12 @@ func.template<qwen3_moe.attention.decode_split.produce_partials> device @qwen3_m
       }
     }
   }
-  func.return
+  template.return
 }
 
 // Up to four split-K blocks are cheapest to fold directly. Each workitem owns
 // one output element, so the reducer needs no LDS or subgroup synchronization.
-func.template<qwen3_moe.attention.decode_split.reduce_completed.direct> device @qwen3_moe_flash_attention_decode_split_reduce_completed_direct_f32(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) where [range(%partial_block_capacity0, 1, 4)] {
+func.def inline @qwen3_moe_flash_attention_decode_split_reduce_completed_direct_f32(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) where [range(%partial_block_capacity0, 1, 4)] {
   %partial_block_capacity, %active_block_count = index.assume %partial_block_capacity0, %active_block_count0 [range(%partial_block_capacity0, 1, 4), range(%active_block_count0, 1, 4), le(%active_block_count0, %partial_block_capacity0)] : index, index
   %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
   %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
@@ -518,7 +526,7 @@ func.template<qwen3_moe.attention.decode_split.reduce_completed.direct> device @
 // Longer bounded contexts amortize a cooperative reducer. Each wave folds two
 // query rows, stages the per-block scales in LDS, and writes two output channels
 // per lane.
-func.template<qwen3_moe.attention.decode_split.reduce_completed.cooperative> device @qwen3_moe_flash_attention_decode_split_reduce_completed_cooperative_f32(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) {
+func.def inline @qwen3_moe_flash_attention_decode_split_reduce_completed_cooperative_f32(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) {
   %partial_block_capacity, %active_block_count = index.assume %partial_block_capacity0, %active_block_count0 [range(%partial_block_capacity0, 1, 32), range(%active_block_count0, 1, 32), le(%active_block_count0, %partial_block_capacity0)] : index, index
   %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
   %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
@@ -650,7 +658,7 @@ func.template<qwen3_moe.attention.decode_split.reduce_completed.cooperative> dev
 // the production 8:1 GQA ratio therefore fills all 256 workitems. Smaller or
 // larger valid ratios use the same phase loop without making barriers
 // conditional.
-func.template<qwen3_moe.attention.decode_split.pack_completed_q8> device @qwen3_moe_flash_attention_decode_pack_completed_key_value_head_q8_1_x4(%key_value_head: index, %output: buffer, %q8_output: buffer) {
+template.def<@qwen3_moe.attention.decode_split.pack_completed_q8> device @qwen3_moe_flash_attention_decode_pack_completed_key_value_head_q8_1_x4(%key_value_head: index, %output: buffer, %q8_output: buffer) {
   %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
   %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
   %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
@@ -768,7 +776,7 @@ func.template<qwen3_moe.attention.decode_split.pack_completed_q8> device @qwen3_
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
-  func.return
+  template.return
 }
 
 // Completes bounded decode contexts inside the last arriving producer
@@ -776,7 +784,7 @@ func.template<qwen3_moe.attention.decode_split.pack_completed_q8> device @qwen3_
 // other producers retire, erasing a second dispatch and its execution barrier.
 // Capacity selects the algorithm and partial layout; producer count owns the
 // issue-time completion threshold and active reduction prefix.
-func.template<qwen3_moe.attention.decode_split.reduce_fused> device priority(20) @qwen3_moe_flash_attention_decode_split_reduce_fused_direct_f32(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer) where [range(%key_value_token_capacity, 64, 256)] {
+template.def<@qwen3_moe.attention.decode_split.reduce_fused> device priority(20) @qwen3_moe_flash_attention_decode_split_reduce_fused_direct_f32(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer) where [range(%key_value_token_capacity, 64, 256)] {
   %partial_block_capacity, %producer_block_count = index.assume %partial_block_capacity0, %producer_block_count0 [range(%partial_block_capacity0, 1, 4), range(%producer_block_count0, 1, 4), le(%producer_block_count0, %partial_block_capacity0)] : index, index
   %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
@@ -812,7 +820,7 @@ func.template<qwen3_moe.attention.decode_split.reduce_fused> device priority(20)
     func.call inline @qwen3_moe_flash_attention_decode_split_reduce_completed_direct_f32(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
     scf.if %publish_q8 {
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      func.apply<qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
+      template.apply<@qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
     }
     // Do not expose the reset until every final F32 and Q8 store completes.
     kernel.barrier<global> scope(workgroup) ordering(release)
@@ -820,11 +828,11 @@ func.template<qwen3_moe.attention.decode_split.reduce_fused> device priority(20)
       view.atomic.reduce<addi> %negative_key_value_block_count_i32, %completion_counter_view[%key_value_head] {ordering = release, scope = device} : i32, view<[%key_value_head_count]xi32>
     }
   }
-  func.return
+  template.return
 }
 
 // Contexts without a proven short bound use the cooperative completion path.
-func.template<qwen3_moe.attention.decode_split.reduce_fused> device priority(10) @qwen3_moe_flash_attention_decode_split_reduce_fused_cooperative_f32(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer) where [range(%key_value_token_capacity, 257, 2048)] {
+template.def<@qwen3_moe.attention.decode_split.reduce_fused> device priority(10) @qwen3_moe_flash_attention_decode_split_reduce_fused_cooperative_f32(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer) where [range(%key_value_token_capacity, 257, 2048)] {
   %partial_block_capacity, %producer_block_count = index.assume %partial_block_capacity0, %producer_block_count0 [range(%partial_block_capacity0, 1, 32), range(%producer_block_count0, 1, 32), le(%producer_block_count0, %partial_block_capacity0)] : index, index
   %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
@@ -860,7 +868,7 @@ func.template<qwen3_moe.attention.decode_split.reduce_fused> device priority(10)
     func.call inline @qwen3_moe_flash_attention_decode_split_reduce_completed_cooperative_f32(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
     scf.if %publish_q8 {
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      func.apply<qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
+      template.apply<@qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
     }
     // Do not expose the reset until every final F32 and Q8 store completes.
     kernel.barrier<global> scope(workgroup) ordering(release)
@@ -868,7 +876,7 @@ func.template<qwen3_moe.attention.decode_split.reduce_fused> device priority(10)
       view.atomic.reduce<addi> %negative_key_value_block_count_i32, %completion_counter_view[%key_value_head] {ordering = release, scope = device} : i32, view<[%key_value_head_count]xi32>
     }
   }
-  func.return
+  template.return
 }
 
 // Short-context export: produce and reduce in one dispatch.
@@ -891,8 +899,8 @@ kernel.def target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attenti
   %padded_key_value_token_capacity = index.add %launch_key_value_token_capacity, %c63 : index
   %producer_block_count = index.div %padded_key_value_token_capacity, %c64 : index
   %publish_q8 = scalar.constant false : i1
-  func.apply<qwen3_moe.attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
-  func.apply<qwen3_moe.attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %partial_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %partial_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -917,8 +925,8 @@ kernel.def target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attenti
   %padded_key_value_token_capacity = index.add %launch_key_value_token_capacity, %c63 : index
   %producer_block_count = index.div %padded_key_value_token_capacity, %c64 : index
   %publish_q8 = scalar.constant true : i1
-  func.apply<qwen3_moe.attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
-  func.apply<qwen3_moe.attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %next_q8_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %next_q8_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -938,7 +946,7 @@ kernel.def target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attenti
   %key_value_token_capacity = config.get @qwen3_moe.attention.key_value_token_capacity : index
   %key_value_token_count_in_range = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %bounded_key_value_token_count = index.assume %key_value_token_count_in_range [le(%key_value_token_count_in_range, %key_value_token_capacity)] : index
-  func.apply<qwen3_moe.attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 

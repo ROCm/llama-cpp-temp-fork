@@ -10,6 +10,9 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kGatherAddF32Kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_gather_add_f32");
+static constexpr KernelCatalogRef kGatherF32Kernel    = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_gather_f32");
+static constexpr KernelCatalogRef kGatherF32WideRowKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_gather_f32_wide_row");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -186,6 +189,45 @@ static bool match_gather_add_f32_dispatch(const DispatchMatchContext & context, 
     return true;
 }
 
+static bool match_gather_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
+        return false;
+    }
+    const Value * source = graph_value(context.graph, node->inputs[0]);
+    const Value * ids    = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (source == nullptr || ids == nullptr || output == nullptr || !is_2d_f32(*source) || !is_2d_f32(*output)) {
+        return false;
+    }
+    const int64_t row_width        = source->ne[0];
+    const int64_t source_row_count = source->ne[1];
+    const int64_t output_row_count = output->ne[1];
+    if (output->ne[0] != row_width || !is_row_id_tensor(*ids, output_row_count) || row_width < 1 ||
+        row_width > 1048576 || source_row_count < 1 || source_row_count > 32768 || output_row_count < 1 ||
+        output_row_count > 2048) {
+        return false;
+    }
+
+    const bool wide_row = row_width > 32768;
+    if (wide_row && (source_row_count > 32 || output_row_count > 16)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(wide_row ? kGatherF32WideRowKernel : kGatherF32Kernel);
+    dispatch.kernel.integer_parameters.emplace("source_row_count", source_row_count);
+    dispatch.kernel.integer_parameters.emplace("output_row_count", output_row_count);
+    dispatch.kernel.integer_parameters.emplace("row_width", row_width);
+    dispatch.bindings.push_back({ source->id, 0, source->byte_count });
+    dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 void register_gather_add_dispatch(DispatchRegistryBuilder & registry) {
     registry.add({
         "common.gather_add_f32",
@@ -194,6 +236,14 @@ void register_gather_add_dispatch(DispatchRegistryBuilder & registry) {
         1000,
         DispatchSource::Common,
         match_gather_add_f32_dispatch,
+    });
+    registry.add({
+        "common.gather_f32",
+        GGML_OP_GET_ROWS,
+        DispatchMatchKind::SingleOp,
+        0,
+        DispatchSource::Common,
+        match_gather_f32_dispatch,
     });
 }
 

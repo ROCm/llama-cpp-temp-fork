@@ -1,15 +1,874 @@
 #include "host-memory.h"
 
+#include "ggml-quants.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cmath>
+#include <cstring>
+#include <limits>
 #include <sstream>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace ggml::hrx {
 namespace {
 
-static constexpr size_t kMaxInlineUploadBytes = 63 * 1024;
+static constexpr size_t       kMaxInlineUploadBytes                   = size_t{ 63 } * 1024;
+static constexpr const char * kSymmetricI2K32EightGroupsShared4Layout = "symi2-k32-eightgroups-shared4-payload-first";
+
+struct SymmetricI4K64Block {
+    std::array<ggml_fp16_t, 4>             scales   = {};
+    std::array<std::array<uint8_t, 16>, 8> payloads = {};
+};
+
+static bool checked_multiply(size_t lhs, size_t rhs, size_t & result) {
+    if (rhs != 0 && lhs > std::numeric_limits<size_t>::max() / rhs) {
+        return false;
+    }
+    result = lhs * rhs;
+    return true;
+}
+
+template <typename Work> static bool run_worker_threads(size_t thread_count, Work && work) {
+    std::atomic<bool>        worker_failed = false;
+    std::vector<std::thread> workers;
+    auto                     join_workers = [&]() {
+        for (std::thread & worker : workers) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    };
+
+    try {
+        workers.reserve(thread_count);
+        for (size_t thread = 0; thread < thread_count; ++thread) {
+            workers.emplace_back([&, thread]() {
+                try {
+                    work(thread);
+                } catch (...) {
+                    worker_failed.store(true, std::memory_order_relaxed);
+                }
+            });
+        }
+    } catch (...) {
+        join_workers();
+        return false;
+    }
+    join_workers();
+    return !worker_failed.load(std::memory_order_relaxed);
+}
+
+static void dequantize_block(ggml_type type, const uint8_t * source, float * destination) {
+    switch (type) {
+        case GGML_TYPE_Q4_K:
+            dequantize_row_q4_K(reinterpret_cast<const block_q4_K *>(source), destination, QK_K);
+            break;
+        case GGML_TYPE_Q5_K:
+            dequantize_row_q5_K(reinterpret_cast<const block_q5_K *>(source), destination, QK_K);
+            break;
+        case GGML_TYPE_IQ4_XS:
+            dequantize_row_iq4_xs(reinterpret_cast<const block_iq4_xs *>(source), destination, QK_K);
+            break;
+        case GGML_TYPE_Q6_K:
+            dequantize_row_q6_K(reinterpret_cast<const block_q6_K *>(source), destination, QK_K);
+            break;
+        default:
+            break;
+    }
+}
+
+static bool quantize_symmetric_value(float value, float scale, int quant_min, int quant_max, int & quantized) {
+    if (!std::isfinite(value) || !std::isfinite(scale) || scale <= 0.0f) {
+        return false;
+    }
+    float quotient = value / scale;
+    if (std::isnan(quotient)) {
+        return false;
+    }
+    quotient  = std::clamp(quotient, static_cast<float>(quant_min), static_cast<float>(quant_max));
+    quantized = static_cast<int>(std::nearbyint(quotient));
+    return true;
+}
+
+static bool fit_shared_symmetric_scale(const std::array<std::array<float, QK_K>, 4> & values,
+                                       size_t                                         row_count,
+                                       size_t                                         group,
+                                       int                                            quant_min,
+                                       int                                            quant_max,
+                                       float &                                        encoded_scale) {
+    float positive_max = 0.0f;
+    float negative_max = 0.0f;
+    bool  nonzero      = false;
+    for (size_t row = 0; row < row_count; ++row) {
+        const float * group_values = values[row].data() + group * 32;
+        for (size_t element = 0; element < 32; ++element) {
+            if (!std::isfinite(group_values[element])) {
+                return false;
+            }
+            nonzero      = nonzero || group_values[element] != 0.0f;
+            positive_max = std::max(positive_max, group_values[element]);
+            negative_max = std::max(negative_max, -group_values[element]);
+        }
+    }
+    if (!nonzero) {
+        encoded_scale = 0.0f;
+        return true;
+    }
+
+    float scale = std::max(positive_max / quant_max, negative_max / -quant_min);
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        return false;
+    }
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        double numerator   = 0.0;
+        double denominator = 0.0;
+        for (size_t row = 0; row < row_count; ++row) {
+            const float * group_values = values[row].data() + group * 32;
+            for (size_t element = 0; element < 32; ++element) {
+                int quantized = 0;
+                if (!quantize_symmetric_value(group_values[element], scale, quant_min, quant_max, quantized)) {
+                    return false;
+                }
+                numerator += static_cast<double>(group_values[element]) * quantized;
+                denominator += static_cast<double>(quantized) * quantized;
+            }
+        }
+        if (denominator > 0.0) {
+            scale = static_cast<float>(numerator / denominator);
+            if (!std::isfinite(scale) || scale <= 0.0f) {
+                return false;
+            }
+        }
+    }
+
+    encoded_scale = ggml_fp16_to_fp32(ggml_fp32_to_fp16(scale));
+    return std::isfinite(encoded_scale) && encoded_scale > 0.0f;
+}
+
+static bool quantize_symmetric_i4_k64(const float * values, SymmetricI4K64Block & output) {
+    for (size_t pair = 0; pair < output.scales.size(); ++pair) {
+        const float * pair_values  = values + pair * 64;
+        float         positive_max = 0.0f;
+        float         negative_max = 0.0f;
+        bool          nonzero      = false;
+        for (size_t element = 0; element < 64; ++element) {
+            if (!std::isfinite(pair_values[element])) {
+                return false;
+            }
+            nonzero      = nonzero || pair_values[element] != 0.0f;
+            positive_max = std::max(positive_max, pair_values[element]);
+            negative_max = std::max(negative_max, -pair_values[element]);
+        }
+        if (!nonzero) {
+            continue;
+        }
+
+        float scale = std::max(positive_max / 7.0f, negative_max / 8.0f);
+        if (!std::isfinite(scale) || scale <= 0.0f) {
+            return false;
+        }
+        for (int iteration = 0; iteration < 2; ++iteration) {
+            double numerator   = 0.0;
+            double denominator = 0.0;
+            for (size_t element = 0; element < 64; ++element) {
+                int quantized = 0;
+                if (!quantize_symmetric_value(pair_values[element], scale, -8, 7, quantized)) {
+                    return false;
+                }
+                numerator += static_cast<double>(pair_values[element]) * quantized;
+                denominator += static_cast<double>(quantized) * quantized;
+            }
+            if (denominator > 0.0) {
+                scale = static_cast<float>(numerator / denominator);
+                if (!std::isfinite(scale) || scale <= 0.0f) {
+                    return false;
+                }
+            }
+        }
+        output.scales[pair] = ggml_fp32_to_fp16(scale);
+        scale               = ggml_fp16_to_fp32(output.scales[pair]);
+        if (!std::isfinite(scale) || scale <= 0.0f) {
+            return false;
+        }
+
+        for (size_t half = 0; half < 2; ++half) {
+            const size_t  logical_group = pair * 2 + half;
+            const float * group_values  = pair_values + half * 32;
+            for (size_t element_pair = 0; element_pair < 16; ++element_pair) {
+                int low  = 0;
+                int high = 0;
+                if (!quantize_symmetric_value(group_values[element_pair * 2], scale, -8, 7, low) ||
+                    !quantize_symmetric_value(group_values[element_pair * 2 + 1], scale, -8, 7, high)) {
+                    return false;
+                }
+                output.payloads[logical_group][element_pair] =
+                    static_cast<uint8_t>((low & 0x0F) | ((high & 0x0F) << 4));
+            }
+        }
+    }
+    return true;
+}
+
+static Status materialize_symmetric_i4_k64_row64(const HostWeightSource & source, std::vector<uint8_t> & output) {
+    Status status;
+    if (source.source_type != GGML_TYPE_Q4_K && source.source_type != GGML_TYPE_Q5_K &&
+        source.source_type != GGML_TYPE_IQ4_XS) {
+        status.log("layout %s does not support GGML type %d", source.layout.c_str(),
+                   static_cast<int>(source.source_type));
+        return status;
+    }
+    if (source.input_size <= 0 || source.input_size % QK_K != 0 || source.output_size <= 0 ||
+        source.output_size % 64 != 0) {
+        status.log("layout %s requires K divisible by %d and rows divisible by 64, got K=%lld rows=%lld",
+                   source.layout.c_str(), QK_K, static_cast<long long>(source.input_size),
+                   static_cast<long long>(source.output_size));
+        return status;
+    }
+
+    const size_t row_bytes             = ggml_row_size(source.source_type, source.input_size);
+    size_t       expected_source_bytes = 0;
+    if (!checked_multiply(row_bytes, static_cast<size_t>(source.output_size), expected_source_bytes) ||
+        source.length != expected_source_bytes) {
+        status.log("layout %s source length %zu does not match expected %zu", source.layout.c_str(), source.length,
+                   expected_source_bytes);
+        return status;
+    }
+
+    constexpr size_t materialized_row_bytes = 144;
+    const size_t     block_count            = static_cast<size_t>(source.input_size / QK_K);
+    size_t           expected_output_bytes  = 0;
+    if (!checked_multiply(static_cast<size_t>(source.output_size), block_count, expected_output_bytes) ||
+        !checked_multiply(expected_output_bytes, materialized_row_bytes, expected_output_bytes) ||
+        source.materialized_length != expected_output_bytes) {
+        status.log("layout %s materialized length %zu does not match expected %zu", source.layout.c_str(),
+                   source.materialized_length, expected_output_bytes);
+        return status;
+    }
+
+    output.resize(expected_output_bytes);
+    const auto *     source_bytes       = static_cast<const uint8_t *>(source.host_data) + source.offset;
+    constexpr size_t row_group          = 64;
+    constexpr size_t field_count        = 9;
+    constexpr size_t field_bytes        = 16;
+    constexpr size_t block_out_bytes    = field_count * field_bytes;
+    const size_t     source_block_bytes = ggml_type_size(source.source_type);
+    const size_t     thread_count =
+        std::min<size_t>(static_cast<size_t>(source.output_size), std::max(1u, std::thread::hardware_concurrency()));
+    std::atomic<bool> conversion_failed = false;
+
+    auto convert_rows = [&](size_t row_begin, size_t row_end) {
+        std::array<float, QK_K> decoded = {};
+        for (size_t row = row_begin; row < row_end; ++row) {
+            if (conversion_failed.load(std::memory_order_relaxed)) {
+                return;
+            }
+            const size_t    group      = row / row_group;
+            const size_t    lane       = row % row_group;
+            const uint8_t * source_row = source_bytes + row * row_bytes;
+            for (size_t block = 0; block < block_count; ++block) {
+                dequantize_block(source.source_type, source_row + block * source_block_bytes, decoded.data());
+                SymmetricI4K64Block converted;
+                if (!quantize_symmetric_i4_k64(decoded.data(), converted)) {
+                    conversion_failed.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                const size_t group_base = (group * block_count + block) * row_group * block_out_bytes;
+                uint8_t *    header     = output.data() + group_base + lane * field_bytes;
+                for (size_t pair = 0; pair < converted.scales.size(); ++pair) {
+                    for (size_t repeat = 0; repeat < 2; ++repeat) {
+                        std::memcpy(header + (pair * 2 + repeat) * sizeof(ggml_fp16_t), &converted.scales[pair],
+                                    sizeof(ggml_fp16_t));
+                    }
+                }
+                for (size_t logical_group = 0; logical_group < converted.payloads.size(); ++logical_group) {
+                    uint8_t * payload =
+                        output.data() + group_base + (1 + logical_group) * row_group * field_bytes + lane * field_bytes;
+                    std::memcpy(payload, converted.payloads[logical_group].data(), field_bytes);
+                }
+            }
+        }
+    };
+
+    if (!run_worker_threads(thread_count, [&](size_t thread) {
+            const size_t row_begin = static_cast<size_t>(source.output_size) * thread / thread_count;
+            const size_t row_end   = static_cast<size_t>(source.output_size) * (thread + 1) / thread_count;
+            convert_rows(row_begin, row_end);
+        })) {
+        output.clear();
+        status.log("layout %s host materialization worker failed", source.layout.c_str());
+        return status;
+    }
+    if (conversion_failed.load(std::memory_order_relaxed)) {
+        output.clear();
+        status.log("layout %s cannot represent non-finite or out-of-range symmetric weights", source.layout.c_str());
+    }
+    return status;
+}
+
+static Status materialize_symmetric_k32_eightgroups_shared4(const HostWeightSource & source,
+                                                            int                      quant_bits,
+                                                            std::vector<uint8_t> &   output) {
+    Status status;
+    if (source.source_type != GGML_TYPE_Q4_K && source.source_type != GGML_TYPE_Q5_K &&
+        source.source_type != GGML_TYPE_Q6_K && source.source_type != GGML_TYPE_IQ4_XS) {
+        status.log("layout %s does not support GGML type %d", source.layout.c_str(),
+                   static_cast<int>(source.source_type));
+        return status;
+    }
+    if (source.input_size <= 0 || source.input_size % QK_K != 0 || source.output_size <= 0) {
+        status.log("layout %s requires K divisible by %d and positive rows, got K=%lld rows=%lld",
+                   source.layout.c_str(), QK_K, static_cast<long long>(source.input_size),
+                   static_cast<long long>(source.output_size));
+        return status;
+    }
+
+    constexpr size_t shared_rows  = 4;
+    const size_t     logical_rows = static_cast<size_t>(source.output_size);
+    if (logical_rows > std::numeric_limits<size_t>::max() - 255) {
+        status.log("layout %s row count overflows row-group sizing", source.layout.c_str());
+        return status;
+    }
+    const size_t row_group = ((logical_rows + 255) / 256) * 32;
+    if (logical_rows > std::numeric_limits<size_t>::max() - (row_group - 1)) {
+        status.log("layout %s row count overflows row-group padding", source.layout.c_str());
+        return status;
+    }
+    const size_t physical_rows = (logical_rows + row_group - 1) / row_group * row_group;
+
+    const size_t row_bytes             = ggml_row_size(source.source_type, source.input_size);
+    size_t       expected_source_bytes = 0;
+    if (!checked_multiply(row_bytes, logical_rows, expected_source_bytes) || source.length != expected_source_bytes) {
+        status.log("layout %s source length %zu does not match expected %zu", source.layout.c_str(), source.length,
+                   expected_source_bytes);
+        return status;
+    }
+
+    if (quant_bits != 2 && quant_bits != 4) {
+        status.log("layout %s requires 2-bit or 4-bit symmetric materialization", source.layout.c_str());
+        return status;
+    }
+
+    const int    quant_min              = -(1 << (quant_bits - 1));
+    const int    quant_max              = (1 << (quant_bits - 1)) - 1;
+    const size_t field_bytes            = 32 * static_cast<size_t>(quant_bits) / 8;
+    const size_t materialized_row_bytes = 4 + 8 * field_bytes;
+    const size_t block_count            = static_cast<size_t>(source.input_size / QK_K);
+    size_t       expected_output_bytes  = 0;
+    if (!checked_multiply(physical_rows, block_count, expected_output_bytes) ||
+        !checked_multiply(expected_output_bytes, materialized_row_bytes, expected_output_bytes) ||
+        source.materialized_length != expected_output_bytes) {
+        status.log("layout %s materialized length %zu does not match expected %zu", source.layout.c_str(),
+                   source.materialized_length, expected_output_bytes);
+        return status;
+    }
+
+    output.assign(expected_output_bytes, uint8_t{ 0 });
+    const auto * source_bytes        = static_cast<const uint8_t *>(source.host_data) + source.offset;
+    const size_t scale_plane_bytes   = row_group / shared_rows * 16;
+    const size_t payload_plane_bytes = row_group * field_bytes;
+    const size_t payload_block_bytes = 8 * payload_plane_bytes;
+    const size_t block_out_bytes     = scale_plane_bytes + payload_block_bytes;
+    const size_t row_group_bytes     = block_count * block_out_bytes;
+    const size_t source_block_bytes  = ggml_type_size(source.source_type);
+    const size_t logical_cohorts     = (logical_rows + shared_rows - 1) / shared_rows;
+    const size_t thread_count = std::min<size_t>(logical_cohorts, std::max(1u, std::thread::hardware_concurrency()));
+    std::atomic<bool> conversion_failed = false;
+
+    auto convert_cohorts = [&](size_t cohort_begin, size_t cohort_end) {
+        std::array<std::array<float, QK_K>, shared_rows> decoded = {};
+        for (size_t cohort = cohort_begin; cohort < cohort_end; ++cohort) {
+            if (conversion_failed.load(std::memory_order_relaxed)) {
+                return;
+            }
+            const size_t first_row    = cohort * shared_rows;
+            const size_t row_count    = std::min(shared_rows, logical_rows - first_row);
+            const size_t row_group_id = first_row / row_group;
+            const size_t cohort_lane  = first_row % row_group / shared_rows;
+            for (size_t block = 0; block < block_count; ++block) {
+                for (size_t row = 0; row < row_count; ++row) {
+                    const uint8_t * source_row = source_bytes + (first_row + row) * row_bytes;
+                    dequantize_block(source.source_type, source_row + block * source_block_bytes, decoded[row].data());
+                }
+
+                const size_t group_base         = row_group_id * row_group_bytes;
+                const size_t payload_block_base = group_base + block * payload_block_bytes;
+                const size_t scale_region       = group_base + block_count * payload_block_bytes;
+                uint8_t *    header = output.data() + scale_region + block * scale_plane_bytes + cohort_lane * 16;
+                std::array<std::array<float, 8>, shared_rows> scales = {};
+                for (size_t group = 0; group < scales[0].size(); ++group) {
+                    float scale = 0.0f;
+                    if (!fit_shared_symmetric_scale(decoded, row_count, group, quant_min, quant_max, scale)) {
+                        conversion_failed.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+                    const ggml_fp16_t encoded_scale = ggml_fp32_to_fp16(scale);
+                    std::memcpy(header + group * sizeof(encoded_scale), &encoded_scale, sizeof(encoded_scale));
+                    for (size_t row = 0; row < row_count; ++row) {
+                        scales[row][group] = scale;
+                    }
+                }
+
+                for (size_t row = 0; row < row_count; ++row) {
+                    const size_t row_lane = (first_row + row) % row_group;
+                    for (size_t group = 0; group < scales[row].size(); ++group) {
+                        uint8_t * payload =
+                            output.data() + payload_block_base + group * payload_plane_bytes + row_lane * field_bytes;
+                        const float * group_values = decoded[row].data() + group * 32;
+                        const float   scale        = scales[row][group];
+                        if (scale == 0.0f) {
+                            continue;
+                        }
+                        if (quant_bits == 4) {
+                            for (size_t element_pair = 0; element_pair < 16; ++element_pair) {
+                                int low  = 0;
+                                int high = 0;
+                                if (!quantize_symmetric_value(group_values[element_pair * 2], scale, quant_min,
+                                                              quant_max, low) ||
+                                    !quantize_symmetric_value(group_values[element_pair * 2 + 1], scale, quant_min,
+                                                              quant_max, high)) {
+                                    conversion_failed.store(true, std::memory_order_relaxed);
+                                    return;
+                                }
+                                payload[element_pair] = static_cast<uint8_t>((low & 0x0F) | ((high & 0x0F) << 4));
+                            }
+                        } else {
+                            for (size_t element_quartet = 0; element_quartet < 8; ++element_quartet) {
+                                uint8_t packed = 0;
+                                for (size_t element = 0; element < 4; ++element) {
+                                    const size_t index     = element_quartet * 4 + element;
+                                    int          quantized = 0;
+                                    if (!quantize_symmetric_value(group_values[index], scale, quant_min, quant_max,
+                                                                  quantized)) {
+                                        conversion_failed.store(true, std::memory_order_relaxed);
+                                        return;
+                                    }
+                                    packed |= static_cast<uint8_t>((quantized & 0x03) << (element * 2));
+                                }
+                                payload[element_quartet] = packed;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    if (!run_worker_threads(thread_count, [&](size_t thread) {
+            const size_t cohort_begin = logical_cohorts * thread / thread_count;
+            const size_t cohort_end   = logical_cohorts * (thread + 1) / thread_count;
+            convert_cohorts(cohort_begin, cohort_end);
+        })) {
+        output.clear();
+        status.log("layout %s host materialization worker failed", source.layout.c_str());
+        return status;
+    }
+    if (conversion_failed.load(std::memory_order_relaxed)) {
+        output.clear();
+        status.log("layout %s cannot represent non-finite or out-of-range symmetric weights", source.layout.c_str());
+    }
+    return status;
+}
+
+static Status materialize_symmetric_i4_k32_eightgroups_shared4(const HostWeightSource & source,
+                                                               std::vector<uint8_t> &   output) {
+    return materialize_symmetric_k32_eightgroups_shared4(source, 4, output);
+}
+
+static Status materialize_q4_k_i4_k32_row64(const HostWeightSource & source, std::vector<uint8_t> & output) {
+    Status status;
+    if (source.source_type != GGML_TYPE_Q4_K) {
+        status.log("layout %s does not support GGML type %d", source.layout.c_str(),
+                   static_cast<int>(source.source_type));
+        return status;
+    }
+    if (source.input_size <= 0 || source.input_size % QK_K != 0 || source.output_size <= 0 ||
+        source.output_size % 64 != 0) {
+        status.log("layout %s requires K divisible by %d and rows divisible by 64, got K=%lld rows=%lld",
+                   source.layout.c_str(), QK_K, static_cast<long long>(source.input_size),
+                   static_cast<long long>(source.output_size));
+        return status;
+    }
+
+    static_assert(sizeof(block_q4_K) == 144);
+    constexpr size_t row_group       = 64;
+    constexpr size_t field_count     = 9;
+    constexpr size_t field_bytes     = 16;
+    constexpr size_t block_out_bytes = field_count * field_bytes;
+    const size_t     block_count     = static_cast<size_t>(source.input_size / QK_K);
+    const size_t     row_bytes       = block_count * sizeof(block_q4_K);
+    size_t           expected_bytes  = 0;
+    if (!checked_multiply(row_bytes, static_cast<size_t>(source.output_size), expected_bytes) ||
+        source.length != expected_bytes || source.materialized_length != expected_bytes) {
+        status.log("layout %s source/materialized lengths %zu/%zu do not match expected %zu", source.layout.c_str(),
+                   source.length, source.materialized_length, expected_bytes);
+        return status;
+    }
+
+    output.resize(expected_bytes);
+    const auto * source_bytes = static_cast<const uint8_t *>(source.host_data) + source.offset;
+    const size_t group_count  = static_cast<size_t>(source.output_size) / row_group;
+    const size_t thread_count = std::min<size_t>(group_count, std::max(1u, std::thread::hardware_concurrency()));
+
+    auto convert_groups = [&](size_t group_begin, size_t group_end) {
+        for (size_t group = group_begin; group < group_end; ++group) {
+            for (size_t block = 0; block < block_count; ++block) {
+                const size_t group_base = (group * block_count + block) * row_group * block_out_bytes;
+                for (size_t lane = 0; lane < row_group; ++lane) {
+                    const size_t    row       = group * row_group + lane;
+                    const uint8_t * canonical = source_bytes + row * row_bytes + block * sizeof(block_q4_K);
+                    std::memcpy(output.data() + group_base + lane * field_bytes, canonical, field_bytes);
+                }
+                for (size_t logical_group = 0; logical_group < 8; ++logical_group) {
+                    const size_t field_pair   = logical_group / 2;
+                    const size_t nibble_shift = (logical_group % 2) * 4;
+                    for (size_t lane = 0; lane < row_group; ++lane) {
+                        const size_t    row       = group * row_group + lane;
+                        const uint8_t * canonical = source_bytes + row * row_bytes + block * sizeof(block_q4_K);
+                        const uint8_t * field0    = canonical + (1 + field_pair * 2) * field_bytes;
+                        const uint8_t * field1    = field0 + field_bytes;
+                        uint8_t * packed = output.data() + group_base + (1 + logical_group) * row_group * field_bytes +
+                                           lane * field_bytes;
+                        for (size_t pair = 0; pair < 8; ++pair) {
+                            const uint8_t low  = (field0[pair * 2] >> nibble_shift) & 0x0F;
+                            const uint8_t high = (field0[pair * 2 + 1] >> nibble_shift) & 0x0F;
+                            packed[pair]       = static_cast<uint8_t>(low | (high << 4));
+                        }
+                        for (size_t pair = 0; pair < 8; ++pair) {
+                            const uint8_t low  = (field1[pair * 2] >> nibble_shift) & 0x0F;
+                            const uint8_t high = (field1[pair * 2 + 1] >> nibble_shift) & 0x0F;
+                            packed[8 + pair]   = static_cast<uint8_t>(low | (high << 4));
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    if (!run_worker_threads(thread_count, [&](size_t thread) {
+            const size_t group_begin = group_count * thread / thread_count;
+            const size_t group_end   = group_count * (thread + 1) / thread_count;
+            convert_groups(group_begin, group_end);
+        })) {
+        output.clear();
+        status.log("layout %s host materialization worker failed", source.layout.c_str());
+    }
+    return status;
+}
+
+static Status materialize_q6_k_i8_k32_row64(const HostWeightSource & source, std::vector<uint8_t> & output) {
+    Status status;
+    if (source.source_type != GGML_TYPE_Q6_K) {
+        status.log("layout %s does not support GGML type %d", source.layout.c_str(),
+                   static_cast<int>(source.source_type));
+        return status;
+    }
+    if (source.input_size <= 0 || source.input_size % QK_K != 0 || source.output_size <= 0 ||
+        source.output_size % 64 != 0) {
+        status.log("layout %s requires K divisible by %d and rows divisible by 64, got K=%lld rows=%lld",
+                   source.layout.c_str(), QK_K, static_cast<long long>(source.input_size),
+                   static_cast<long long>(source.output_size));
+        return status;
+    }
+
+    static_assert(sizeof(block_q6_K) == 210);
+    constexpr size_t row_group         = 64;
+    constexpr size_t group_count       = 8;
+    constexpr size_t group_elements    = 32;
+    constexpr size_t d_plane_bytes     = row_group * sizeof(ggml_fp16_t);
+    constexpr size_t scale_plane_bytes = group_count * row_group * 2;
+    constexpr size_t code_plane_bytes  = group_count * row_group * group_elements;
+    constexpr size_t tile_block_bytes  = d_plane_bytes + scale_plane_bytes + code_plane_bytes;
+    static_assert(tile_block_bytes == row_group * 274);
+
+    const size_t block_count           = static_cast<size_t>(source.input_size / QK_K);
+    const size_t row_bytes             = block_count * sizeof(block_q6_K);
+    size_t       expected_source_bytes = 0;
+    size_t       expected_output_bytes = 0;
+    if (!checked_multiply(row_bytes, static_cast<size_t>(source.output_size), expected_source_bytes) ||
+        !checked_multiply(static_cast<size_t>(source.output_size), block_count, expected_output_bytes) ||
+        !checked_multiply(expected_output_bytes, size_t{ 274 }, expected_output_bytes) ||
+        source.length != expected_source_bytes || source.materialized_length != expected_output_bytes) {
+        status.log("layout %s source/materialized lengths %zu/%zu do not match expected %zu/%zu", source.layout.c_str(),
+                   source.length, source.materialized_length, expected_source_bytes, expected_output_bytes);
+        return status;
+    }
+
+    output.resize(expected_output_bytes);
+    const auto * source_bytes       = static_cast<const uint8_t *>(source.host_data) + source.offset;
+    const size_t output_group_count = static_cast<size_t>(source.output_size) / row_group;
+    const size_t thread_count = std::min<size_t>(output_group_count, std::max(1u, std::thread::hardware_concurrency()));
+
+    auto convert_groups = [&](size_t group_begin, size_t group_end) {
+        for (size_t output_group = group_begin; output_group < group_end; ++output_group) {
+            for (size_t block = 0; block < block_count; ++block) {
+                const size_t tile_base   = (output_group * block_count + block) * tile_block_bytes;
+                uint8_t *    d_plane     = output.data() + tile_base;
+                int8_t *     scale_plane = reinterpret_cast<int8_t *>(d_plane + d_plane_bytes);
+                int8_t *     code_plane  = scale_plane + scale_plane_bytes;
+                for (size_t lane = 0; lane < row_group; ++lane) {
+                    const size_t row          = output_group * row_group + lane;
+                    const auto * source_block = reinterpret_cast<const block_q6_K *>(source_bytes + row * row_bytes +
+                                                                                     block * sizeof(block_q6_K));
+                    std::memcpy(d_plane + lane * sizeof(ggml_fp16_t), &source_block->d, sizeof(ggml_fp16_t));
+                    for (size_t quant_group = 0; quant_group < group_count; ++quant_group) {
+                        int8_t * scales            = scale_plane + (quant_group * row_group + lane) * 2;
+                        scales[0]                  = source_block->scales[quant_group * 2];
+                        scales[1]                  = source_block->scales[quant_group * 2 + 1];
+                        int8_t *     codes         = code_plane + (quant_group * row_group + lane) * group_elements;
+                        const size_t half128       = quant_group / 4;
+                        const size_t group_in_half = quant_group % 4;
+                        for (size_t element = 0; element < group_elements; ++element) {
+                            const size_t  low_index  = half128 * 64 + (group_in_half % 2) * 32 + element;
+                            const size_t  high_index = half128 * 32 + element;
+                            const uint8_t low =
+                                static_cast<uint8_t>((source_block->ql[low_index] >> ((group_in_half / 2) * 4)) & 0x0F);
+                            const uint8_t high =
+                                static_cast<uint8_t>((source_block->qh[high_index] >> (group_in_half * 2)) & 0x03);
+                            codes[element] = static_cast<int8_t>((low | (high << 4)) - 32);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    if (!run_worker_threads(thread_count, [&](size_t thread) {
+            const size_t group_begin = output_group_count * thread / thread_count;
+            const size_t group_end   = output_group_count * (thread + 1) / thread_count;
+            convert_groups(group_begin, group_end);
+        })) {
+        output.clear();
+        status.log("layout %s host materialization worker failed", source.layout.c_str());
+    }
+    return status;
+}
+
+static Status materialize_q6_k_packed_k256_row64(const HostWeightSource & source, std::vector<uint8_t> & output) {
+    Status status;
+    if (source.source_type != GGML_TYPE_Q6_K) {
+        status.log("layout %s does not support GGML type %d", source.layout.c_str(),
+                   static_cast<int>(source.source_type));
+        return status;
+    }
+    if (source.input_size <= 0 || source.input_size % QK_K != 0 || source.output_size <= 0 ||
+        source.output_size % 64 != 0) {
+        status.log("layout %s requires K divisible by %d and rows divisible by 64, got K=%lld rows=%lld",
+                   source.layout.c_str(), QK_K, static_cast<long long>(source.input_size),
+                   static_cast<long long>(source.output_size));
+        return status;
+    }
+
+    static_assert(sizeof(block_q6_K) == 210);
+    constexpr size_t row_group         = 64;
+    constexpr size_t half_count        = 2;
+    constexpr size_t raw_field_count   = 3;
+    constexpr size_t raw_field_bytes   = 32;
+    constexpr size_t scale_group_count = 8;
+    constexpr size_t d_plane_bytes     = row_group * sizeof(ggml_fp16_t);
+    constexpr size_t scale_plane_bytes = scale_group_count * row_group * half_count;
+    constexpr size_t raw_plane_bytes   = half_count * raw_field_count * row_group * raw_field_bytes;
+    constexpr size_t tile_block_bytes  = d_plane_bytes + scale_plane_bytes + raw_plane_bytes;
+    static_assert(tile_block_bytes == row_group * sizeof(block_q6_K));
+
+    const size_t block_count           = static_cast<size_t>(source.input_size / QK_K);
+    const size_t row_bytes             = block_count * sizeof(block_q6_K);
+    size_t       expected_source_bytes = 0;
+    if (!checked_multiply(row_bytes, static_cast<size_t>(source.output_size), expected_source_bytes) ||
+        source.length != expected_source_bytes || source.materialized_length != expected_source_bytes) {
+        status.log("layout %s source/materialized lengths %zu/%zu do not match expected %zu", source.layout.c_str(),
+                   source.length, source.materialized_length, expected_source_bytes);
+        return status;
+    }
+
+    output.resize(expected_source_bytes);
+    const auto * source_bytes       = static_cast<const uint8_t *>(source.host_data) + source.offset;
+    const size_t output_group_count = static_cast<size_t>(source.output_size) / row_group;
+    const size_t thread_count = std::min<size_t>(output_group_count, std::max(1u, std::thread::hardware_concurrency()));
+
+    auto convert_groups = [&](size_t group_begin, size_t group_end) {
+        for (size_t output_group = group_begin; output_group < group_end; ++output_group) {
+            for (size_t block = 0; block < block_count; ++block) {
+                const size_t tile_base   = (output_group * block_count + block) * tile_block_bytes;
+                uint8_t *    d_plane     = output.data() + tile_base;
+                int8_t *     scale_plane = reinterpret_cast<int8_t *>(d_plane + d_plane_bytes);
+                uint8_t *    raw_plane   = reinterpret_cast<uint8_t *>(scale_plane + scale_plane_bytes);
+                for (size_t lane = 0; lane < row_group; ++lane) {
+                    const size_t row          = output_group * row_group + lane;
+                    const auto * source_block = reinterpret_cast<const block_q6_K *>(source_bytes + row * row_bytes +
+                                                                                     block * sizeof(block_q6_K));
+                    std::memcpy(d_plane + lane * sizeof(ggml_fp16_t), &source_block->d, sizeof(ggml_fp16_t));
+                    for (size_t quant_group = 0; quant_group < scale_group_count; ++quant_group) {
+                        for (size_t half = 0; half < half_count; ++half) {
+                            const size_t destination_index =
+                                source.layout == kQ6KPackedScaleRowLayout ?
+                                    (lane * half_count + half) * scale_group_count + quant_group :
+                                    (quant_group * row_group + lane) * half_count + half;
+                            scale_plane[destination_index] = source_block->scales[quant_group * half_count + half];
+                        }
+                    }
+                    for (size_t half = 0; half < half_count; ++half) {
+                        uint8_t * ql0 = raw_plane + ((half * raw_field_count) * row_group + lane) * raw_field_bytes;
+                        uint8_t * ql1 = ql0 + row_group * raw_field_bytes;
+                        uint8_t * qh  = ql1 + row_group * raw_field_bytes;
+                        std::memcpy(ql0, source_block->ql + half * 64, raw_field_bytes);
+                        std::memcpy(ql1, source_block->ql + half * 64 + raw_field_bytes, raw_field_bytes);
+                        std::memcpy(qh, source_block->qh + half * raw_field_bytes, raw_field_bytes);
+                    }
+                }
+            }
+        }
+    };
+
+    if (!run_worker_threads(thread_count, [&](size_t thread) {
+            const size_t group_begin = output_group_count * thread / thread_count;
+            const size_t group_end   = output_group_count * (thread + 1) / thread_count;
+            convert_groups(group_begin, group_end);
+        })) {
+        output.clear();
+        status.log("layout %s host materialization worker failed", source.layout.c_str());
+    }
+    return status;
+}
+
+static Status materialize_q6_k_symmetric_and_packed_scalerow(const HostWeightSource & source,
+                                                             int                      quant_bits,
+                                                             std::vector<uint8_t> &   output) {
+    Status status;
+    if (source.source_type != GGML_TYPE_Q6_K) {
+        status.log("layout %s does not support GGML type %d", source.layout.c_str(),
+                   static_cast<int>(source.source_type));
+        return status;
+    }
+    if (quant_bits != 2 && quant_bits != 4) {
+        status.log("layout %s requires 2-bit or 4-bit symmetric materialization", source.layout.c_str());
+        return status;
+    }
+    if (source.input_size <= 0 || source.input_size % QK_K != 0 || source.output_size <= 0 ||
+        source.output_size % 64 != 0 ||
+        static_cast<uint64_t>(source.output_size) > std::numeric_limits<size_t>::max() - 255) {
+        status.log("layout %s requires K divisible by %d and rows divisible by 64, got K=%lld rows=%lld",
+                   source.layout.c_str(), QK_K, static_cast<long long>(source.input_size),
+                   static_cast<long long>(source.output_size));
+        return status;
+    }
+
+    const size_t logical_rows        = static_cast<size_t>(source.output_size);
+    const size_t row_group           = ((logical_rows + 255) / 256) * 32;
+    const size_t physical_rows       = (logical_rows + row_group - 1) / row_group * row_group;
+    const size_t block_count         = static_cast<size_t>(source.input_size / QK_K);
+    const size_t symmetric_row_bytes = 4 + 8 * (32 * static_cast<size_t>(quant_bits) / 8);
+    size_t       symmetric_bytes     = 0;
+    size_t       packed_q6_bytes     = 0;
+    if (!checked_multiply(physical_rows, block_count, symmetric_bytes) ||
+        !checked_multiply(symmetric_bytes, symmetric_row_bytes, symmetric_bytes) ||
+        !checked_multiply(logical_rows, block_count, packed_q6_bytes) ||
+        !checked_multiply(packed_q6_bytes, sizeof(block_q6_K), packed_q6_bytes) ||
+        symmetric_bytes > std::numeric_limits<size_t>::max() - packed_q6_bytes ||
+        source.materialized_length != symmetric_bytes + packed_q6_bytes) {
+        status.log("layout %s materialized length %zu is inconsistent with K=%lld rows=%lld", source.layout.c_str(),
+                   source.materialized_length, static_cast<long long>(source.input_size),
+                   static_cast<long long>(source.output_size));
+        return status;
+    }
+
+    HostWeightSource symmetric_source = source;
+    symmetric_source.layout =
+        quant_bits == 2 ? kSymmetricI2K32EightGroupsShared4Layout : kSymmetricI4K32EightGroupsShared4Layout;
+    symmetric_source.materialized_length = symmetric_bytes;
+    std::vector<uint8_t> symmetric;
+    status = materialize_symmetric_k32_eightgroups_shared4(symmetric_source, quant_bits, symmetric);
+    if (!status.success()) {
+        return status;
+    }
+
+    output = std::move(symmetric);
+    output.resize(source.materialized_length);
+
+    HostWeightSource packed_source    = source;
+    packed_source.layout              = kQ6KPackedScaleRowLayout;
+    packed_source.materialized_length = packed_q6_bytes;
+    std::vector<uint8_t> packed_q6;
+    status = materialize_q6_k_packed_k256_row64(packed_source, packed_q6);
+    if (!status.success()) {
+        return status;
+    }
+
+    std::memcpy(output.data() + symmetric_bytes, packed_q6.data(), packed_q6.size());
+    return status;
+}
+
+static Status materialize_q6_k_symmetric_i2_and_packed_scalerow(const HostWeightSource & source,
+                                                                std::vector<uint8_t> &   output) {
+    return materialize_q6_k_symmetric_and_packed_scalerow(source, 2, output);
+}
+
+static Status materialize_weight(const HostWeightSource & source,
+                                 const void *&            upload_data,
+                                 size_t &                 upload_size,
+                                 std::vector<uint8_t> &   transformed) {
+    Status status;
+    if (source.layout == kNativeWeightLayout) {
+        upload_data = static_cast<const uint8_t *>(source.host_data) + source.offset;
+        upload_size = source.length;
+        return status;
+    }
+    if (source.layout == kSymmetricI4K32EightGroupsShared4Layout) {
+        status = materialize_symmetric_i4_k32_eightgroups_shared4(source, transformed);
+        if (status.success()) {
+            upload_data = transformed.data();
+            upload_size = transformed.size();
+        }
+        return status;
+    }
+    if (source.layout == kSymmetricI4K64Row64Layout) {
+        status = materialize_symmetric_i4_k64_row64(source, transformed);
+        if (status.success()) {
+            upload_data = transformed.data();
+            upload_size = transformed.size();
+        }
+        return status;
+    }
+    if (source.layout == kQ4KI4K32Row64Layout) {
+        status = materialize_q4_k_i4_k32_row64(source, transformed);
+        if (status.success()) {
+            upload_data = transformed.data();
+            upload_size = transformed.size();
+        }
+        return status;
+    }
+    if (source.layout == kQ6KI8K32Row64Layout) {
+        status = materialize_q6_k_i8_k32_row64(source, transformed);
+        if (status.success()) {
+            upload_data = transformed.data();
+            upload_size = transformed.size();
+        }
+        return status;
+    }
+    if (source.layout == kQ6KPackedK256Row64Layout || source.layout == kQ6KPackedScaleRowLayout) {
+        status = materialize_q6_k_packed_k256_row64(source, transformed);
+        if (status.success()) {
+            upload_data = transformed.data();
+            upload_size = transformed.size();
+        }
+        return status;
+    }
+    if (source.layout == kQ6KSymmetricI2PackedScaleRowLayout) {
+        status = materialize_q6_k_symmetric_i2_and_packed_scalerow(source, transformed);
+        if (status.success()) {
+            upload_data = transformed.data();
+            upload_size = transformed.size();
+        }
+        return status;
+    }
+    status.log("unknown host weight layout %s", source.layout.c_str());
+    return status;
+}
 
 static Status allocate_device_buffer(hrx_device_t device, size_t size, hrx_buffer_t & buffer) {
     Status status;
@@ -189,6 +1048,13 @@ size_t HostWeightCache::SourceKeyHash::operator()(const SourceKey & key) const {
     mix(static_cast<uint64_t>(key.capacity));
     mix(static_cast<uint64_t>(key.offset));
     mix(static_cast<uint64_t>(key.length));
+    mix(static_cast<uint64_t>(key.materialized_length));
+    for (unsigned char byte : key.layout) {
+        mix(byte);
+    }
+    mix(static_cast<uint64_t>(key.source_type));
+    mix(static_cast<uint64_t>(key.input_size));
+    mix(static_cast<uint64_t>(key.output_size));
     return static_cast<size_t>(hash);
 }
 
@@ -201,7 +1067,9 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         result.status.log("host weight residency requires an HRX stream");
         return result;
     }
-    if (source.host_data == nullptr || source.identity == 0 || source.generation == 0 || source.length == 0 ||
+    const bool has_host_source   = source.host_data != nullptr;
+    const bool has_device_source = source.device_buffer != nullptr;
+    if (has_host_source == has_device_source || source.identity == 0 || source.generation == 0 || source.length == 0 ||
         source.offset > source.capacity || source.length > source.capacity - source.offset) {
         result.status.log("invalid host weight source");
         return result;
@@ -211,32 +1079,66 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         return result;
     }
 
-    const SourceKey key{ source.identity, source.generation, source.capacity, source.offset, source.length };
+    const size_t materialized_length =
+        source.layout == kNativeWeightLayout ? source.length : source.materialized_length;
+    if (materialized_length == 0) {
+        result.status.log("host weight source has an empty materialized layout");
+        return result;
+    }
+
+    const SourceKey key{ source.identity,   source.generation,   source.capacity, source.offset,
+                         source.length,     materialized_length, source.layout,   source.source_type,
+                         source.input_size, source.output_size };
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto                  found = entries_.find(key);
         if (found != entries_.end()) {
-            if (found->second->layout != source.layout) {
-                ++stats_.layout_conflicts;
-                result.status.log("host weight source already has resident layout %s, cannot also materialize %s",
-                                  found->second->layout.c_str(), source.layout.c_str());
-                return result;
-            }
             ++stats_.hits;
             result.lease = HostWeightLease(found->second);
             return result;
         }
     }
 
-    auto entry    = std::make_shared<HostWeightLease::Entry>();
-    entry->length = source.length;
-    entry->layout = source.layout;
-    result.status = allocate_device_buffer(device, source.length, entry->buffer);
+    HostWeightSource     materialization_source = source;
+    std::vector<uint8_t> canonical;
+    if (has_device_source) {
+        if (source.layout == kNativeWeightLayout) {
+            result.status.log("native device weights do not require host materialization");
+            return result;
+        }
+        canonical.resize(source.length);
+        result.status = transfers.download_synchronous(stream, source.device_buffer, source.offset, canonical.data(),
+                                                       canonical.size());
+        if (!result.status.success()) {
+            return result;
+        }
+        materialization_source.host_data     = canonical.data();
+        materialization_source.device_buffer = nullptr;
+        materialization_source.capacity      = canonical.size();
+        materialization_source.offset        = 0;
+    }
+
+    const void *         upload_data = nullptr;
+    size_t               upload_size = 0;
+    std::vector<uint8_t> transformed;
+    result.status = materialize_weight(materialization_source, upload_data, upload_size, transformed);
     if (!result.status.success()) {
         return result;
     }
-    result.status = transfers.upload_synchronous(
-        stream, static_cast<const uint8_t *>(source.host_data) + source.offset, entry->buffer, 0, source.length);
+    if (upload_size != materialized_length) {
+        result.status.log("host weight layout %s produced %zu bytes, expected %zu", source.layout.c_str(), upload_size,
+                          materialized_length);
+        return result;
+    }
+
+    auto entry    = std::make_shared<HostWeightLease::Entry>();
+    entry->length = materialized_length;
+    entry->layout = source.layout;
+    result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
+    if (!result.status.success()) {
+        return result;
+    }
+    result.status = transfers.upload_synchronous(stream, upload_data, entry->buffer, 0, upload_size);
     if (!result.status.success()) {
         return result;
     }
@@ -251,7 +1153,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         }
         ++stats_.misses;
         stats_.allocation_count = entries_.size();
-        stats_.resident_bytes += source.length;
+        stats_.resident_bytes += materialized_length;
     }
     result.lease = HostWeightLease(std::move(entry));
     return result;

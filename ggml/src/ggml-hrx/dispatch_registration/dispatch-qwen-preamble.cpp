@@ -11,6 +11,8 @@ namespace {
 
 static constexpr KernelCatalogRef kQwenTokenEmbeddingQ4KKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_token_embedding_q4k");
+static constexpr KernelCatalogRef kQwenTokenEmbeddingQ4KGenericKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_token_embedding_q4k_bringup_workaround");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -25,7 +27,7 @@ static bool is_2d(const Value & value) {
 }
 
 static bool is_supported_hidden_size(int64_t hidden_size) {
-    return hidden_size == 2048;
+    return hidden_size >= 2048 && hidden_size <= 8192 && hidden_size % 1024 == 0;
 }
 
 static bool is_supported_token_count(int64_t token_count) {
@@ -98,9 +100,14 @@ static bool match_qwen_token_embedding_dispatch(const DispatchMatchContext & con
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenTokenEmbeddingQ4KKernel);
+    const bool use_canonical_kernel = match.hidden_size == 2048;
+    dispatch.kernel                 = make_kernel_specialization(use_canonical_kernel ? kQwenTokenEmbeddingQ4KKernel :
+                                                                                        kQwenTokenEmbeddingQ4KGenericKernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("vocabulary_count", match.vocabulary_count);
+    if (!use_canonical_kernel) {
+        dispatch.kernel.integer_parameters.emplace("hidden_size", match.hidden_size);
+    }
     dispatch.bindings.push_back({ match.token_ids->id, 0, match.token_ids->byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });

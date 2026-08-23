@@ -24,7 +24,7 @@ kernel.def target(@qwen_token_embedding_gfx11_wave64) export("qwen_token_embeddi
 } launch(%token_count: index, %vocabulary_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_vocabulary_count = index.assume %vocabulary_count [range(%vocabulary_count, 1, 262144)] : index
-  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 2048, 3072), mul(%hidden_size, 1024)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 2048, 8192), mul(%hidden_size, 1024)] : index
   %workgroup = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
   %workitem = kernel.workitem.id<x> : index
@@ -36,9 +36,9 @@ kernel.def target(@qwen_token_embedding_gfx11_wave64) export("qwen_token_embeddi
   %sixtyfour = index.constant 64 : index
   %twofiftysix = index.constant 256 : index
   %packets_per_token0 = index.div %bounded_hidden_size, %four : index
-  %packets_per_token = index.assume %packets_per_token0 [range(%packets_per_token0, 512, 768)] : index
+  %packets_per_token = index.assume %packets_per_token0 [range(%packets_per_token0, 512, 2048)] : index
   %q4_block_count0 = index.div %bounded_hidden_size, %twofiftysix : index
-  %q4_block_count = index.assume %q4_block_count0 [range(%q4_block_count0, 8, 12)] : index
+  %q4_block_count = index.assume %q4_block_count0 [range(%q4_block_count0, 8, 32)] : index
   %zero_offset = index.constant 0 : offset
   %block_bytes = index.constant 144 : offset
   %scale_offset = index.constant 4 : offset
@@ -51,9 +51,9 @@ kernel.def target(@qwen_token_embedding_gfx11_wave64) export("qwen_token_embeddi
   %q4_mask = vector.constant 252645135 : vector<1xi32>
   %token, %launch_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
   %row_packet0 = index.madd %workgroup, %twofiftysix, %workitem : index
-  %row_packet, %launch_packets_per_token = index.assume %row_packet0, %packets_per_token [range(%row_packet0, 0, 767), lt(%row_packet0, %packets_per_token)] : index, index
+  %row_packet, %launch_packets_per_token = index.assume %row_packet0, %packets_per_token [range(%row_packet0, 0, 2047), lt(%row_packet0, %packets_per_token)] : index, index
   %q4_block0 = index.div %row_packet, %sixtyfour : index
-  %q4_block, %weight_q4_block_count = index.assume %q4_block0, %q4_block_count [range(%q4_block0, 0, 11), lt(%q4_block0, %q4_block_count)] : index, index
+  %q4_block, %weight_q4_block_count = index.assume %q4_block0, %q4_block_count [range(%q4_block0, 0, 31), lt(%q4_block0, %q4_block_count)] : index, index
   %block_packet0 = index.rem %row_packet, %sixtyfour : index
   %block_packet = index.assume %block_packet0 [range(%block_packet0, 0, 63)] : index
   %q4_group0 = index.div %block_packet, %eight : index
@@ -145,7 +145,7 @@ kernel.def target(@qwen_token_embedding_gfx11_wave64) export("qwen_token_embeddi
   %values = vector.from_elements %value0, %value1, %value2, %value3 : vector<4xf32>
   %output_channel0 = index.mul %row_packet, %four : index
   %output_channel_end = index.sub %bounded_hidden_size, %three : index
-  %output_channel = index.assume %output_channel0 [range(%output_channel0, 0, 3068), lt(%output_channel0, %output_channel_end)] : index
+  %output_channel = index.assume %output_channel0 [range(%output_channel0, 0, 8188), lt(%output_channel0, %output_channel_end)] : index
   vector.store %values, %output_view[%token, %output_channel] : vector<4xf32>, view<[%launch_token_count]x[%bounded_hidden_size]xf32>
   kernel.return
 }
@@ -160,7 +160,7 @@ check.case public @qwen_token_embedding_q4k_decode_case {
   %weight = check.generate.fill value(85) : tensor<1x8x144xi8>
   %output = check.generate.fill value(0.0) : tensor<1x2048xf32>
   %expected = check.generate.fill value(7166.25) : tensor<1x2048xf32>
-  func.call @qwen_token_embedding_q4k_bringup_workaround(%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : (index, index, index, tensor<1xi32>, tensor<1x8x144xi8>, tensor<1x2048xf32>)
+  kernel.launch @qwen_token_embedding_q4k_bringup_workaround[%token_count, %vocabulary_count, %hidden_size](%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : [index, index, index](index, index, index, tensor<1xi32>, tensor<1x8x144xi8>, tensor<1x2048xf32>)
   check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
   check.return
 }
@@ -175,7 +175,7 @@ check.case public @qwen_token_embedding_q4k_row_access_case {
   %weight = check.generate.fill value(0) : tensor<3x8x144xi8>
   %output = check.generate.fill value(1.0) : tensor<3x2048xf32>
   %expected = check.generate.fill value(0.0) : tensor<3x2048xf32>
-  func.call @qwen_token_embedding_q4k_bringup_workaround(%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : (index, index, index, tensor<3xi32>, tensor<3x8x144xi8>, tensor<3x2048xf32>)
+  kernel.launch @qwen_token_embedding_q4k_bringup_workaround[%token_count, %vocabulary_count, %hidden_size](%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : [index, index, index](index, index, index, tensor<3xi32>, tensor<3x8x144xi8>, tensor<3x2048xf32>)
   check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<3x2048xf32>
   check.return
 }
@@ -188,7 +188,7 @@ check.case public @qwen_token_embedding_q4k_benchmark_case {
   %weight = check.generate.fill value(0) : tensor<151936x8x144xi8>
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
-  func.call @qwen_token_embedding_q4k_bringup_workaround(%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : (index, index, index, tensor<[%token_count]xi32>, tensor<151936x8x144xi8>, tensor<[%token_count]x2048xf32>)
+  kernel.launch @qwen_token_embedding_q4k_bringup_workaround[%token_count, %vocabulary_count, %hidden_size](%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : [index, index, index](index, index, index, tensor<[%token_count]xi32>, tensor<151936x8x144xi8>, tensor<[%token_count]x2048xf32>)
   check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
   check.return
 }
@@ -202,7 +202,7 @@ check.case public @qwen35_token_embedding_q4k_row_access_case {
   %weight = check.generate.fill value(0) : tensor<248320x12x144xi8>
   %output = check.generate.fill value(1.0) : tensor<1x3072xf32>
   %expected = check.generate.fill value(0.0) : tensor<1x3072xf32>
-  func.call @qwen_token_embedding_q4k_bringup_workaround(%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : (index, index, index, tensor<1xi32>, tensor<248320x12x144xi8>, tensor<1x3072xf32>)
+  kernel.launch @qwen_token_embedding_q4k_bringup_workaround[%token_count, %vocabulary_count, %hidden_size](%token_count, %vocabulary_count, %hidden_size, %token_ids, %weight, %output) : [index, index, index](index, index, index, tensor<1xi32>, tensor<248320x12x144xi8>, tensor<1x3072xf32>)
   check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<1x3072xf32>
   check.return
 }

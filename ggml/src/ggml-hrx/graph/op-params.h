@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 
+#include <array>
 #include <variant>
 
 struct ggml_tensor;
@@ -10,6 +11,19 @@ namespace ggml::hrx {
 
 struct RmsNormParams {
     float eps = 0.0f;
+};
+
+struct L2NormParams {
+    float eps = 0.0f;
+};
+
+struct ScaleParams {
+    float scale = 0.0f;
+    float bias  = 0.0f;
+};
+
+struct UnaryParams {
+    ggml_unary_op op = GGML_UNARY_OP_ABS;
 };
 
 struct FlashAttnExtParams {
@@ -47,12 +61,16 @@ struct RopeParams {
     float attn_factor = 0.0f;
     float beta_fast   = 0.0f;
     float beta_slow   = 0.0f;
+    std::array<int, GGML_MROPE_SECTIONS> sections    = {};
 };
 
 // clang-format off
 using OpParams = std::variant<
     std::monostate,
     RmsNormParams,
+    L2NormParams,
+    ScaleParams,
+    UnaryParams,
     FlashAttnExtParams,
     SoftMaxParams,
     ArgsortParams,

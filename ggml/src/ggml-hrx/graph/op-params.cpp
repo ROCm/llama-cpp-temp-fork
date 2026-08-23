@@ -2,37 +2,59 @@
 
 #include "ggml-impl.h"
 
-#include <cmath>
+#include <cstdint>
+#include <cstring>
 
 namespace ggml::hrx {
 namespace {
 
-static bool nearly_equal(float lhs, float rhs) {
-    if (lhs == rhs) {
-        return true;
-    }
-    return std::fabs(lhs - rhs) <= 1.0e-12f;
+static bool float_bits_equal(float lhs, float rhs) {
+    uint32_t lhs_bits;
+    uint32_t rhs_bits;
+    std::memcpy(&lhs_bits, &lhs, sizeof(lhs_bits));
+    std::memcpy(&rhs_bits, &rhs, sizeof(rhs_bits));
+    return lhs_bits == rhs_bits;
 }
 
 static bool rms_norm_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const RmsNormParams * lhs_params = op_params_as<RmsNormParams>(lhs);
     const RmsNormParams * rhs_params = op_params_as<RmsNormParams>(rhs);
-    return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->eps, rhs_params->eps);
+    return lhs_params != nullptr && rhs_params != nullptr && float_bits_equal(lhs_params->eps, rhs_params->eps);
+}
+
+static bool l2_norm_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const L2NormParams * lhs_params = op_params_as<L2NormParams>(lhs);
+    const L2NormParams * rhs_params = op_params_as<L2NormParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && float_bits_equal(lhs_params->eps, rhs_params->eps);
+}
+
+static bool scale_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const ScaleParams * lhs_params = op_params_as<ScaleParams>(lhs);
+    const ScaleParams * rhs_params = op_params_as<ScaleParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && float_bits_equal(lhs_params->scale, rhs_params->scale) &&
+           float_bits_equal(lhs_params->bias, rhs_params->bias);
+}
+
+static bool unary_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const UnaryParams * lhs_params = op_params_as<UnaryParams>(lhs);
+    const UnaryParams * rhs_params = op_params_as<UnaryParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && lhs_params->op == rhs_params->op;
 }
 
 static bool flash_attn_ext_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const FlashAttnExtParams * lhs_params = op_params_as<FlashAttnExtParams>(lhs);
     const FlashAttnExtParams * rhs_params = op_params_as<FlashAttnExtParams>(rhs);
-    return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->scale, rhs_params->scale) &&
-           nearly_equal(lhs_params->max_bias, rhs_params->max_bias) &&
-           nearly_equal(lhs_params->logit_softcap, rhs_params->logit_softcap) && lhs_params->prec == rhs_params->prec;
+    return lhs_params != nullptr && rhs_params != nullptr && float_bits_equal(lhs_params->scale, rhs_params->scale) &&
+           float_bits_equal(lhs_params->max_bias, rhs_params->max_bias) &&
+           float_bits_equal(lhs_params->logit_softcap, rhs_params->logit_softcap) &&
+           lhs_params->prec == rhs_params->prec;
 }
 
 static bool soft_max_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const SoftMaxParams * lhs_params = op_params_as<SoftMaxParams>(lhs);
     const SoftMaxParams * rhs_params = op_params_as<SoftMaxParams>(rhs);
-    return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->scale, rhs_params->scale) &&
-           nearly_equal(lhs_params->max_bias, rhs_params->max_bias);
+    return lhs_params != nullptr && rhs_params != nullptr && float_bits_equal(lhs_params->scale, rhs_params->scale) &&
+           float_bits_equal(lhs_params->max_bias, rhs_params->max_bias);
 }
 
 static bool argsort_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
@@ -44,8 +66,8 @@ static bool argsort_params_equivalent(const OpParams & lhs, const OpParams & rhs
 static bool clamp_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const ClampParams * lhs_params = op_params_as<ClampParams>(lhs);
     const ClampParams * rhs_params = op_params_as<ClampParams>(rhs);
-    return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->min, rhs_params->min) &&
-           nearly_equal(lhs_params->max, rhs_params->max);
+    return lhs_params != nullptr && rhs_params != nullptr && float_bits_equal(lhs_params->min, rhs_params->min) &&
+           float_bits_equal(lhs_params->max, rhs_params->max);
 }
 
 static bool glu_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
@@ -59,12 +81,13 @@ static bool rope_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const RopeParams * rhs_params = op_params_as<RopeParams>(rhs);
     return lhs_params != nullptr && rhs_params != nullptr && lhs_params->n_dims == rhs_params->n_dims &&
            lhs_params->mode == rhs_params->mode && lhs_params->n_ctx_orig == rhs_params->n_ctx_orig &&
-           nearly_equal(lhs_params->freq_base, rhs_params->freq_base) &&
-           nearly_equal(lhs_params->freq_scale, rhs_params->freq_scale) &&
-           nearly_equal(lhs_params->ext_factor, rhs_params->ext_factor) &&
-           nearly_equal(lhs_params->attn_factor, rhs_params->attn_factor) &&
-           nearly_equal(lhs_params->beta_fast, rhs_params->beta_fast) &&
-           nearly_equal(lhs_params->beta_slow, rhs_params->beta_slow);
+           float_bits_equal(lhs_params->freq_base, rhs_params->freq_base) &&
+           float_bits_equal(lhs_params->freq_scale, rhs_params->freq_scale) &&
+           float_bits_equal(lhs_params->ext_factor, rhs_params->ext_factor) &&
+           float_bits_equal(lhs_params->attn_factor, rhs_params->attn_factor) &&
+           float_bits_equal(lhs_params->beta_fast, rhs_params->beta_fast) &&
+           float_bits_equal(lhs_params->beta_slow, rhs_params->beta_slow) &&
+           lhs_params->sections == rhs_params->sections;
 }
 
 }  // namespace
@@ -73,6 +96,12 @@ OpParams import_op_params(const ggml_tensor & tensor) {
     switch (tensor.op) {
         case GGML_OP_RMS_NORM:
             return RmsNormParams{ ggml_get_op_params_f32(&tensor, 0) };
+        case GGML_OP_L2_NORM:
+            return L2NormParams{ ggml_get_op_params_f32(&tensor, 0) };
+        case GGML_OP_SCALE:
+            return ScaleParams{ ggml_get_op_params_f32(&tensor, 0), ggml_get_op_params_f32(&tensor, 1) };
+        case GGML_OP_UNARY:
+            return UnaryParams{ ggml_get_unary_op(&tensor) };
         case GGML_OP_SOFT_MAX:
             return SoftMaxParams{
                 ggml_get_op_params_f32(&tensor, 0),
@@ -96,11 +125,21 @@ OpParams import_op_params(const ggml_tensor & tensor) {
             return GluParams{ ggml_get_glu_op(&tensor) };
         case GGML_OP_ROPE:
             return RopeParams{
-                ggml_get_op_params_i32(&tensor, 1),  ggml_get_op_params_i32(&tensor, 2),
-                ggml_get_op_params_i32(&tensor, 4),  ggml_get_op_params_f32(&tensor, 5),
-                ggml_get_op_params_f32(&tensor, 6),  ggml_get_op_params_f32(&tensor, 7),
-                ggml_get_op_params_f32(&tensor, 8),  ggml_get_op_params_f32(&tensor, 9),
+                ggml_get_op_params_i32(&tensor, 1),
+                ggml_get_op_params_i32(&tensor, 2),
+                ggml_get_op_params_i32(&tensor, 4),
+                ggml_get_op_params_f32(&tensor, 5),
+                ggml_get_op_params_f32(&tensor, 6),
+                ggml_get_op_params_f32(&tensor, 7),
+                ggml_get_op_params_f32(&tensor, 8),
+                ggml_get_op_params_f32(&tensor, 9),
                 ggml_get_op_params_f32(&tensor, 10),
+                {
+                               ggml_get_op_params_i32(&tensor, 11),
+                               ggml_get_op_params_i32(&tensor, 12),
+                               ggml_get_op_params_i32(&tensor, 13),
+                               ggml_get_op_params_i32(&tensor, 14),
+                               },
             };
         default:
             return std::monostate{};
@@ -111,6 +150,12 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
     switch (op) {
         case GGML_OP_RMS_NORM:
             return rms_norm_params_equivalent(lhs, rhs);
+        case GGML_OP_L2_NORM:
+            return l2_norm_params_equivalent(lhs, rhs);
+        case GGML_OP_SCALE:
+            return scale_params_equivalent(lhs, rhs);
+        case GGML_OP_UNARY:
+            return unary_params_equivalent(lhs, rhs);
         case GGML_OP_SOFT_MAX:
             return soft_max_params_equivalent(lhs, rhs);
         case GGML_OP_FLASH_ATTN_EXT:

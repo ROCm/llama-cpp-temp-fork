@@ -112,6 +112,22 @@ json op_params_json(const OpParams & params) {
                     { "kind", "rms_norm" },
                     { "eps",  value.eps  }
                 };
+            } else if constexpr (std::is_same_v<T, L2NormParams>) {
+                return {
+                    { "kind", "l2_norm" },
+                    { "eps",  value.eps }
+                };
+            } else if constexpr (std::is_same_v<T, ScaleParams>) {
+                return {
+                    { "kind",  "scale"     },
+                    { "scale", value.scale },
+                    { "bias",  value.bias  }
+                };
+            } else if constexpr (std::is_same_v<T, UnaryParams>) {
+                return {
+                    { "kind", "unary"                    },
+                    { "op",   static_cast<int>(value.op) }
+                };
             } else if constexpr (std::is_same_v<T, FlashAttnExtParams>) {
                 return {
                     { "kind",          "flash_attn_ext"             },
@@ -154,6 +170,7 @@ json op_params_json(const OpParams & params) {
                     { "attn_factor", value.attn_factor },
                     { "beta_fast",   value.beta_fast   },
                     { "beta_slow",   value.beta_slow   },
+                    { "sections",    value.sections    },
                 };
             }
         },
@@ -164,6 +181,15 @@ OpParams parse_op_params(const json & item) {
     const std::string kind = item.value("kind", "none");
     if (kind == "rms_norm") {
         return RmsNormParams{ item.value("eps", 0.0f) };
+    }
+    if (kind == "l2_norm") {
+        return L2NormParams{ item.value("eps", 0.0f) };
+    }
+    if (kind == "scale") {
+        return ScaleParams{ item.value("scale", 0.0f), item.value("bias", 0.0f) };
+    }
+    if (kind == "unary") {
+        return UnaryParams{ static_cast<ggml_unary_op>(item.value("op", static_cast<int>(GGML_UNARY_OP_ABS))) };
     }
     if (kind == "flash_attn_ext") {
         return FlashAttnExtParams{
@@ -191,9 +217,11 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "rope") {
         return RopeParams{
-            item.value("n_dims", 0),         item.value("mode", 0),          item.value("n_ctx_orig", 0),
-            item.value("freq_base", 0.0f),   item.value("freq_scale", 0.0f), item.value("ext_factor", 0.0f),
-            item.value("attn_factor", 0.0f), item.value("beta_fast", 0.0f),  item.value("beta_slow", 0.0f),
+            item.value("n_dims", 0),         item.value("mode", 0),
+            item.value("n_ctx_orig", 0),     item.value("freq_base", 0.0f),
+            item.value("freq_scale", 0.0f),  item.value("ext_factor", 0.0f),
+            item.value("attn_factor", 0.0f), item.value("beta_fast", 0.0f),
+            item.value("beta_slow", 0.0f),   item.value("sections", std::array<int, GGML_MROPE_SECTIONS>{}),
         };
     }
     return std::monostate{};

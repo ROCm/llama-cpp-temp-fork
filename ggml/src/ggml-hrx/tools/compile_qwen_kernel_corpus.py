@@ -20,6 +20,25 @@ ATTR_RE = re.compile(r"(?P<name>[A-Za-z0-9_.]+)\s*=\s*(?P<value>-?[0-9]+)")
 CASE_RE = re.compile(r"check\.case(?:\s+public)?\s+@(?P<name>[A-Za-z0-9_]+)\s*\{")
 LITERAL_RE = re.compile(r"%(?P<name>[A-Za-z0-9_]+)\s*=\s*check\.literal\s+value\((?P<value>-?[0-9]+)\)\s*:\s*index")
 FUNC_CALL_RE = re.compile(r"func\.call\s+@(?P<name>[A-Za-z0-9_]+)\s*\(")
+KERNEL_LAUNCH_RE = re.compile(
+    r"kernel\.launch\s+@(?P<name>[A-Za-z0-9_]+)(?:\s*\[(?P<workload>[^]]*)\])?\s*\("
+)
+
+
+def plan_kernel_metadata(row: dict[str, object]) -> tuple[int, str | None]:
+    current_keys = ("kernel_launch_count", "kernel_entry")
+    legacy_keys = ("actual_invocation_count", "actual_entry")
+    if current_keys[0] in row:
+        count = row[current_keys[0]]
+        entry = row.get(current_keys[1])
+    elif legacy_keys[0] in row:
+        count = row[legacy_keys[0]]
+        entry = row.get(legacy_keys[1])
+    else:
+        raise RuntimeError("planner row has no recognized kernel invocation metadata")
+    if not isinstance(count, int) or count < 0 or (entry is not None and not isinstance(entry, str)):
+        raise RuntimeError(f"planner row has invalid kernel invocation metadata: count={count!r}, entry={entry!r}")
+    return count, entry or None
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -31,6 +50,18 @@ def require_run(command: list[str], *, env: dict[str, str] | None = None) -> sub
     if result.returncode:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(command)}\n{result.stderr}")
     return result
+
+
+def complete_root_configs(root: str, workload: tuple[int, ...], configs: tuple[str, ...]) -> tuple[str, ...]:
+    """Completes config values that are a deterministic function of one launch workload."""
+    q8_capacity_key = "ggml.quantize_q8_1_x4.group_capacity="
+    if root != "ggml_quantize_q8_1_x4_f32" or any(item.startswith(q8_capacity_key) for item in configs):
+        return configs
+    if len(workload) != 2 or workload[0] <= 0 or workload[1] <= 0:
+        raise RuntimeError(f"cannot derive Q8_1 x4 group capacity from workload {workload}")
+    token_count, input_size = workload
+    group_capacity = token_count * ((input_size + 127) // 128)
+    return (*configs, f"{q8_capacity_key}{group_capacity}")
 
 
 def main() -> int:
@@ -121,6 +152,7 @@ def main() -> int:
         }
         case_literals: dict[str, dict[str, int]] = {}
         case_calls: dict[str, list[str]] = {}
+        case_workload_operands: dict[str, list[list[str]]] = {}
         for match in CASE_RE.finditer(source_text):
             depth = 1
             cursor = match.end()
@@ -132,45 +164,67 @@ def main() -> int:
             case_literals[match.group("name")] = {
                 item.group("name"): int(item.group("value")) for item in LITERAL_RE.finditer(body)
             }
-            case_calls[match.group("name")] = [item.group("name") for item in FUNC_CALL_RE.finditer(body)]
+            launches = list(KERNEL_LAUNCH_RE.finditer(body))
+            case_calls[match.group("name")] = [item.group("name") for item in launches]
+            case_workload_operands[match.group("name")] = [
+                [operand.strip().removeprefix("%") for operand in (item.group("workload") or "").split(",")
+                 if operand.strip()]
+                for item in launches
+            ]
+            if not launches:
+                case_calls[match.group("name")] = [item.group("name") for item in FUNC_CALL_RE.finditer(body)]
+                case_workload_operands[match.group("name")] = [[] for _ in case_calls[match.group("name")]]
         configs = [item.removeprefix("--config=") for item in case["args"] if item.startswith("--config=")]
         selects_benchmark = any(item.startswith("--benchmark=") for item in case["args"])
         owned_sources = set(modules[case["link_module"]]["srcs"]) if "link_module" in case else {case["source"]}
         for row in plan_rows:
             benchmark_case, attrs = benchmark_defs.get(row["benchmark"], (row["case"], {}))
-            concrete_values = dict(case_literals.get(benchmark_case, {}))
-            concrete_values.update(attrs)
-            expected_count = int(row.get("actual_invocation_count", 1))
+            case_values = dict(case_literals.get(benchmark_case, {}))
+            case_values.update(attrs)
+            expected_count, actual_entry = plan_kernel_metadata(row)
             planned_invocation_count += expected_count
-            if row.get("actual_entry"):
-                roots = [row["actual_entry"]]
+            all_calls = list(zip(case_calls.get(benchmark_case, []),
+                                 case_workload_operands.get(benchmark_case, [])))
+            if actual_entry:
+                roots = [actual_entry]
+                root_operands = next((operands for root, operands in all_calls if root == actual_entry), [])
+                workload_operands = [root_operands]
             else:
-                roots = [root for root in case_calls.get(benchmark_case, []) if root in exports]
+                exported_calls = [(root, operands) for root, operands in all_calls if root in exports]
+                roots = [root for root, _ in exported_calls]
+                workload_operands = [operands for _, operands in exported_calls]
             if len(roots) != expected_count:
                 raise RuntimeError(
                     f"BUILD recipe {case['name']} planner reports {expected_count} invocations for "
                     f"{benchmark_case}, but source resolves {len(roots)} exported calls: {roots}"
                 )
             resolved_invocation_count += len(roots)
-            for root in roots:
+            for root, operands in zip(roots, workload_operands):
                 if root not in exports:
                     raise RuntimeError(f"BUILD recipe {case['name']} selected unmanifested kernel {root}")
                 if not selects_benchmark and exports[root]["source"] not in owned_sources:
                     continue
                 root_sources.setdefault(root, source)
                 parameter_names = [item["name"] for item in exports[root]["workload_parameters"]]
+                concrete_values = dict(case_values)
+                if len(operands) == len(parameter_names):
+                    for parameter_name, operand in zip(parameter_names, operands):
+                        if operand in case_values:
+                            concrete_values[parameter_name] = case_values[operand]
                 missing = [name for name in parameter_names if name not in concrete_values]
                 if missing:
                     raise RuntimeError(f"{case['name']} recipe omits concrete {missing} for {root}")
                 workload = tuple(concrete_values[name] for name in parameter_names)
-                key = (root, workload, tuple(configs))
+                root_configs = complete_root_configs(root, workload, tuple(configs))
+                key = (root, workload, root_configs)
                 if key in compiled_keys:
                     continue
                 compiled_keys.add(key)
                 compile_dir = case_dir / f"{root}-{len(compiled_keys):03d}"
                 command = [str(args.compiler), "--target", args.target, "--source", str(source),
-                           "--root", root, "--output", str(compile_dir)]
-                for config in configs:
+                           "--root", root, "--launch-config-symbol", exports[root]["name"],
+                           "--output", str(compile_dir)]
+                for config in root_configs:
                     command.extend(("--config", config))
                 for value in workload:
                     command.extend(("--workload", str(value)))
@@ -178,7 +232,7 @@ def main() -> int:
                 (case_dir / f"{root}-{len(compiled_keys):03d}.stdout.txt").write_text(compile_result.stdout, encoding="utf-8")
                 (case_dir / f"{root}-{len(compiled_keys):03d}.stderr.txt").write_text(compile_result.stderr, encoding="utf-8")
                 result = {"case": case["name"], "root": root, "workload": workload,
-                          "configs": configs, "artifact_dir": str(compile_dir),
+                          "configs": root_configs, "artifact_dir": str(compile_dir),
                           "status": "ok" if compile_result.returncode == 0 else "failed"}
                 results.append(result)
 
@@ -205,7 +259,8 @@ def main() -> int:
                 workload = tuple(int(parameters[name]) for name in parameter_names)
                 configs = tuple(f"{name}={value}" for name, value in
                                 sorted(specialization.get("compile_parameters", {}).items()))
-                key = (root, workload, configs)
+                root_configs = complete_root_configs(root, workload, configs)
+                key = (root, workload, root_configs)
                 if key in compiled_keys:
                     continue
                 schedule_unique_requirement_count += 1
@@ -213,8 +268,9 @@ def main() -> int:
                 source = root_sources[root] if root in root_sources else source_for_root(root)
                 compile_dir = schedule_dir / f"{root}-{schedule_unique_requirement_count:03d}"
                 command = [str(args.compiler), "--target", args.target, "--source", str(source),
-                           "--root", root, "--output", str(compile_dir)]
-                for config in configs:
+                           "--root", root, "--launch-config-symbol", exports[root]["name"],
+                           "--output", str(compile_dir)]
+                for config in root_configs:
                     command.extend(("--config", config))
                 for value in workload:
                     command.extend(("--workload", str(value)))
@@ -224,7 +280,7 @@ def main() -> int:
                 (schedule_dir / f"{root}-{schedule_unique_requirement_count:03d}.stderr.txt").write_text(
                     compile_result.stderr, encoding="utf-8")
                 results.append({"case": f"schedule:{schedule_path}", "root": root, "workload": workload,
-                                "configs": configs, "artifact_dir": str(compile_dir),
+                                "configs": root_configs, "artifact_dir": str(compile_dir),
                                 "status": "ok" if compile_result.returncode == 0 else "failed"})
 
     summary = {

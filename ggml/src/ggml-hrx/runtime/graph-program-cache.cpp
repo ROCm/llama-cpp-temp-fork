@@ -19,8 +19,15 @@ static bool tensor_metadata_matches(const Value & value, const ggml_tensor * ten
     }
     const bool tensor_alias = tensor->view_src != nullptr;
     const bool value_alias  = value.alias_source.value >= 0;
-    if (tensor_alias && (!value_alias || value.storage_offset != tensor->view_offs)) {
-        return false;
+    if (tensor_alias) {
+        if (value_alias) {
+            if (value.storage_offset != tensor->view_offs) {
+                return false;
+            }
+        } else if (value.storage_root != value.id || value.storage_offset != 0) {
+            // A leading view whose canonical base is not an input is the external storage root.
+            return false;
+        }
     }
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         if (value.ne[i] != tensor->ne[i] || value.nb[i] != tensor->nb[i]) {
@@ -99,10 +106,11 @@ static Status bind_current_value(const ValueMap &                               
     return status;
 }
 
-static std::string command_program_shape_key(const CommandProgram & commands) {
-    std::ostringstream out;
-    out << "hrx-command-program-v1|commands=" << commands.commands.size();
-    for (const Command & command : commands.commands) {
+static void append_command_list_shape(std::ostringstream &         out,
+                                      const char *                 label,
+                                      const std::vector<Command> & commands) {
+    out << '|' << label << '=' << commands.size();
+    for (const Command & command : commands) {
         out << "|ordinal=" << command.ordinal << "|kind=" << static_cast<int>(command.kind)
             << "|kernel=" << command.kernel.kernel_id;
         for (const auto & parameter : command.kernel.integer_parameters) {
@@ -114,18 +122,37 @@ static std::string command_program_shape_key(const CommandProgram & commands) {
         out << "|bindings=" << command.bindings.size();
         for (const CommandBinding & binding : command.bindings) {
             out << "|b:" << binding.name << ':' << binding.value.value << ':' << static_cast<int>(binding.origin) << ':'
-                << binding.offset << ':' << binding.length << ':' << static_cast<int>(binding.access);
+                << binding.offset << ':' << binding.length << ':' << static_cast<int>(binding.access) << ':'
+                << binding.layout.size() << ':' << binding.layout << ':' << static_cast<int>(binding.source_type) << ':'
+                << binding.input_size << ':' << binding.output_size << ':' << binding.source_length;
         }
         out << "|deps=" << command.dependencies.size();
         for (const uint32_t dependency : command.dependencies) {
             out << ':' << dependency;
         }
     }
+}
+
+static std::string command_program_shape_key(const CommandProgram & commands) {
+    std::ostringstream out;
+    out << "hrx-command-program-v2";
+    append_command_list_shape(out, "initialization_commands", commands.initialization_commands);
+    append_command_list_shape(out, "commands", commands.commands);
     out << "|transients=" << commands.transients.allocations.size() << "|arena=" << commands.transients.arena_size
         << "|arena_alignment=" << commands.transients.arena_alignment;
     for (const TransientAllocation & allocation : commands.transients.allocations) {
         out << "|t:" << allocation.value.value << ':' << allocation.arena_offset << ':' << allocation.size << ':'
             << allocation.alignment;
+    }
+    out << "|completion_counters:" << commands.completion_counters.arena_offset << ':'
+        << commands.completion_counters.byte_count << ':' << commands.completion_counters.count;
+    out << "|constant_initializations=" << commands.constant_initializations.size();
+    for (const ConstantInitialization & initialization : commands.constant_initializations) {
+        out << "|ci:" << initialization.value.value << ':' << initialization.name.size() << ':' << initialization.name
+            << ':' << initialization.offset << ':' << initialization.data.size();
+        for (uint8_t byte : initialization.data) {
+            out << ':' << static_cast<unsigned int>(byte);
+        }
     }
     return out.str();
 }
@@ -287,7 +314,8 @@ bool GraphProgram::has_prepared_program() const {
 }
 
 bool GraphProgram::can_use_prepared_fast_path(const ggml_cgraph & graph) const {
-    return graph.nodes == fast_path_nodes_;
+    // The UID prevents graph-arena address reuse from passing the fast path.
+    return graph.uid == uid_ && graph.nodes == fast_path_nodes_;
 }
 
 PreparedCommandProgramCacheStats GraphProgram::prepared_stats() const {
@@ -533,6 +561,26 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
             }
             if (validate_fast_path) {
                 result.status.append(match.status);
+                return result;
+            }
+        }
+
+        // Reuse a rebuilt MTP topology only after complete validation; physical bindings have a separate cache key.
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (const auto & entry : programs_) {
+                GraphProgram * candidate = entry.second.get();
+                if (candidate == cached_program || candidate->target() != target) {
+                    continue;
+                }
+                GraphProgramMatch match = candidate->match_current_graph(graph);
+                if (!match.valid()) {
+                    continue;
+                }
+                last_program_ = candidate;
+                ++stats_.hits;
+                result.program = candidate;
+                result.match   = std::move(match);
                 return result;
             }
         }

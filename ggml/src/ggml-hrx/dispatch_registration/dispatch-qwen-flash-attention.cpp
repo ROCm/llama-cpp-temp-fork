@@ -17,6 +17,8 @@ static constexpr KernelCatalogRef kQwenFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_flash_attention_f32_f16_wmma");
 static constexpr KernelCatalogRef kQwenFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8");
+static constexpr KernelCatalogRef kQwenFlashAttentionDirectGateKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "hrx2_flash_attn_ext_f32_f16_direct_kv64_f32acc_gate");
 static constexpr int64_t kQwenAttentionHeadSize = 128;
 static constexpr int64_t kQwenQueryHeadCount    = 32;
 static constexpr int64_t kQwenKeyValueHeadCount = 4;
@@ -296,6 +298,148 @@ static QwenDecodeSplitFlashAttentionMatch match_qwen_decode_split_flash_attentio
 
 }  // namespace
 
+static const GraphNode * single_consumer_with_op(const Graph & graph, ValueId value, ggml_op op) {
+    const std::vector<const GraphNode *> & consumers = graph.index().consumers(value);
+    return consumers.size() == 1 && consumers.front() != nullptr && consumers.front()->op == op ? consumers.front() :
+                                                                                                  nullptr;
+}
+
+static bool match_qwen_flash_attention_direct_gate_dispatch(const DispatchMatchContext & context,
+                                                            DispatchMatch &              dispatch_match) {
+    const GraphNode * flash = context.root_node;
+    if (flash == nullptr || flash->op != GGML_OP_FLASH_ATTN_EXT || flash->inputs.size() != 4) {
+        return false;
+    }
+    const FlashAttnExtParams * params = op_params_as<FlashAttnExtParams>(flash->params);
+    const Value *              query  = graph_value(context.graph, flash->inputs[0]);
+    const Value *              key    = graph_value(context.graph, flash->inputs[1]);
+    const Value *              value  = graph_value(context.graph, flash->inputs[2]);
+    const Value *              mask   = graph_value(context.graph, flash->inputs[3]);
+    const Value *              fa_out = graph_value(context.graph, flash->output);
+    if (params == nullptr || query == nullptr || key == nullptr || value == nullptr || mask == nullptr ||
+        fa_out == nullptr || query->type != GGML_TYPE_F32 || key->type != GGML_TYPE_F16 ||
+        value->type != GGML_TYPE_F16 || mask->type != GGML_TYPE_F16 || fa_out->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int64_t head_size             = query->ne[0];
+    const int64_t query_token_count     = query->ne[1];
+    const int64_t query_head_count      = query->ne[2];
+    const int64_t key_value_token_count = key->ne[1];
+    const int64_t key_value_head_count  = key->ne[2];
+    const float   expected_scale        = 1.0f / std::sqrt(static_cast<float>(head_size));
+    if (head_size < 64 || head_size > 1024 || head_size % 64 != 0 || query_token_count < 1 ||
+        query_token_count > 2048 || query_head_count < 1 || query_head_count > 64 || key_value_token_count < 64 ||
+        key_value_token_count > 32768 || key_value_token_count % 64 != 0 || key_value_head_count < 1 ||
+        query_head_count % key_value_head_count != 0 || key->ne[0] != head_size || value->ne[0] != head_size ||
+        value->ne[1] != key_value_token_count || value->ne[2] != key_value_head_count || fa_out->ne[0] != head_size ||
+        fa_out->ne[1] != query_head_count || fa_out->ne[2] != query_token_count || query->ne[3] != 1 ||
+        key->ne[3] != 1 || value->ne[3] != 1 || fa_out->ne[3] != 1 || mask->ne[0] != key_value_token_count ||
+        mask->ne[1] != query_token_count || mask->ne[2] != 1 || mask->ne[3] != 1 || query->nb[0] != sizeof(float) ||
+        key->nb[0] != sizeof(ggml_fp16_t) || value->nb[0] != sizeof(ggml_fp16_t) ||
+        mask->nb[0] != sizeof(ggml_fp16_t) || fa_out->nb[0] != sizeof(float) ||
+        !nearly_equal(params->scale, expected_scale) || !nearly_equal(params->max_bias, 0.0f) ||
+        !nearly_equal(params->logit_softcap, 0.0f) ||
+        (params->prec != GGML_PREC_DEFAULT && params->prec != GGML_PREC_F32)) {
+        return false;
+    }
+
+    const GraphNode * reshape = single_consumer_with_op(context.graph, flash->output, GGML_OP_RESHAPE);
+    if (reshape == nullptr || reshape->inputs.size() != 1) {
+        return false;
+    }
+    const Value *     reshaped = graph_value(context.graph, reshape->output);
+    const GraphNode * mul =
+        reshaped != nullptr ? single_consumer_with_op(context.graph, reshaped->id, GGML_OP_MUL) : nullptr;
+    if (reshaped == nullptr || mul == nullptr || mul->inputs.size() != 2 || reshaped->type != GGML_TYPE_F32 ||
+        !reshaped->contiguous || reshaped->ne[0] != head_size * query_head_count ||
+        reshaped->ne[1] != query_token_count || reshaped->ne[2] != 1 || reshaped->ne[3] != 1) {
+        return false;
+    }
+
+    ValueId gate_value_id;
+    if (mul->inputs[0] == reshape->output) {
+        gate_value_id = mul->inputs[1];
+    } else if (mul->inputs[1] == reshape->output) {
+        gate_value_id = mul->inputs[0];
+    } else {
+        return false;
+    }
+    const GraphNode *   sigmoid        = context.graph.index().producer(gate_value_id);
+    const UnaryParams * sigmoid_params = sigmoid != nullptr ? op_params_as<UnaryParams>(sigmoid->params) : nullptr;
+    if (sigmoid == nullptr || sigmoid->op != GGML_OP_UNARY || sigmoid->inputs.size() != 1 ||
+        sigmoid_params == nullptr || sigmoid_params->op != GGML_UNARY_OP_SIGMOID ||
+        single_consumer_with_op(context.graph, sigmoid->output, GGML_OP_MUL) != mul) {
+        return false;
+    }
+    const GraphNode * cont = context.graph.index().producer(sigmoid->inputs[0]);
+    if (cont == nullptr || cont->op != GGML_OP_CONT || cont->inputs.size() != 1 ||
+        single_consumer_with_op(context.graph, cont->output, GGML_OP_UNARY) != sigmoid) {
+        return false;
+    }
+    const GraphNode * gate_view = context.graph.index().producer(cont->inputs[0]);
+    const Value *     raw_gate  = gate_view != nullptr ? graph_value(context.graph, gate_view->output) : nullptr;
+    const Value *     output    = graph_value(context.graph, mul->output);
+    if (gate_view == nullptr || gate_view->op != GGML_OP_VIEW || gate_view->inputs.size() != 1 || raw_gate == nullptr ||
+        output == nullptr || raw_gate->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 ||
+        raw_gate->ne[0] != head_size || raw_gate->ne[1] != query_head_count || raw_gate->ne[2] != query_token_count ||
+        raw_gate->ne[3] != 1 || raw_gate->nb[0] != sizeof(float) || output->ne != reshaped->ne || !output->contiguous ||
+        single_consumer_with_op(context.graph, gate_view->output, GGML_OP_CONT) != cont) {
+        return false;
+    }
+    if (output->storage_root == key->storage_root || output->storage_root == value->storage_root ||
+        output->storage_root == mask->storage_root || output->storage_root == raw_gate->storage_root) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kQwenFlashAttentionDirectGateKernel);
+    auto & config   = dispatch.kernel.compile_parameters;
+    config.emplace("hrx2_shape_fa_d", to_config_value(head_size));
+    config.emplace("hrx2_shape_fa_ntokens", to_config_value(query_token_count));
+    config.emplace("hrx2_shape_fa_nheads", to_config_value(query_head_count));
+    config.emplace("hrx2_shape_fa_nkv", to_config_value(key_value_token_count));
+    config.emplace("hrx2_shape_fa_gqa", to_config_value(query_head_count / key_value_head_count));
+    config.emplace("hrx2_shape_fa_q_stride_token", to_config_value(static_cast<int64_t>(query->nb[1] / sizeof(float))));
+    config.emplace("hrx2_shape_fa_q_stride_head", to_config_value(static_cast<int64_t>(query->nb[2] / sizeof(float))));
+    config.emplace("hrx2_shape_fa_k_stride_pos",
+                   to_config_value(static_cast<int64_t>(key->nb[1] / sizeof(ggml_fp16_t))));
+    config.emplace("hrx2_shape_fa_k_stride_head",
+                   to_config_value(static_cast<int64_t>(key->nb[2] / sizeof(ggml_fp16_t))));
+    config.emplace("hrx2_shape_fa_v_stride_pos",
+                   to_config_value(static_cast<int64_t>(value->nb[1] / sizeof(ggml_fp16_t))));
+    config.emplace("hrx2_shape_fa_v_stride_head",
+                   to_config_value(static_cast<int64_t>(value->nb[2] / sizeof(ggml_fp16_t))));
+    config.emplace("hrx2_shape_fa_mask_stride_token",
+                   to_config_value(static_cast<int64_t>(mask->nb[1] / sizeof(ggml_fp16_t))));
+    config.emplace("hrx2_shape_fa_dst_stride_head",
+                   to_config_value(static_cast<int64_t>(fa_out->nb[1] / sizeof(float))));
+    config.emplace("hrx2_shape_fa_dst_stride_token",
+                   to_config_value(static_cast<int64_t>(fa_out->nb[2] / sizeof(float))));
+    config.emplace("hrx2_shape_fa_gate_stride_head",
+                   to_config_value(static_cast<int64_t>(raw_gate->nb[1] / sizeof(float))));
+    config.emplace("hrx2_shape_fa_gate_stride_token",
+                   to_config_value(static_cast<int64_t>(raw_gate->nb[2] / sizeof(float))));
+    config.emplace("hrx2_fa_apply_gate", "1");
+    config.emplace("hrx2_fa_scale", std::to_string(params->scale));
+    dispatch.bindings.push_back({ query->id, 0, query->byte_count });
+    dispatch.bindings.push_back({ key->id, 0, key->byte_count });
+    dispatch.bindings.push_back({ value->id, 0, value->byte_count });
+    dispatch.bindings.push_back({ mask->id, 0, mask->byte_count });
+    dispatch.bindings.push_back({ raw_gate->id, 0, raw_gate->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    for (const GraphNode * covered : { reshape, gate_view, cont, sigmoid, mul }) {
+        if (!append_covered_node_index_once(context.graph, context.covered_nodes, covered,
+                                            dispatch_match.covered_nodes)) {
+            return false;
+        }
+    }
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_qwen_decode_split_flash_attention_next_q8_dispatch(const DispatchMatchContext & context,
                                                                      DispatchMatch &              dispatch_match) {
     const QwenDecodeSplitFlashAttentionMatch match =
@@ -420,6 +564,14 @@ static bool match_qwen_flash_attention_dispatch(const DispatchMatchContext & con
 }
 
 void register_qwen_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "qwen.flash_attention_direct_f32_f16_gate",
+        GGML_OP_FLASH_ATTN_EXT,
+        DispatchMatchKind::Fused,
+        300,
+        DispatchSource::Qwen,
+        match_qwen_flash_attention_direct_gate_dispatch,
+    });
     registry.add({
         "qwen.flash_attention_decode_split_next_q8",
         GGML_OP_FLASH_ATTN_EXT,

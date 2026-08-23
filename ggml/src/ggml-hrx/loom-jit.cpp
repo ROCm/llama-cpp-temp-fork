@@ -884,6 +884,9 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     link_options.root_symbols                = root_symbols;
     link_options.root_symbol_count           = 1;
     link_options.flags                       = LOOMC_LINK_FLAG_STRIP_TEST_SYMBOLS;
+    link_options.config.bindings             = config_bindings.get();
+    link_options.config.binding_count        = options->config_binding_count;
+    link_options.config.flags                = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
     status = loomc_link_module(linker.get(), workspace.get(), &link_options, module.out(), result.out());
     if (!loomc_status_is_ok(status)) {
         return ggml_hrx_loom_jit_status_from_loom(status, "link Loom root");

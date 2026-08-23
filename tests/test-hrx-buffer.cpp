@@ -3,15 +3,20 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-hrx.h"
+#include "ggml-quants.h"
 #include "ggml.h"
 #include "hrx-interop-utils.h"
 #include "runtime/host-memory.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #define REQUIRE(condition)                                                                           \
@@ -339,7 +344,6 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     ggml::hrx::HostWeightCacheStats weight_stats = weights.stats();
     REQUIRE(weight_stats.hits == 1);
     REQUIRE(weight_stats.misses == 3);
-    REQUIRE(weight_stats.layout_conflicts == 1);
     REQUIRE(weight_stats.allocation_count == 3);
     REQUIRE(weight_stats.resident_bytes == 96);
 
@@ -351,9 +355,217 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     weight_stats = weights.stats();
     REQUIRE(weight_stats.hits == 0);
     REQUIRE(weight_stats.misses == 0);
-    REQUIRE(weight_stats.layout_conflicts == 0);
     REQUIRE(weight_stats.allocation_count == 0);
     REQUIRE(weight_stats.resident_bytes == 0);
+}
+
+static std::vector<uint8_t> materialize_test_weight(ggml_backend_hrx_context *   context,
+                                                    ggml_type                    source_type,
+                                                    const char *                 layout,
+                                                    int64_t                      input_size,
+                                                    int64_t                      output_size,
+                                                    size_t                       materialized_length,
+                                                    const std::vector<uint8_t> & canonical) {
+    ggml::hrx::HostTransferManager transfers;
+    ggml::hrx::HostWeightCache     weights;
+    ggml::hrx::HostWeightSource    source;
+    source.host_data           = canonical.data();
+    source.identity            = UINT64_C(0x12340000) + static_cast<uint64_t>(source_type);
+    source.generation          = 1;
+    source.capacity            = canonical.size();
+    source.length              = canonical.size();
+    source.materialized_length = materialized_length;
+    source.layout              = layout;
+    source.source_type         = source_type;
+    source.input_size          = input_size;
+    source.output_size         = output_size;
+
+    ggml::hrx::HostWeightAcquireResult result =
+        weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(result.valid());
+    REQUIRE(result.lease.length() == materialized_length);
+    std::vector<uint8_t> materialized(materialized_length);
+    require_hrx_status(hrx_synchronous_d2h(context->device->device, result.lease.buffer(), 0, materialized.data(),
+                                           materialized.size()));
+    return materialized;
+}
+
+static void set_first_block_scale(std::vector<uint8_t> & canonical, ggml_type type, float scale) {
+    const ggml_fp16_t encoded_scale = ggml_fp32_to_fp16(scale);
+    size_t            scale_offset  = 0;
+    switch (type) {
+        case GGML_TYPE_Q4_K:
+            scale_offset = offsetof(block_q4_K, d);
+            break;
+        case GGML_TYPE_Q5_K:
+            scale_offset = offsetof(block_q5_K, d);
+            break;
+        case GGML_TYPE_Q6_K:
+            scale_offset = offsetof(block_q6_K, d);
+            break;
+        case GGML_TYPE_IQ4_XS:
+            scale_offset = offsetof(block_iq4_xs, d);
+            break;
+        default:
+            REQUIRE(false);
+    }
+    REQUIRE(scale_offset + sizeof(encoded_scale) <= canonical.size());
+    std::memcpy(canonical.data() + scale_offset, &encoded_scale, sizeof(encoded_scale));
+}
+
+static void require_test_weight_rejected(ggml_backend_hrx_context *   context,
+                                         ggml_type                    source_type,
+                                         const char *                 layout,
+                                         int64_t                      input_size,
+                                         int64_t                      output_size,
+                                         size_t                       materialized_length,
+                                         const std::vector<uint8_t> & canonical) {
+    ggml::hrx::HostTransferManager transfers;
+    ggml::hrx::HostWeightCache     weights;
+    ggml::hrx::HostWeightSource    source;
+    source.host_data           = canonical.data();
+    source.identity            = UINT64_C(0x56780000) + static_cast<uint64_t>(source_type);
+    source.generation          = 1;
+    source.capacity            = canonical.size();
+    source.length              = canonical.size();
+    source.materialized_length = materialized_length;
+    source.layout              = layout;
+    source.source_type         = source_type;
+    source.input_size          = input_size;
+    source.output_size         = output_size;
+
+    const ggml::hrx::HostWeightAcquireResult result =
+        weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(!result.valid());
+    REQUIRE(!result.status.success());
+    REQUIRE(weights.stats().allocation_count == 0);
+    REQUIRE(transfers.stats().uploads == 0);
+}
+
+static void run_zero_symmetric_weight_materialization_checks(ggml_backend_hrx_context * context) {
+    constexpr int64_t input_size = 256;
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+        constexpr int64_t          output_size = 64;
+        const std::vector<uint8_t> canonical(ggml_row_size(type, input_size) * output_size, uint8_t{ 0 });
+        const std::vector<uint8_t> materialized =
+            materialize_test_weight(context, type, ggml::hrx::kSymmetricI4K64Row64Layout, input_size, output_size,
+                                    output_size * 144, canonical);
+        REQUIRE(std::all_of(materialized.begin(), materialized.end(), [](uint8_t value) { return value == 0; }));
+    }
+
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ4_XS }) {
+        constexpr int64_t          output_size = 4;
+        const std::vector<uint8_t> canonical(ggml_row_size(type, input_size) * output_size, uint8_t{ 0 });
+        const std::vector<uint8_t> materialized =
+            materialize_test_weight(context, type, ggml::hrx::kSymmetricI4K32EightGroupsShared4Layout, input_size,
+                                    output_size, 32 * 132, canonical);
+        REQUIRE(std::all_of(materialized.begin(), materialized.end(), [](uint8_t value) { return value == 0; }));
+    }
+
+    constexpr int64_t          output_size = 64;
+    const std::vector<uint8_t> canonical(ggml_row_size(GGML_TYPE_Q6_K, input_size) * output_size, uint8_t{ 0 });
+    const std::vector<uint8_t> materialized =
+        materialize_test_weight(context, GGML_TYPE_Q6_K, ggml::hrx::kQ6KSymmetricI2PackedScaleRowLayout, input_size,
+                                output_size, output_size * 68 + output_size * 210, canonical);
+    REQUIRE(std::all_of(materialized.begin(), materialized.end(), [](uint8_t value) { return value == 0; }));
+}
+
+static void run_nonfinite_symmetric_weight_materialization_checks(ggml_backend_hrx_context * context) {
+    constexpr int64_t input_size = 256;
+    for (float invalid_scale : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                                 -std::numeric_limits<float>::infinity() }) {
+        for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+            constexpr int64_t    output_size = 64;
+            std::vector<uint8_t> canonical(ggml_row_size(type, input_size) * output_size, uint8_t{ 0 });
+            set_first_block_scale(canonical, type, invalid_scale);
+            require_test_weight_rejected(context, type, ggml::hrx::kSymmetricI4K64Row64Layout, input_size, output_size,
+                                         output_size * 144, canonical);
+        }
+
+        for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ4_XS }) {
+            constexpr int64_t    output_size = 4;
+            std::vector<uint8_t> canonical(ggml_row_size(type, input_size) * output_size, uint8_t{ 0 });
+            set_first_block_scale(canonical, type, invalid_scale);
+            require_test_weight_rejected(context, type, ggml::hrx::kSymmetricI4K32EightGroupsShared4Layout, input_size,
+                                         output_size, 32 * 132, canonical);
+        }
+
+        constexpr int64_t    output_size = 64;
+        std::vector<uint8_t> canonical(ggml_row_size(GGML_TYPE_Q6_K, input_size) * output_size, uint8_t{ 0 });
+        set_first_block_scale(canonical, GGML_TYPE_Q6_K, invalid_scale);
+        require_test_weight_rejected(context, GGML_TYPE_Q6_K, ggml::hrx::kQ6KSymmetricI2PackedScaleRowLayout,
+                                     input_size, output_size, output_size * 68 + output_size * 210, canonical);
+    }
+}
+
+static std::vector<uint8_t> make_iq4_xs_scale_case(int64_t output_size,
+                                                   float   block_scale,
+                                                   int     scale_code,
+                                                   uint8_t quant_index) {
+    constexpr int64_t input_size = 256;
+    REQUIRE(scale_code >= 0 && scale_code <= 63);
+    REQUIRE(quant_index <= 15);
+    std::vector<uint8_t> canonical(ggml_row_size(GGML_TYPE_IQ4_XS, input_size) * output_size, uint8_t{ 0 });
+    block_iq4_xs         block = {};
+    block.d                    = ggml_fp32_to_fp16(block_scale);
+    block.scales_h             = UINT16_C(0xAAAA);  // All eight group scale codes start at 32 (zero multiplier).
+    block.scales_l[0]          = static_cast<uint8_t>(scale_code & 0x0F);
+    block.scales_h =
+        static_cast<uint16_t>((block.scales_h & ~UINT16_C(0x0003)) | static_cast<uint16_t>((scale_code >> 4) & 0x03));
+    std::fill_n(block.qs, 16, static_cast<uint8_t>(quant_index | (quant_index << 4)));
+    std::memcpy(canonical.data(), &block, sizeof(block));
+    return canonical;
+}
+
+static std::vector<uint8_t> make_q6_k_scale_case(int64_t output_size,
+                                                 float   block_scale,
+                                                 int8_t  group_scale,
+                                                 int     quantized_value) {
+    constexpr int64_t input_size = 256;
+    REQUIRE(quantized_value >= -32 && quantized_value <= 31);
+    std::vector<uint8_t> canonical(ggml_row_size(GGML_TYPE_Q6_K, input_size) * output_size, uint8_t{ 0 });
+    block_q6_K           block = {};
+    block.d                    = ggml_fp32_to_fp16(block_scale);
+    block.scales[0]            = group_scale;
+    block.scales[1]            = group_scale;
+    const uint8_t encoded      = static_cast<uint8_t>(quantized_value + 32);
+    for (size_t element = 0; element < 32; ++element) {
+        block.ql[element] = static_cast<uint8_t>(encoded & 0x0F);
+        block.qh[element] = static_cast<uint8_t>((encoded >> 4) & 0x03);
+    }
+    std::memcpy(canonical.data(), &block, sizeof(block));
+    return canonical;
+}
+
+static void run_out_of_range_symmetric_weight_materialization_checks(ggml_backend_hrx_context * context) {
+    constexpr int64_t input_size = 256;
+    constexpr float   fp16_min   = 0x1p-24f;
+    constexpr float   fp16_max   = 65504.0f;
+
+    constexpr int64_t k64_output_size = 64;
+    require_test_weight_rejected(context, GGML_TYPE_IQ4_XS, ggml::hrx::kSymmetricI4K64Row64Layout, input_size,
+                                 k64_output_size, k64_output_size * 144,
+                                 make_iq4_xs_scale_case(k64_output_size, fp16_min, 33, 8));
+    require_test_weight_rejected(context, GGML_TYPE_IQ4_XS, ggml::hrx::kSymmetricI4K64Row64Layout, input_size,
+                                 k64_output_size, k64_output_size * 144,
+                                 make_iq4_xs_scale_case(k64_output_size, fp16_max, 63, 15));
+
+    constexpr int64_t shared4_output_size = 4;
+    require_test_weight_rejected(context, GGML_TYPE_Q6_K, ggml::hrx::kSymmetricI4K32EightGroupsShared4Layout,
+                                 input_size, shared4_output_size, 32 * 132,
+                                 make_q6_k_scale_case(shared4_output_size, fp16_min, 1, 1));
+    require_test_weight_rejected(context, GGML_TYPE_Q6_K, ggml::hrx::kSymmetricI4K32EightGroupsShared4Layout,
+                                 input_size, shared4_output_size, 32 * 132,
+                                 make_q6_k_scale_case(shared4_output_size, fp16_max, 127, -32));
+
+    constexpr int64_t composite_output_size = 64;
+    constexpr size_t  composite_size        = composite_output_size * 68 + composite_output_size * 210;
+    require_test_weight_rejected(context, GGML_TYPE_Q6_K, ggml::hrx::kQ6KSymmetricI2PackedScaleRowLayout, input_size,
+                                 composite_output_size, composite_size,
+                                 make_q6_k_scale_case(composite_output_size, fp16_min, 1, -1));
+    require_test_weight_rejected(context, GGML_TYPE_Q6_K, ggml::hrx::kQ6KSymmetricI2PackedScaleRowLayout, input_size,
+                                 composite_output_size, composite_size,
+                                 make_q6_k_scale_case(composite_output_size, fp16_max, 127, -32));
 }
 
 int main() {
@@ -371,6 +583,9 @@ int main() {
     run_host_transfer_checks(context);
     run_host_staging_checks(context);
     run_host_weight_cache_checks(context);
+    run_zero_symmetric_weight_materialization_checks(context);
+    run_nonfinite_symmetric_weight_materialization_checks(context);
+    run_out_of_range_symmetric_weight_materialization_checks(context);
 
     ggml_backend_free(backend);
     return 0;

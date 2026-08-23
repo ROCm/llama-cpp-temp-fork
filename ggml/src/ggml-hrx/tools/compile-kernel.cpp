@@ -14,6 +14,7 @@ int main(int argc, char ** argv) {
     std::string              target;
     std::string              source_path;
     std::string              root;
+    std::string              launch_config_symbol;
     std::string              output_path;
     std::vector<std::string> config_storage;
     std::vector<int64_t>     workload;
@@ -25,6 +26,8 @@ int main(int argc, char ** argv) {
             source_path = argv[++i];
         } else if (argument == "--root" && i + 1 < argc) {
             root = argv[++i];
+        } else if (argument == "--launch-config-symbol" && i + 1 < argc) {
+            launch_config_symbol = argv[++i];
         } else if (argument == "--output" && i + 1 < argc) {
             output_path = argv[++i];
         } else if (argument == "--config" && i + 1 < argc) {
@@ -38,7 +41,7 @@ int main(int argc, char ** argv) {
     }
     if (target.empty() || source_path.empty() || root.empty() || output_path.empty()) {
         std::cerr << "usage: ggml-hrx-compile-kernel --target gfx... --source linked.loom --root symbol "
-                     "--output dir [--config key=value] [--workload value]\n";
+                     "[--launch-config-symbol symbol] --output dir [--config key=value] [--workload value]\n";
         return 2;
     }
     const std::string source = ggml::hrx::tool::read_file(source_path);
@@ -49,6 +52,9 @@ int main(int argc, char ** argv) {
     std::vector<ggml_hrx_loom_jit_config_binding> configs;
     std::vector<std::string>                      config_keys;
     std::vector<std::string>                      config_values;
+    configs.reserve(config_storage.size());
+    config_keys.reserve(config_storage.size());
+    config_values.reserve(config_storage.size());
     for (const std::string & item : config_storage) {
         const size_t equals = item.find('=');
         if (equals == std::string::npos) {
@@ -77,6 +83,7 @@ int main(int argc, char ** argv) {
     options.source_format           = GGML_HRX_LOOM_JIT_SOURCE_FORMAT_TEXT;
     options.source_identifier       = source_path.c_str();
     options.root_symbol             = root.c_str();
+    options.launch_config_symbol    = launch_config_symbol.empty() ? root.c_str() : launch_config_symbol.c_str();
     options.module_name             = root.c_str();
     options.artifact_identifier     = root.c_str();
     options.config_bindings         = configs.data();

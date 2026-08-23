@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dispatch/dispatch.h"
+#include "ggml.h"
 #include "status.h"
 
 #include <cstddef>
@@ -43,19 +45,23 @@ class HostTransferManager {
 };
 
 struct HostWeightSource {
-    const void * host_data  = nullptr;
-    uint64_t     identity   = 0;
-    uint64_t     generation = 0;
-    size_t       capacity   = 0;
-    size_t       offset     = 0;
-    size_t       length     = 0;
-    std::string  layout     = "ggml-native";
+    const void * host_data           = nullptr;
+    hrx_buffer_t device_buffer       = nullptr;
+    uint64_t     identity            = 0;
+    uint64_t     generation          = 0;
+    size_t       capacity            = 0;
+    size_t       offset              = 0;
+    size_t       length              = 0;
+    size_t       materialized_length = 0;
+    std::string  layout              = kNativeWeightLayout;
+    ggml_type    source_type         = GGML_TYPE_COUNT;
+    int64_t      input_size          = 0;
+    int64_t      output_size         = 0;
 };
 
 struct HostWeightCacheStats {
     uint64_t hits             = 0;
     uint64_t misses           = 0;
-    uint64_t layout_conflicts = 0;
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
 };
@@ -101,15 +107,23 @@ class HostWeightCache {
 
   private:
     struct SourceKey {
-        uint64_t identity   = 0;
-        uint64_t generation = 0;
-        size_t   capacity   = 0;
-        size_t   offset     = 0;
-        size_t   length     = 0;
+        uint64_t    identity            = 0;
+        uint64_t    generation          = 0;
+        size_t      capacity            = 0;
+        size_t      offset              = 0;
+        size_t      length              = 0;
+        size_t      materialized_length = 0;
+        std::string layout;
+        ggml_type   source_type = GGML_TYPE_COUNT;
+        int64_t     input_size  = 0;
+        int64_t     output_size = 0;
 
         bool operator==(const SourceKey & other) const {
             return identity == other.identity && generation == other.generation && capacity == other.capacity &&
-                   offset == other.offset && length == other.length;
+                   offset == other.offset && length == other.length &&
+                   materialized_length == other.materialized_length && layout == other.layout &&
+                   source_type == other.source_type && input_size == other.input_size &&
+                   output_size == other.output_size;
         }
     };
 

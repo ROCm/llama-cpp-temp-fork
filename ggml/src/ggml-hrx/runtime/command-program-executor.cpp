@@ -278,8 +278,17 @@ static Dispatch build_dispatch(const ResolvedCommand & command) {
 }
 
 struct GraphValueAccess {
-    bool read  = false;
-    bool write = false;
+    bool        read                = false;
+    bool        write               = false;
+    bool        native_read         = false;
+    bool        transformed_read    = false;
+    bool        layout_conflict     = false;
+    std::string layout              = kNativeWeightLayout;
+    ggml_type   source_type         = GGML_TYPE_COUNT;
+    int64_t     input_size          = 0;
+    int64_t     output_size         = 0;
+    size_t      source_length       = 0;
+    size_t      materialized_length = 0;
 };
 
 static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(const CommandProgram & commands) {
@@ -303,6 +312,38 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
                         access.write = true;
                         break;
                 }
+                if (binding.access == ResourceAccess::Write) {
+                    continue;
+                }
+                if (binding.layout == kNativeWeightLayout) {
+                    access.native_read = true;
+                    if (access.transformed_read) {
+                        access.layout_conflict = true;
+                    }
+                    continue;
+                }
+                if (binding.offset != 0 || binding.source_length == 0 || binding.length == 0 ||
+                    binding.source_type == GGML_TYPE_COUNT || binding.input_size <= 0 || binding.output_size <= 0) {
+                    access.layout_conflict = true;
+                    continue;
+                }
+                if (!access.transformed_read) {
+                    access.transformed_read    = true;
+                    access.layout              = binding.layout;
+                    access.source_type         = binding.source_type;
+                    access.input_size          = binding.input_size;
+                    access.output_size         = binding.output_size;
+                    access.source_length       = binding.source_length;
+                    access.materialized_length = binding.length;
+                } else if (access.layout != binding.layout || access.source_type != binding.source_type ||
+                           access.input_size != binding.input_size || access.output_size != binding.output_size ||
+                           access.source_length != binding.source_length ||
+                           access.materialized_length != binding.length) {
+                    access.layout_conflict = true;
+                }
+                if (access.native_read) {
+                    access.layout_conflict = true;
+                }
             }
         }
     };
@@ -320,25 +361,44 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     materialized.reserve(bindings.bindings().size());
     const std::unordered_map<int32_t, GraphValueAccess> access_by_value = collect_graph_value_access(commands);
     for (const CommandProgramBinding & binding : bindings.bindings()) {
-        if (!binding.requires_materialization()) {
-            materialized.push_back(binding);
-            continue;
-        }
         const auto             found_access = access_by_value.find(binding.value.value);
         const GraphValueAccess access =
             found_access != access_by_value.end() ? found_access->second : GraphValueAccess{};
-        if (binding.weight && access.read && !access.write) {
+        const bool materialize_weight = binding.weight && access.read && !access.write &&
+                                        (binding.requires_materialization() || access.transformed_read);
+        if (binding.length == 0 || (!binding.requires_materialization() && !materialize_weight)) {
+            materialized.push_back(binding);
+            continue;
+        }
+        if (materialize_weight) {
+            if (access.layout_conflict) {
+                status.log("weight value %d has conflicting resident layout requests", binding.value.value);
+                materialized.push_back(binding);
+                continue;
+            }
             HostWeightSource source;
-            source.host_data  = binding.host_data;
-            source.identity   = binding.identity;
-            source.generation = binding.generation;
-            source.capacity   = binding.capacity;
-            source.offset     = binding.offset;
-            source.length     = binding.length;
+            source.host_data           = binding.host_data;
+            source.device_buffer       = binding.host_data == nullptr ? binding.buffer : nullptr;
+            source.identity            = binding.identity;
+            source.generation          = binding.generation;
+            source.capacity            = binding.capacity;
+            source.offset              = binding.offset;
+            source.length              = access.transformed_read ? access.source_length : binding.length;
+            source.materialized_length = access.transformed_read ? access.materialized_length : binding.length;
+            source.layout              = access.layout;
+            source.source_type         = access.source_type;
+            source.input_size          = access.input_size;
+            source.output_size         = access.output_size;
+            if (source.length > binding.length) {
+                status.log("weight value %d layout source length %zu exceeds runtime length %zu", binding.value.value,
+                           source.length, binding.length);
+                materialized.push_back(binding);
+                continue;
+            }
             HostWeightAcquireResult resident =
                 context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
             if (!resident.valid()) {
-                status.log("materialize host weight value %d failed", binding.value.value);
+                status.log("materialize weight value %d failed", binding.value.value);
                 status.append(resident.status);
                 materialized.push_back(binding);
                 continue;
@@ -347,9 +407,14 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             device_binding.buffer                = resident.lease.buffer();
             device_binding.host_data             = nullptr;
             device_binding.offset                = 0;
-            device_binding.capacity              = binding.length;
+            device_binding.length                = resident.lease.length();
+            device_binding.capacity              = resident.lease.length();
             materialized.push_back(device_binding);
             prepared.resident_host_weights.push_back(std::move(resident.lease));
+            continue;
+        }
+        if (binding.host_data == nullptr) {
+            materialized.push_back(binding);
             continue;
         }
 
@@ -769,16 +834,65 @@ static bool execute_prepared_command_list(const CommandProgramExecutionContext &
     return true;
 }
 
-struct GraphDependencyChain {
-    hrx_graph_node_t last = nullptr;
+struct GraphResourceAccess {
+    hrx_graph_node_t node   = nullptr;
+    hrx_buffer_t     buffer = nullptr;
+    size_t           offset = 0;
+    size_t           length = 0;
+    bool             writes = false;
+};
 
-    const hrx_graph_node_t * deps() const { return last == nullptr ? nullptr : &last; }
-    size_t dep_count() const { return last == nullptr ? 0 : 1; }
-    void update(hrx_graph_node_t node) { last = node; }
+static bool resource_ranges_overlap(const GraphResourceAccess & lhs, const GraphResourceAccess & rhs) {
+    if (lhs.buffer != rhs.buffer || lhs.length == 0 || rhs.length == 0) {
+        return false;
+    }
+    return lhs.offset <= rhs.offset ? rhs.offset - lhs.offset < lhs.length : lhs.offset - rhs.offset < rhs.length;
+}
+
+class GraphResourceDependencyTracker {
+  public:
+    std::vector<hrx_graph_node_t> dependencies(const std::vector<PreparedCommandBinding> & bindings) const {
+        std::vector<hrx_graph_node_t> result;
+        for (const PreparedCommandBinding & binding : bindings) {
+            const GraphResourceAccess current = make_access(nullptr, binding);
+            for (const GraphResourceAccess & prior : frontier_) {
+                if ((!current.writes && !prior.writes) || !resource_ranges_overlap(current, prior) ||
+                    std::find(result.begin(), result.end(), prior.node) != result.end()) {
+                    continue;
+                }
+                result.push_back(prior.node);
+            }
+        }
+        return result;
+    }
+
+    void record(hrx_graph_node_t node, const std::vector<PreparedCommandBinding> & bindings) {
+        for (const PreparedCommandBinding & binding : bindings) {
+            frontier_.push_back(make_access(node, binding));
+        }
+    }
+
+    void record(hrx_graph_node_t node, hrx_buffer_t buffer, size_t offset, size_t length, bool writes) {
+        const GraphResourceAccess current = { node, buffer, offset, length, writes };
+        frontier_.push_back(current);
+    }
+
+  private:
+    static GraphResourceAccess make_access(hrx_graph_node_t node, const PreparedCommandBinding & binding) {
+        return {
+            node,
+            binding.ref.buffer,
+            binding.ref.offset,
+            binding.ref.length,
+            resource_access_writes(binding.binding.access),
+        };
+    }
+
+    std::vector<GraphResourceAccess> frontier_;
 };
 
 static Status record_completion_counter_fill(hrx_graph_t                         graph,
-                                             GraphDependencyChain &              chain,
+                                             GraphResourceDependencyTracker &    dependencies,
                                              const CommandProgram &              commands,
                                              const TransientArenaAllocationRef & allocation) {
     Status status;
@@ -803,18 +917,18 @@ static Status record_completion_counter_fill(hrx_graph_t                        
         sizeof(uint32_t),
     };
     hrx_graph_node_t node = nullptr;
-    if (ErrorResult error =
-            take_status(hrx_graph_add_fill_buffer_node(graph, chain.deps(), chain.dep_count(), &attrs, &node))) {
+    if (ErrorResult error = take_status(hrx_graph_add_fill_buffer_node(graph, nullptr, 0, &attrs, &node))) {
         status.log("record completion counter fill: %s", error->c_str());
         return status;
     }
-    chain.update(node);
+    dependencies.record(node, allocation.buffer, commands.completion_counters.arena_offset,
+                        commands.completion_counters.byte_count, true);
     return status;
 }
 
-static Status record_prepared_kernel_command(hrx_graph_t                  graph,
-                                             GraphDependencyChain &       chain,
-                                             const PreparedCommand &      command) {
+static Status record_prepared_kernel_command(hrx_graph_t                      graph,
+                                             GraphResourceDependencyTracker & dependencies,
+                                             const PreparedCommand &          command) {
     Status status;
     const std::string command_context = format_prepared_command_context(command);
     if (command.kind != CommandKind::Kernel) {
@@ -857,23 +971,24 @@ static Status record_prepared_kernel_command(hrx_graph_t                  graph,
         refs.size(),
         0,
     };
+    const std::vector<hrx_graph_node_t> dependency_nodes = dependencies.dependencies(command.kernel.bindings);
     hrx_graph_node_t node = nullptr;
-    if (ErrorResult error =
-            take_status(hrx_graph_add_kernel_node(graph, chain.deps(), chain.dep_count(), &attrs, &node))) {
+    if (ErrorResult error = take_status(
+            hrx_graph_add_kernel_node(graph, dependency_nodes.data(), dependency_nodes.size(), &attrs, &node))) {
         status.log("record %s: %s", command_context.c_str(), error->c_str());
         return status;
     }
-    chain.update(node);
+    dependencies.record(node, command.kernel.bindings);
     return status;
 }
 
-static Status record_prepared_command_list(hrx_graph_t                        graph,
-                                           GraphDependencyChain &             chain,
+static Status record_prepared_command_list(hrx_graph_t                          graph,
+                                           GraphResourceDependencyTracker &     dependencies,
                                            const std::vector<PreparedCommand> & commands,
-                                           size_t &                           dispatch_count) {
+                                           size_t &                             dispatch_count) {
     Status status;
     for (const PreparedCommand & command : commands) {
-        Status command_status = record_prepared_kernel_command(graph, chain, command);
+        Status command_status = record_prepared_kernel_command(graph, dependencies, command);
         if (!command_status.success()) {
             status.append(command_status);
             return status;
@@ -900,18 +1015,18 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     }
     recorded.graph = graph;
 
-    GraphDependencyChain chain;
-    recorded.status.append(record_completion_counter_fill(recorded.graph, chain, commands, allocation));
+    GraphResourceDependencyTracker dependencies;
+    recorded.status.append(record_completion_counter_fill(recorded.graph, dependencies, commands, allocation));
     if (!recorded.status.success()) {
         return recorded;
     }
-    recorded.status.append(record_prepared_command_list(recorded.graph, chain, prepared.initialization_commands,
+    recorded.status.append(record_prepared_command_list(recorded.graph, dependencies, prepared.initialization_commands,
                                                         recorded.dispatch_count));
     if (!recorded.status.success()) {
         return recorded;
     }
-    recorded.status.append(record_prepared_command_list(recorded.graph, chain, prepared.commands,
-                                                        recorded.dispatch_count));
+    recorded.status.append(
+        record_prepared_command_list(recorded.graph, dependencies, prepared.commands, recorded.dispatch_count));
     if (!recorded.status.success()) {
         return recorded;
     }

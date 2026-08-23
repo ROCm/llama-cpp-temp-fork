@@ -171,6 +171,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/dispatch-qwen-attention-postprocess.h
     dispatch_registration/dispatch-qwen-flash-attention.cpp
     dispatch_registration/dispatch-qwen-flash-attention.h
+    dispatch_registration/dispatch-qwen-hybrid.cpp
+    dispatch_registration/dispatch-qwen-hybrid.h
     dispatch_registration/dispatch-qwen-matmul.cpp
     dispatch_registration/dispatch-qwen-matmul.h
     dispatch_registration/dispatch-moe-router.cpp

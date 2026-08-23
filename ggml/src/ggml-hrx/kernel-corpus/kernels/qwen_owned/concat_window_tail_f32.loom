@@ -1,0 +1,235 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+config.decl @hrx2_shape_concat_tail_d_conv : %value: index where [range(%value, 4, 4)]
+
+config.decl @hrx2_shape_concat_tail_d_inner : %value: index where [range(%value, 8192, 65536), mul(%value, 32)]
+
+config.decl @hrx2_shape_concat_tail_n_t : %value: index where [range(%value, 512, 512)]
+
+config.decl @hrx2_shape_concat_tail_n_s : %value: index where [range(%value, 1, 1)]
+
+config.decl @hrx2_shape_concat_tail_state_row_stride : %value: index where [range(%value, 1, 1)]
+
+config.decl @hrx2_shape_concat_tail_state_channel_stride : %value: index where [range(%value, 3, 3)]
+
+config.decl @hrx2_shape_concat_tail_x_row_stride : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @hrx2_shape_concat_tail_dst_row_stride : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @hrx2_shape_concat_tail_cache_row_stride : %value: index where [range(%value, 1, 1)]
+
+config.decl @hrx2_shape_concat_tail_cache_channel_stride : %value: index where [range(%value, 3, 3)]
+
+config.decl @hrx2_tuning_concat_tail_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %x_snapshot_rows = index.constant 61 : index
+  %d_conv = config.get @hrx2_shape_concat_tail_d_conv : index
+  %d_inner = config.get @hrx2_shape_concat_tail_d_inner : index
+  %n_s = config.get @hrx2_shape_concat_tail_n_s : index
+  %wg = config.get @hrx2_tuning_concat_tail_workgroup_size : index
+  %carry = index.add %d_conv, %minus_one : index
+  %snapshot_rows = index.add %carry, %x_snapshot_rows : index
+  %rows = index.mul %snapshot_rows, %n_s : index
+  %total = index.mul %rows, %d_inner : index
+  %rounding = index.add %wg, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %groups = index.div %rounded, %wg : index
+  kernel.launch.config workgroups(%groups, %unit, %unit) workgroup_size(%wg, %unit, %unit) : index
+} launch(%state: buffer, %x: buffer, %dst: buffer, %cache: buffer) {
+  %base = index.constant 0 : offset
+  %minus_one = index.constant -1 : index
+  %x_snapshot_rows = index.constant 61 : index
+
+  %d_conv = config.get @hrx2_shape_concat_tail_d_conv : index
+  %d_inner = config.get @hrx2_shape_concat_tail_d_inner : index
+  %n_t = config.get @hrx2_shape_concat_tail_n_t : index
+  %n_s = config.get @hrx2_shape_concat_tail_n_s : index
+  %srs = config.get @hrx2_shape_concat_tail_state_row_stride : index
+  %scs = config.get @hrx2_shape_concat_tail_state_channel_stride : index
+  %xrs = config.get @hrx2_shape_concat_tail_x_row_stride : index
+  %drs = config.get @hrx2_shape_concat_tail_dst_row_stride : index
+  %crs = config.get @hrx2_shape_concat_tail_cache_row_stride : index
+  %ccs = config.get @hrx2_shape_concat_tail_cache_channel_stride : index
+  %wg = config.get @hrx2_tuning_concat_tail_workgroup_size : index
+
+  %di = index.assume %d_inner [range(%d_inner, 8192, 65536), mul(%d_inner, 32)] : index
+  %nt = index.assume %n_t [range(%n_t, 512, 512)] : index
+  %ns = index.assume %n_s [range(%n_s, 1, 1)] : index
+  %srsb = index.assume %srs [range(%srs, 1, 1)] : index
+  %scsb = index.assume %scs [range(%scs, 3, 3)] : index
+  %xrsb = index.assume %xrs [range(%xrs, 1, 16777216)] : index
+  %drsb = index.assume %drs [range(%drs, 1, 16777216)] : index
+  %crsb = index.assume %crs [range(%crs, 1, 1)] : index
+  %ccsb = index.assume %ccs [range(%ccs, 3, 3)] : index
+  %carry0 = index.add %d_conv, %minus_one : index
+  %carry = index.assume %carry0 [range(%carry0, 3, 3)] : index
+  %snapshot_rows0 = index.add %carry, %x_snapshot_rows : index
+  %snapshot_rows = index.assume %snapshot_rows0 [range(%snapshot_rows0, 64, 64)] : index
+
+  %rows0 = index.mul %snapshot_rows, %ns : index
+  %total0 = index.mul %rows0, %di : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741823)] : index
+
+  %group0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 16777215)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %off0 = index.mul %group, %wg : index
+  %idx0 = index.add %off0, %lane : index
+  %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %idx, %total : index
+
+  %state_g = buffer.assume.memory_space<global> %state : buffer
+  %x_g = buffer.assume.memory_space<global> %x : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %c_g = buffer.assume.memory_space<global> %cache : buffer
+  %state_na, %x_na, %dst_na, %c_na = buffer.assume.noalias %state_g, %x_g, %dst_g, %c_g : buffer, buffer, buffer, buffer
+  %state_view = buffer.view %state_na[%base] : buffer -> view<1073741824xf32>
+  %x_view = buffer.view %x_na[%base] : buffer -> view<1073741824xf32>
+  %dst_view = buffer.view %dst_na[%base] : buffer -> view<1073741824xf32>
+  %c_view = buffer.view %c_na[%base] : buffer -> view<1073741824xf32>
+
+  scf.if %in_bounds {
+    // Consecutive lanes take consecutive channels, so both sides are contiguous
+    // bursts across the wave.
+    %chan = index.rem %idx, %di : index
+    %flat_row = index.div %idx, %di : index
+    %snapshot_row = index.rem %flat_row, %snapshot_rows : index
+    %seq = index.div %flat_row, %snapshot_rows : index
+
+    // All 64 snapshot rows are written to their natural CONCAT row.
+    %d_win0 = index.add %nt, %carry : index
+    %d_span = index.mul %d_win0, %drsb : index
+    %d_seq = index.mul %seq, %d_span : index
+    %oi0 = index.mul %snapshot_row, %drsb : index
+    %oi1 = index.add %oi0, %d_seq : index
+    %oi2 = index.add %oi1, %chan : index
+    %oi = index.assume %oi2 [range(%oi2, 0, 1073741823)] : index
+
+    %is_state = index.cmp ult, %snapshot_row, %carry : index
+    %snapshot = scf.if %is_state -> (f32) {
+      // Rows 0..2 snapshot the old recurrent state. In the same workitem,
+      // update the corresponding persistent-cache row from x rows 509..511.
+      %state_span = index.mul %di, %scsb : index
+      %state_seq = index.mul %seq, %state_span : index
+      %si0 = index.mul %snapshot_row, %srsb : index
+      %si1 = index.add %si0, %state_seq : index
+      %si_chan = index.mul %chan, %scsb : index
+      %si2 = index.add %si1, %si_chan : index
+      %si = index.assume %si2 [range(%si2, 0, 1073741823)] : index
+
+      %x_tail0 = index.sub %nt, %carry : index
+      %x_tail = index.add %x_tail0, %snapshot_row : index
+      %x_span = index.mul %nt, %xrsb : index
+      %x_seq = index.mul %seq, %x_span : index
+      %xi0 = index.mul %x_tail, %xrsb : index
+      %xi1 = index.add %xi0, %x_seq : index
+      %xi2 = index.add %xi1, %chan : index
+      %xi = index.assume %xi2 [range(%xi2, 0, 1073741823)] : index
+
+      %cache_span = index.mul %di, %ccsb : index
+      %cache_seq = index.mul %seq, %cache_span : index
+      %ci0 = index.mul %snapshot_row, %crsb : index
+      %ci1 = index.add %ci0, %cache_seq : index
+      %ci_chan = index.mul %chan, %ccsb : index
+      %ci2 = index.add %ci1, %ci_chan : index
+      %ci = index.assume %ci2 [range(%ci2, 0, 1073741823)] : index
+
+      %old_state = view.load %state_view[%si] : view<1073741824xf32> -> f32
+      %new_state = view.load %x_view[%xi] : view<1073741824xf32> -> f32
+      view.store %new_state, %c_view[%ci] : f32, view<1073741824xf32>
+      scf.yield %old_state : f32
+    } else {
+      // Rows 3..63 snapshot x rows 0..60 before their arena span is reused.
+      %x_row = index.sub %snapshot_row, %carry : index
+      %x_span = index.mul %nt, %xrsb : index
+      %x_seq = index.mul %seq, %x_span : index
+      %xi0 = index.mul %x_row, %xrsb : index
+      %xi1 = index.add %xi0, %x_seq : index
+      %xi2 = index.add %xi1, %chan : index
+      %xi = index.assume %xi2 [range(%xi2, 0, 1073741823)] : index
+      %x_value = view.load %x_view[%xi] : view<1073741824xf32> -> f32
+      scf.yield %x_value : f32
+    }
+    view.store %snapshot, %dst_view[%oi] : f32, view<1073741824xf32>
+  }
+  kernel.return
+}
+
+config.decl @hrx2_shape_concat_dim0_lhs_width : %value: index where [range(%value, 1, 65536)]
+
+config.decl @hrx2_shape_concat_dim0_rhs_width : %value: index where [range(%value, 1, 65536)]
+
+config.decl @hrx2_shape_concat_dim0_row_count : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_tuning_concat_dim0_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_concat_dim0_f32") @hrx2_concat_dim0_f32() {
+  %one = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %lhs_width = config.get @hrx2_shape_concat_dim0_lhs_width : index
+  %rhs_width = config.get @hrx2_shape_concat_dim0_rhs_width : index
+  %row_count = config.get @hrx2_shape_concat_dim0_row_count : index
+  %workgroup_size = config.get @hrx2_tuning_concat_dim0_workgroup_size : index
+  %output_width = index.add %lhs_width, %rhs_width : index
+  %element_count = index.mul %output_width, %row_count : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %one, %one) workgroup_size(%workgroup_size, %one, %one) : index
+} launch(%lhs: buffer, %rhs: buffer, %output: buffer) {
+  %base = index.constant 0 : offset
+  %lhs_width0 = config.get @hrx2_shape_concat_dim0_lhs_width : index
+  %rhs_width0 = config.get @hrx2_shape_concat_dim0_rhs_width : index
+  %row_count0 = config.get @hrx2_shape_concat_dim0_row_count : index
+  %workgroup_size = config.get @hrx2_tuning_concat_dim0_workgroup_size : index
+  %lhs_width = index.assume %lhs_width0 [range(%lhs_width0, 1, 65536)] : index
+  %rhs_width = index.assume %rhs_width0 [range(%rhs_width0, 1, 65536)] : index
+  %row_count = index.assume %row_count0 [range(%row_count0, 1, 1048576)] : index
+  %output_width0 = index.add %lhs_width, %rhs_width : index
+  %output_width = index.assume %output_width0 [range(%output_width0, 2, 131072)] : index
+  %element_count0 = index.mul %output_width, %row_count : index
+  %element_count = index.assume %element_count0 [range(%element_count0, 1, 1073741824)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_base = index.mul %workgroup, %workgroup_size : index
+  %linear0 = index.add %linear_base, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %linear, %element_count : index
+
+  %lhs_g = buffer.assume.memory_space<global> %lhs : buffer
+  %rhs_g = buffer.assume.memory_space<global> %rhs : buffer
+  %output_g = buffer.assume.memory_space<global> %output : buffer
+  %lhs_na, %rhs_na, %output_na = buffer.assume.noalias %lhs_g, %rhs_g, %output_g : buffer, buffer, buffer
+  %lhs_v = buffer.view %lhs_na[%base] : buffer -> view<1073741824xf32>
+  %rhs_v = buffer.view %rhs_na[%base] : buffer -> view<1073741824xf32>
+  %output_v = buffer.view %output_na[%base] : buffer -> view<1073741824xf32>
+
+  scf.if %in_bounds {
+    %row = index.div %linear, %output_width : index
+    %column = index.rem %linear, %output_width : index
+    %from_lhs = index.cmp ult, %column, %lhs_width : index
+    %value = scf.if %from_lhs -> (f32) {
+      %lhs_row = index.mul %row, %lhs_width : index
+      %lhs_index0 = index.add %lhs_row, %column : index
+      %lhs_index = index.assume %lhs_index0 [range(%lhs_index0, 0, 1073741823)] : index
+      %loaded = view.load %lhs_v[%lhs_index] : view<1073741824xf32> -> f32
+      scf.yield %loaded : f32
+    } else {
+      %rhs_column = index.sub %column, %lhs_width : index
+      %rhs_row = index.mul %row, %rhs_width : index
+      %rhs_index0 = index.add %rhs_row, %rhs_column : index
+      %rhs_index = index.assume %rhs_index0 [range(%rhs_index0, 0, 1073741823)] : index
+      %loaded = view.load %rhs_v[%rhs_index] : view<1073741824xf32> -> f32
+      scf.yield %loaded : f32
+    }
+    view.store %value, %output_v[%linear] : f32, view<1073741824xf32>
+  }
+  kernel.return
+}

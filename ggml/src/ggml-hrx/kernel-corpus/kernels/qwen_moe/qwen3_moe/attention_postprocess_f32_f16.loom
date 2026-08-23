@@ -1,3 +1,5 @@
+template.decl @qwen3_moe.attention.postprocess.head_body(%publish_output: i1, %token_count: index, %cache_row_count: index, %head_domain0: index, %token0: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer)
+
 // Qwen grouped-query postprocessing with direct F16 cache publication.
 //
 // Raw projection rows are physically `[token][head][channel]`: the reshape
@@ -22,6 +24,8 @@ config.decl @qwen3_moe.attention.head_size : %value: index where [range(%value, 
 config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
 
 config.decl @qwen3_moe.attention.key_value_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
 
 // Applies one RMSNorm and two adjacent NEOX pairs. NEOX pairs corresponding
 // channels from the low and high halves, while keeping each half contiguous.
@@ -55,7 +59,7 @@ func.def inline @qwen3_moe_rmsnorm_neox_packet(%row_sum: f32, %head_size: f32, %
 // Processes one head domain after its raw projection row is visible. Callers
 // may use a larger workgroup than the packet count; inactive workitems
 // contribute zero to normalization and perform no loads or stores.
-func.template<qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_attention_postprocess_head_body(%publish_output: i1, %token_count: index, %cache_row_count: index, %head_domain0: index, %token0: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer) {
+template.def<@qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_attention_postprocess_head_body(%publish_output: i1, %token_count: index, %cache_row_count: index, %head_domain0: index, %token0: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer) {
   %query_size0 = config.get @qwen3_moe.attention.query_size : index
   %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
   %head_size0 = config.get @qwen3_moe.attention.head_size : index
@@ -65,13 +69,18 @@ func.template<qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
   %query_size, %key_value_size, %head_size = index.assume %query_size0, %key_value_size0, %head_size0 [range(%query_size0, 1, 262144), range(%key_value_size0, 1, 262144), range(%head_size0, 4, 1024), mul(%head_size0, 4), mul(%query_size0, %head_size0), mul(%key_value_size0, %head_size0)] : index, index, index
   %channel0 = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %c0_f32 = scalar.constant 0.0 : f32
+  %c0_f32x2 = vector.constant 0.0 : vector<2xf32>
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %c0_offset = index.constant 0 : offset
   %token, %launch_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
-  %half_head_size = index.div %head_size, %c2 : index
-  %pair_packet_count = index.div %head_size, %c4 : index
+  %half_head_size0 = index.div %head_size, %c2 : index
+  %half_head_size = index.assume %half_head_size0 [range(%half_head_size0, 2, 512), mul(%half_head_size0, 2)] : index
+  %pair_packet_count0 = index.div %head_size, %c4 : index
+  %pair_packet_count = index.assume %pair_packet_count0 [range(%pair_packet_count0, 1, 256)] : index
   %query_head_count = index.div %query_size, %head_size : index
   %key_value_head_count = index.div %key_value_size, %head_size : index
   %key_value_domain_count = index.mul %key_value_head_count, %c2 : index
@@ -80,7 +89,8 @@ func.template<qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
   %key_domain_end = index.add %query_head_count, %key_value_head_count : index
   %is_query = index.cmp ult, %head_domain, %query_head_count : index
   %is_query_or_key = index.cmp ult, %head_domain, %key_domain_end : index
-  %key_value_head = index.rem %head_domain, %key_value_head_count : index
+  %key_value_head0 = index.rem %head_domain, %key_value_head_count : index
+  %key_value_head = index.assume %key_value_head0 [range(%key_value_head0, 0, 262143), lt(%key_value_head0, %key_value_head_count)] : index
   %active_channel = index.cmp ult, %channel0, %pair_packet_count : index
   %head_size_i32 = index.cast %head_size : index to i32
   %head_size_f32 = scalar.sitofp %head_size_i32 : i32 to f32
@@ -95,18 +105,20 @@ func.template<qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
   %key_norm_weight_view = buffer.view %key_norm_weight_noalias[%c0_offset] : buffer -> view<[%head_size]xf32>
   %inverse_frequencies_view = buffer.view %inverse_frequencies_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
   %query_output_view = buffer.view %query_output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
-  %key_cache_words_view = buffer.view %key_cache_noalias[%c0_offset] : buffer -> view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
-  %value_cache_words_view = buffer.view %value_cache_noalias[%c0_offset] : buffer -> view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+  %key_cache_view = buffer.view %key_cache_noalias[%c0_offset] : buffer -> view<[%bounded_cache_row_count]x[%key_value_head_count]x[%head_size]xf16>
+  %value_cache_view = buffer.view %value_cache_noalias[%c0_offset] : buffer -> view<[%bounded_cache_row_count]x[%key_value_head_count]x[%head_size]xf16>
   %row_sum = scf.if %is_query_or_key -> (f32) {
     %partial_sum = scf.if %publish_output -> (f32) {
       %channel_sum = scf.if %active_channel -> (f32) {
-        %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
-        %reduction_channel = index.mul %channel, %c4 : index
+        %channel = index.assume %channel0 [range(%channel0, 0, 255), lt(%channel0, %pair_packet_count)] : index
+        %reduction_channel0 = index.mul %channel, %c4 : index
+        %reduction_channel = index.assume %reduction_channel0 [range(%reduction_channel0, 0, 1020), mul(%reduction_channel0, 4)] : index
+        %reduction_mask = vector.mask.range [%reduction_channel to %head_size step %c1] : index -> vector<4xi1>
         %reduction_values = scf.if %is_query -> (vector<4xf32>) {
-          %query_values = vector.load %query_input_view[%token, %head_domain, %reduction_channel] : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32> -> vector<4xf32>
+          %query_values = vector.load.mask %query_input_view[%token, %head_domain, %reduction_channel], %reduction_mask, %c0_f32x4 : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>, vector<4xi1>, vector<4xf32>
           scf.yield %query_values : vector<4xf32>
         } else {
-          %key_values = vector.load %key_input_view[%token, %key_value_head, %reduction_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<4xf32>
+          %key_values = vector.load.mask %key_input_view[%token, %key_value_head, %reduction_channel], %reduction_mask, %c0_f32x4 : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32>, vector<4xi1>, vector<4xf32>
           scf.yield %key_values : vector<4xf32>
         }
         %squares = vector.mulf<reassoc|nnan|ninf|nsz|contract> %reduction_values, %reduction_values : vector<4xf32>
@@ -126,62 +138,66 @@ func.template<qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
   }
   scf.if %publish_output {
     scf.if %active_channel {
-      %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
-      %pair_channel = index.mul %channel, %c2 : index
-      %paired_channel = index.add %pair_channel, %half_head_size : index
-      %paired_word = index.add %channel, %pair_packet_count : index
-      %reduction_channel = index.mul %channel, %c4 : index
+      %channel = index.assume %channel0 [range(%channel0, 0, 255), lt(%channel0, %pair_packet_count)] : index
+      %pair_channel0 = index.mul %channel, %c2 : index
+      %pair_channel = index.assume %pair_channel0 [range(%pair_channel0, 0, 510), mul(%pair_channel0, 2)] : index
+      %paired_channel0 = index.add %pair_channel, %half_head_size : index
+      %paired_channel = index.assume %paired_channel0 [range(%paired_channel0, 2, 1022), mul(%paired_channel0, 2)] : index
+      %reduction_channel0 = index.mul %channel, %c4 : index
+      %reduction_channel = index.assume %reduction_channel0 [range(%reduction_channel0, 0, 1020), mul(%reduction_channel0, 4)] : index
+      %pair_head_mask = vector.mask.range [%pair_channel to %head_size step %c1] : index -> vector<2xi1>
+      %pair_half_mask = vector.mask.range [%pair_channel to %half_head_size step %c1] : index -> vector<2xi1>
+      %paired_mask = vector.mask.range [%paired_channel to %head_size step %c1] : index -> vector<2xi1>
+      %reduction_mask = vector.mask.range [%reduction_channel to %head_size step %c1] : index -> vector<4xi1>
       scf.if %is_query {
-        %low_values = vector.load %query_input_view[%token, %head_domain, %pair_channel] : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32> -> vector<2xf32>
-        %high_values = vector.load %query_input_view[%token, %head_domain, %paired_channel] : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32> -> vector<2xf32>
-        %low_weights = vector.load %query_norm_weight_view[%pair_channel] : view<[%head_size]xf32> -> vector<2xf32>
-        %high_weights = vector.load %query_norm_weight_view[%paired_channel] : view<[%head_size]xf32> -> vector<2xf32>
-        %inverse_frequencies_packet = vector.load %inverse_frequencies_view[%pair_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+        %low_values = vector.load.mask %query_input_view[%token, %head_domain, %pair_channel], %pair_head_mask, %c0_f32x2 : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+        %high_values = vector.load.mask %query_input_view[%token, %head_domain, %paired_channel], %paired_mask, %c0_f32x2 : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+        %low_weights = vector.load.mask %query_norm_weight_view[%pair_channel], %pair_head_mask, %c0_f32x2 : view<[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+        %high_weights = vector.load.mask %query_norm_weight_view[%paired_channel], %paired_mask, %c0_f32x2 : view<[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+        %inverse_frequencies_packet = vector.load.mask %inverse_frequencies_view[%pair_channel], %pair_half_mask, %c0_f32x2 : view<[%half_head_size]xf32>, vector<2xi1>, vector<2xf32>
         %position_i32 = view.load %positions_view[%token] : view<[%launch_token_count]xi32> -> i32
         %position = scalar.sitofp %position_i32 : i32 to f32
         %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
-        vector.store %rotated_low, %query_output_view[%token, %head_domain, %pair_channel] : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
-        vector.store %rotated_high, %query_output_view[%token, %head_domain, %paired_channel] : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
+        vector.store.mask %rotated_low, %query_output_view[%token, %head_domain, %pair_channel], %pair_head_mask : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>, vector<2xi1>
+        vector.store.mask %rotated_high, %query_output_view[%token, %head_domain, %paired_channel], %paired_mask : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>, vector<2xi1>
       } else {
         scf.if %is_query_or_key {
-          %low_values = vector.load %key_input_view[%token, %key_value_head, %pair_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<2xf32>
-          %high_values = vector.load %key_input_view[%token, %key_value_head, %paired_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<2xf32>
-          %low_weights = vector.load %key_norm_weight_view[%pair_channel] : view<[%head_size]xf32> -> vector<2xf32>
-          %high_weights = vector.load %key_norm_weight_view[%paired_channel] : view<[%head_size]xf32> -> vector<2xf32>
-          %inverse_frequencies_packet = vector.load %inverse_frequencies_view[%pair_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+          %low_values = vector.load.mask %key_input_view[%token, %key_value_head, %pair_channel], %pair_head_mask, %c0_f32x2 : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+          %high_values = vector.load.mask %key_input_view[%token, %key_value_head, %paired_channel], %paired_mask, %c0_f32x2 : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+          %low_weights = vector.load.mask %key_norm_weight_view[%pair_channel], %pair_head_mask, %c0_f32x2 : view<[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+          %high_weights = vector.load.mask %key_norm_weight_view[%paired_channel], %paired_mask, %c0_f32x2 : view<[%head_size]xf32>, vector<2xi1>, vector<2xf32>
+          %inverse_frequencies_packet = vector.load.mask %inverse_frequencies_view[%pair_channel], %pair_half_mask, %c0_f32x2 : view<[%half_head_size]xf32>, vector<2xi1>, vector<2xf32>
           %position_i32 = view.load %positions_view[%token] : view<[%launch_token_count]xi32> -> i32
           %position = scalar.sitofp %position_i32 : i32 to f32
+          %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
           %cache_index_raw = view.load %key_cache_indices_view[%token] : view<[%launch_token_count]xi64> -> i64
           %cache_index_i64 = scalar.assume %cache_index_raw [range(%cache_index_raw, 0, 1048575)] : i64
           %cache_index0 = index.cast %cache_index_i64 : i64 to index
-          %cache_index = index.assume %cache_index0 [lt(%cache_index0, %bounded_cache_row_count)] : index
-          %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+          %cache_index = index.assume %cache_index0 [range(%cache_index0, 0, 1048575), lt(%cache_index0, %bounded_cache_row_count)] : index
           %half_low = vector.fptrunc %rotated_low : vector<2xf32> to vector<2xf16>
           %half_high = vector.fptrunc %rotated_high : vector<2xf32> to vector<2xf16>
-          %packed_low = vector.bitcast %half_low : vector<2xf16> to vector<1xi32>
-          %packed_high = vector.bitcast %half_high : vector<2xf16> to vector<1xi32>
-          vector.store %packed_low, %key_cache_words_view[%cache_index, %key_value_head, %channel] : vector<1xi32>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
-          vector.store %packed_high, %key_cache_words_view[%cache_index, %key_value_head, %paired_word] : vector<1xi32>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+          vector.store.mask %half_low, %key_cache_view[%cache_index, %key_value_head, %pair_channel], %pair_head_mask : vector<2xf16>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%head_size]xf16>, vector<2xi1>
+          vector.store.mask %half_high, %key_cache_view[%cache_index, %key_value_head, %paired_channel], %paired_mask : vector<2xf16>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%head_size]xf16>, vector<2xi1>
         } else {
           %cache_index_raw = view.load %value_cache_indices_view[%token] : view<[%launch_token_count]xi64> -> i64
           %cache_index_i64 = scalar.assume %cache_index_raw [range(%cache_index_raw, 0, 1048575)] : i64
           %cache_index0 = index.cast %cache_index_i64 : i64 to index
-          %cache_index = index.assume %cache_index0 [lt(%cache_index0, %bounded_cache_row_count)] : index
-          %values = vector.load %value_input_view[%token, %key_value_head, %reduction_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<4xf32>
+          %cache_index = index.assume %cache_index0 [range(%cache_index0, 0, 1048575), lt(%cache_index0, %bounded_cache_row_count)] : index
+          %values = vector.load.mask %value_input_view[%token, %key_value_head, %reduction_channel], %reduction_mask, %c0_f32x4 : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32>, vector<4xi1>, vector<4xf32>
           %half_values = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
-          %packed_values = vector.bitcast %half_values : vector<4xf16> to vector<2xi32>
-          vector.store %packed_values, %value_cache_words_view[%cache_index, %key_value_head, %pair_channel] : vector<2xi32>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+          vector.store.mask %half_values, %value_cache_view[%cache_index, %key_value_head, %reduction_channel], %reduction_mask : vector<4xf16>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%head_size]xf16>, vector<4xi1>
         }
       }
     }
   }
-  func.return
+  template.return
 }
 
 kernel.def target(@qwen3_moe_attention_postprocess_gfx11_wave32) @qwen3_moe_attention_postprocess_f32_f16(%token_count: index, %cache_row_count: index) {
   %query_size = config.get @qwen3_moe.attention.query_size : index
   %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
   %head_size = config.get @qwen3_moe.attention.head_size : index
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
@@ -190,14 +206,16 @@ kernel.def target(@qwen3_moe_attention_postprocess_gfx11_wave32) @qwen3_moe_atte
   %key_value_head_count = index.div %key_value_size, %head_size : index
   %key_value_domain_count = index.mul %key_value_head_count, %c2 : index
   %head_domain_count = index.add %query_head_count, %key_value_domain_count : index
-  kernel.launch.config workgroups(%head_domain_count, %token_count, %c1) workgroup_size(%pair_packet_count, %c1, %c1) : index
-} launch(%token_count: index, %cache_row_count: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer) where [range(%token_count, 1, 2048)] {
+  kernel.launch.config workgroups(%head_domain_count, %token_capacity, %c1) workgroup_size(%pair_packet_count, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer) {
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %head_domain = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
   %c0 = index.constant 0 : index
-  %valid_token = index.cmp ult, %token0, %token_count : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token = scf.select %valid_token, %token0, %c0 : index
-  func.apply<qwen3_moe.attention.postprocess.head_body>(%valid_token, %token_count, %cache_row_count, %head_domain, %safe_token, %positions, %key_cache_indices, %value_cache_indices, %query_input, %key_input, %value_input, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache) : (i1, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.attention.postprocess.head_body>(%valid_token, %bounded_token_count, %cache_row_count, %head_domain, %safe_token, %positions, %key_cache_indices, %value_cache_indices, %query_input, %key_input, %value_input, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache) : (i1, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -294,3 +312,389 @@ check.benchmark<@qwen3_moe_attention_postprocess_benchmark_case> @qwen3_moe_atte
 check.benchmark<@qwen3_moe_attention_postprocess_benchmark_case> @qwen3_moe_attention_postprocess_prefill_128 {token_count = 128}
 
 check.benchmark<@qwen3_moe_attention_postprocess_benchmark_case> @qwen3_moe_attention_postprocess_prefill_512 {token_count = 512}
+
+// Fused strided RMS_NORM -> row-broadcast MUL -> multi-section RoPE.
+// One workgroup owns one RMS row and preserves the rms_norm_strided_f32 operation order before RoPE.
+config.decl @hrx2_shape_attn_norm_rope_ncols : %value: index where [range(%value, 2, 512)]
+
+config.decl @hrx2_shape_attn_norm_rope_ne1 : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_shape_attn_norm_rope_ne2 : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_shape_attn_norm_rope_ne3 : %value: index where [range(%value, 1, 1024)]
+
+config.decl @hrx2_shape_attn_norm_rope_s1 : %value: index where [range(%value, 0, 1073741823)]
+
+config.decl @hrx2_shape_attn_norm_rope_s2 : %value: index where [range(%value, 0, 1073741823)]
+
+config.decl @hrx2_shape_attn_norm_rope_s3 : %value: index where [range(%value, 0, 1073741823)]
+
+config.decl @hrx2_shape_attn_norm_rope_d1 : %value: index where [range(%value, 0, 268435456)]
+
+config.decl @hrx2_shape_attn_norm_rope_d2 : %value: index where [range(%value, 0, 1073741823)]
+
+config.decl @hrx2_shape_attn_norm_rope_d3 : %value: index where [range(%value, 0, 1073741823)]
+
+config.decl @hrx2_shape_attn_norm_rope_n_dims : %value: index where [range(%value, 2, 512)]
+
+config.decl @hrx2_shape_attn_norm_rope_sec0 : %value: index where [range(%value, 0, 65536)]
+
+config.decl @hrx2_shape_attn_norm_rope_sec1 : %value: index where [range(%value, 0, 65536)]
+
+config.decl @hrx2_shape_attn_norm_rope_sec2 : %value: index where [range(%value, 0, 65536)]
+
+config.decl @hrx2_shape_attn_norm_rope_sec3 : %value: index where [range(%value, 0, 65536)]
+
+config.decl @hrx2_shape_attn_norm_rope_mode : %value: index where [range(%value, 8, 40)]
+
+config.decl @hrx2_tuning_attn_norm_rope_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+config.decl @hrx2_attn_norm_rope_eps : f32
+
+config.decl @hrx2_attn_norm_rope_freq_base : f32
+
+config.decl @hrx2_attn_norm_rope_freq_scale : f32
+
+config.decl @hrx2_attn_norm_rope_attn_factor : f32
+
+kernel.def export("hrx2_rms_norm_strided_mul_rope_f32") @hrx2_rms_norm_strided_mul_rope_f32() {
+  %unit = index.constant 1 : index
+  %ne1 = config.get @hrx2_shape_attn_norm_rope_ne1 : index
+  %ne2 = config.get @hrx2_shape_attn_norm_rope_ne2 : index
+  %ne3 = config.get @hrx2_shape_attn_norm_rope_ne3 : index
+  %wg = config.get @hrx2_tuning_attn_norm_rope_workgroup_size : index
+  %n12 = index.mul %ne1, %ne2 : index
+  %rows = index.mul %n12, %ne3 : index
+  kernel.launch.config workgroups(%rows, %unit, %unit) workgroup_size(%wg, %unit, %unit) : index
+} launch(%src0: buffer, %weight: buffer, %pos: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %forty = index.constant 40 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %minus_two_f32 = scalar.constant -2.0 : f32
+  %eps = config.get @hrx2_attn_norm_rope_eps : f32
+  %freq_base = config.get @hrx2_attn_norm_rope_freq_base : f32
+  %freq_scale = config.get @hrx2_attn_norm_rope_freq_scale : f32
+  %attn_factor = config.get @hrx2_attn_norm_rope_attn_factor : f32
+
+  %ncols = config.get @hrx2_shape_attn_norm_rope_ncols : index
+  %ne1 = config.get @hrx2_shape_attn_norm_rope_ne1 : index
+  %ne2 = config.get @hrx2_shape_attn_norm_rope_ne2 : index
+  %s1 = config.get @hrx2_shape_attn_norm_rope_s1 : index
+  %s2 = config.get @hrx2_shape_attn_norm_rope_s2 : index
+  %s3 = config.get @hrx2_shape_attn_norm_rope_s3 : index
+  %d1 = config.get @hrx2_shape_attn_norm_rope_d1 : index
+  %d2 = config.get @hrx2_shape_attn_norm_rope_d2 : index
+  %d3 = config.get @hrx2_shape_attn_norm_rope_d3 : index
+  %n_dims = config.get @hrx2_shape_attn_norm_rope_n_dims : index
+  %sec0 = config.get @hrx2_shape_attn_norm_rope_sec0 : index
+  %sec1 = config.get @hrx2_shape_attn_norm_rope_sec1 : index
+  %sec2 = config.get @hrx2_shape_attn_norm_rope_sec2 : index
+  %sec3 = config.get @hrx2_shape_attn_norm_rope_sec3 : index
+  %mode = config.get @hrx2_shape_attn_norm_rope_mode : index
+  %wg = config.get @hrx2_tuning_attn_norm_rope_workgroup_size : index
+
+  %ncols_b = index.assume %ncols [range(%ncols, 2, 512)] : index
+  %ne1_b = index.assume %ne1 [range(%ne1, 1, 1048576)] : index
+  %ne2_b = index.assume %ne2 [range(%ne2, 1, 1048576)] : index
+  %n_dims_b = index.assume %n_dims [range(%n_dims, 2, 512)] : index
+
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1073741823)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %src_global = buffer.assume.memory_space<global> %src0 : buffer
+  %weight_global = buffer.assume.memory_space<global> %weight : buffer
+  %pos_global = buffer.assume.memory_space<global> %pos : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src_na, %weight_na, %pos_na, %dst_na = buffer.assume.noalias %src_global, %weight_global, %pos_global, %dst_global : buffer, buffer, buffer, buffer
+  %src_view = buffer.view %src_na[%base] : buffer -> view<1073741824xf32>
+  %weight_view = buffer.view %weight_na[%base] : buffer -> view<65536xf32>
+  %pos_view = buffer.view %pos_na[%base] : buffer -> view<1073741824xi32>
+  %dst_view = buffer.view %dst_na[%base] : buffer -> view<1073741824xf32>
+
+  %n12 = index.mul %ne1_b, %ne2_b : index
+  %i3 = index.div %row, %n12 : index
+  %r12 = index.rem %row, %n12 : index
+  %i2 = index.div %r12, %ne1_b : index
+  %i1 = index.rem %r12, %ne1_b : index
+  %o1 = index.mul %i1, %s1 : index
+  %o2 = index.mul %i2, %s2 : index
+  %o3 = index.mul %i3, %s3 : index
+  %o12 = index.add %o1, %o2 : index
+  %src_base0 = index.add %o12, %o3 : index
+  %src_base = index.assume %src_base0 [range(%src_base0, 0, 1073741823)] : index
+
+  %sum = scf.for %col = [%lane to %ncols_b step %wg](%acc = %zero_f32 : f32) -> (f32) {
+    %si0 = index.add %src_base, %col : index
+    %si = index.assume %si0 [range(%si0, 0, 1073741823)] : index
+    %value = view.load %src_view[%si] : view<1073741824xf32> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %square : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %ncols_i32 = index.cast %ncols_b : index to i32
+  %ncols_f32 = scalar.sitofp %ncols_i32 : i32 to f32
+  %mean = scalar.divf<reassoc|nnan|ninf|nsz> %row_sum, %ncols_f32 : f32
+  %biased = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %rms_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased : f32
+
+  %half = index.div %ncols_b, %two : index
+  %active = index.cmp ult, %lane, %half : index
+  scf.if %active {
+    %ih = index.add %lane, %zero : index
+    %i0 = index.mul %ih, %two : index
+    %half_dims = index.div %n_dims_b, %two : index
+    %rotate = index.cmp ult, %i0, %n_dims_b : index
+
+    %sd01 = index.add %sec0, %sec1 : index
+    %sd012 = index.add %sd01, %sec2 : index
+    %sect_dims = index.add %sd012, %sec3 : index
+    %sector = index.rem %ih, %sect_dims : index
+    %m3 = index.rem %sector, %three : index
+    %s0lim = index.mul %sec0, %three : index
+    %s1lim = index.mul %sec1, %three : index
+    %s2lim = index.mul %sec2, %three : index
+    %is0 = index.cmp eq, %m3, %zero : index
+    %is1 = index.cmp eq, %m3, %one : index
+    %is2 = index.cmp eq, %m3, %two : index
+    %ok0 = index.cmp ult, %sector, %s0lim : index
+    %ok1 = index.cmp ult, %sector, %s1lim : index
+    %ok2 = index.cmp ult, %sector, %s2lim : index
+    %im_p0 = scf.select %ok0, %zero, %three : index
+    %im_a = scf.select %is0, %im_p0, %three : index
+    %im_p2 = scf.select %ok2, %two, %three : index
+    %im_b = scf.select %is2, %im_p2, %im_a : index
+    %im_p1 = scf.select %ok1, %one, %three : index
+    %plane_im = scf.select %is1, %im_p1, %im_b : index
+
+    %sec_w = index.add %sec0, %sec1 : index
+    %sec_w2 = index.add %sec_w, %sec2 : index
+    %lt0 = index.cmp ult, %sector, %sec0 : index
+    %ltw = index.cmp ult, %sector, %sec_w : index
+    %ltw2 = index.cmp ult, %sector, %sec_w2 : index
+    %mr_a = scf.select %ltw2, %two, %three : index
+    %mr_b = scf.select %ltw, %one, %mr_a : index
+    %plane_mr = scf.select %lt0, %zero, %mr_b : index
+    %is_im = index.cmp eq, %mode, %forty : index
+    %plane = scf.select %is_im, %plane_im, %plane_mr : index
+
+    %plane_off = index.mul %plane, %ne2_b : index
+    %pos_i0 = index.add %i2, %plane_off : index
+    %pos_i = index.assume %pos_i0 [range(%pos_i0, 0, 1073741823)] : index
+    %pos_i32 = view.load %pos_view[%pos_i] : view<1073741824xi32> -> i32
+    %pos_f = scalar.sitofp %pos_i32 : i32 to f32
+    %n_dims_i32 = index.cast %n_dims_b : index to i32
+    %n_dims_f32 = scalar.sitofp %n_dims_i32 : i32 to f32
+    %ih_i32 = index.cast %ih : index to i32
+    %ih_f = scalar.sitofp %ih_i32 : i32 to f32
+    %scaled_ih = scalar.mulf<nnan|ninf|nsz> %minus_two_f32, %ih_f : f32
+    %theta_exponent = scalar.divf<nnan|ninf|nsz> %scaled_ih, %n_dims_f32 : f32
+    %freq = scalar.powf<afn> %freq_base, %theta_exponent : f32
+    %theta_base = scalar.mulf<nnan|ninf|nsz> %pos_f, %freq : f32
+    %theta = scalar.mulf<nnan|ninf|nsz> %theta_base, %freq_scale : f32
+    %c0 = scalar.cosf<afn> %theta : f32
+    %s0v = scalar.sinf<afn> %theta : f32
+    %cos_theta = scalar.mulf<nnan|ninf|nsz> %c0, %attn_factor : f32
+    %sin_theta = scalar.mulf<nnan|ninf|nsz> %s0v, %attn_factor : f32
+
+    %off_a = scf.select %rotate, %ih, %i0 : index
+    %rot_b = index.add %ih, %half_dims : index
+    %pass_b = index.add %i0, %one : index
+    %off_b = scf.select %rotate, %rot_b, %pass_b : index
+    %sa0 = index.add %src_base, %off_a : index
+    %sa = index.assume %sa0 [range(%sa0, 0, 1073741823)] : index
+    %sb0 = index.add %src_base, %off_b : index
+    %sb = index.assume %sb0 [range(%sb0, 0, 1073741823)] : index
+
+    %raw0 = view.load %src_view[%sa] : view<1073741824xf32> -> f32
+    %raw1 = view.load %src_view[%sb] : view<1073741824xf32> -> f32
+    %rms0 = scalar.mulf<nnan|ninf|nsz> %raw0, %rms_scale : f32
+    %rms1 = scalar.mulf<nnan|ninf|nsz> %raw1, %rms_scale : f32
+    %w0 = view.load %weight_view[%off_a] : view<65536xf32> -> f32
+    %w1 = view.load %weight_view[%off_b] : view<65536xf32> -> f32
+    %x0 = scalar.mulf<nnan|ninf|nsz> %rms0, %w0 : f32
+    %x1 = scalar.mulf<nnan|ninf|nsz> %rms1, %w1 : f32
+
+    %t0 = scalar.mulf<nnan|ninf|nsz> %x0, %cos_theta : f32
+    %t1 = scalar.mulf<nnan|ninf|nsz> %x1, %sin_theta : f32
+    %rot0 = scalar.subf<nnan|ninf|nsz> %t0, %t1 : f32
+    %t2 = scalar.mulf<nnan|ninf|nsz> %x0, %sin_theta : f32
+    %t3 = scalar.mulf<nnan|ninf|nsz> %x1, %cos_theta : f32
+    %rot1 = scalar.addf<nnan|ninf|nsz> %t2, %t3 : f32
+    %out0 = scf.select %rotate, %rot0, %x0 : f32
+    %out1 = scf.select %rotate, %rot1, %x1 : f32
+
+    %db1 = index.mul %i1, %d1 : index
+    %db2 = index.mul %i2, %d2 : index
+    %db3 = index.mul %i3, %d3 : index
+    %db01 = index.add %db1, %db2 : index
+    %dst_row = index.add %db01, %db3 : index
+    %da0 = index.add %dst_row, %off_a : index
+    %da = index.assume %da0 [range(%da0, 0, 1073741823)] : index
+    %db0 = index.add %dst_row, %off_b : index
+    %db = index.assume %db0 [range(%db0, 0, 1073741823)] : index
+    view.store %out0, %dst_view[%da] : f32, view<1073741824xf32>
+    view.store %out1, %dst_view[%db] : f32, view<1073741824xf32>
+  }
+  kernel.return
+}
+
+// Specialized indexed F32-to-F16 row publication retained in this attention family.
+config.decl @hrx2_shape_set_rows_nc : %value: index where [range(%value, 1, 65536)]
+
+config.decl @hrx2_shape_set_rows_nr : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_shape_set_rows_ne02 : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_shape_set_rows_ne03 : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_shape_set_rows_ne1 : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_shape_set_rows_ne11 : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_shape_set_rows_ne12 : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @hrx2_stride_set_rows_src0_nb1 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_stride_set_rows_src0_nb2 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_stride_set_rows_src0_nb3 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_stride_set_rows_idx_nb0 : %value: index where [range(%value, 1, 64)]
+
+config.decl @hrx2_stride_set_rows_idx_nb1 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_stride_set_rows_idx_nb2 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_stride_set_rows_dst_nb1 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_stride_set_rows_dst_nb2 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_stride_set_rows_dst_nb3 : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @hrx2_tuning_set_rows_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_set_rows_f32_f16") @hrx2_set_rows_f32_f16() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %nc = config.get @hrx2_shape_set_rows_nc : index
+  %nr = config.get @hrx2_shape_set_rows_nr : index
+  %ne02 = config.get @hrx2_shape_set_rows_ne02 : index
+  %ne03 = config.get @hrx2_shape_set_rows_ne03 : index
+  %workgroup_size = config.get @hrx2_tuning_set_rows_workgroup_size : index
+  %total0 = index.mul %nc, %nr : index
+  %total1 = index.mul %total0, %ne02 : index
+  %total = index.mul %total1, %ne03 : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %idx: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %two = index.constant 2 : index
+  %nc = config.get @hrx2_shape_set_rows_nc : index
+  %nr = config.get @hrx2_shape_set_rows_nr : index
+  %ne02 = config.get @hrx2_shape_set_rows_ne02 : index
+  %ne03 = config.get @hrx2_shape_set_rows_ne03 : index
+  %ne1 = config.get @hrx2_shape_set_rows_ne1 : index
+  %ne11 = config.get @hrx2_shape_set_rows_ne11 : index
+  %ne12 = config.get @hrx2_shape_set_rows_ne12 : index
+  %src0_nb1 = config.get @hrx2_stride_set_rows_src0_nb1 : index
+  %src0_nb2 = config.get @hrx2_stride_set_rows_src0_nb2 : index
+  %src0_nb3 = config.get @hrx2_stride_set_rows_src0_nb3 : index
+  %idx_nb0 = config.get @hrx2_stride_set_rows_idx_nb0 : index
+  %idx_nb1 = config.get @hrx2_stride_set_rows_idx_nb1 : index
+  %idx_nb2 = config.get @hrx2_stride_set_rows_idx_nb2 : index
+  %dst_nb1 = config.get @hrx2_stride_set_rows_dst_nb1 : index
+  %dst_nb2 = config.get @hrx2_stride_set_rows_dst_nb2 : index
+  %dst_nb3 = config.get @hrx2_stride_set_rows_dst_nb3 : index
+  %workgroup_size = config.get @hrx2_tuning_set_rows_workgroup_size : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear_add = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %linear = index.assume %linear_add [range(%linear_add, 0, 1073741823)] : index
+  %total0 = index.mul %nc, %nr : index
+  %total1 = index.mul %total0, %ne02 : index
+  %total = index.mul %total1, %ne03 : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %idx_global = buffer.assume.memory_space<global> %idx : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %idx_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %idx_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<1073741824xf32>
+  %idx_view = buffer.view %idx_noalias[%base] : buffer -> view<268435456xi32>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xi16>
+
+  scf.if %in_bounds {
+    %i0 = index.rem %linear, %nc : index
+    %t1 = index.div %linear, %nc : index
+    %i = index.rem %t1, %nr : index
+    %t2 = index.div %t1, %nr : index
+    %i2 = index.rem %t2, %ne02 : index
+    %i3 = index.div %t2, %ne02 : index
+    %i11 = index.rem %i2, %ne11 : index
+    %i12 = index.rem %i3, %ne12 : index
+    %idx_e0_raw = index.mul %i, %idx_nb0 : index
+    %idx_e0 = index.assume %idx_e0_raw [range(%idx_e0_raw, 0, 134217727)] : index
+    %idx_m1_raw = index.mul %i11, %idx_nb1 : index
+    %idx_m1 = index.assume %idx_m1_raw [range(%idx_m1_raw, 0, 134217727)] : index
+    %idx_e1_raw = index.add %idx_m1, %idx_e0 : index
+    %idx_e1 = index.assume %idx_e1_raw [range(%idx_e1_raw, 0, 134217727)] : index
+    %idx_m2_raw = index.mul %i12, %idx_nb2 : index
+    %idx_m2 = index.assume %idx_m2_raw [range(%idx_m2_raw, 0, 134217727)] : index
+    %idx_e2_raw = index.add %idx_m2, %idx_e1 : index
+    %idx_e2 = index.assume %idx_e2_raw [range(%idx_e2_raw, 0, 134217727)] : index
+    %idx_element = index.assume %idx_e2 [range(%idx_e2, 0, 134217727)] : index
+    %idx_element_i32_raw = index.mul %idx_element, %two : index
+    %idx_element_i32 = index.assume %idx_element_i32_raw [range(%idx_element_i32_raw, 0, 268435455)] : index
+    %row_i32 = view.load %idx_view[%idx_element_i32] : view<268435456xi32> -> i32
+    %row = index.cast %row_i32 : i32 to index
+    %row_in_bounds = index.cmp ult, %row, %ne1 : index
+    scf.if %row_in_bounds {
+      %src0_m1_raw = index.mul %i, %src0_nb1 : index
+      %src0_m1 = index.assume %src0_m1_raw [range(%src0_m1_raw, 0, 1073741823)] : index
+      %src0_e1_raw = index.add %src0_m1, %i0 : index
+      %src0_e1 = index.assume %src0_e1_raw [range(%src0_e1_raw, 0, 1073741823)] : index
+      %src0_m2_raw = index.mul %i2, %src0_nb2 : index
+      %src0_m2 = index.assume %src0_m2_raw [range(%src0_m2_raw, 0, 1073741823)] : index
+      %src0_e2_raw = index.add %src0_m2, %src0_e1 : index
+      %src0_e2 = index.assume %src0_e2_raw [range(%src0_e2_raw, 0, 1073741823)] : index
+      %src0_m3_raw = index.mul %i3, %src0_nb3 : index
+      %src0_m3 = index.assume %src0_m3_raw [range(%src0_m3_raw, 0, 1073741823)] : index
+      %src0_e3_raw = index.add %src0_m3, %src0_e2 : index
+      %src0_e3 = index.assume %src0_e3_raw [range(%src0_e3_raw, 0, 1073741823)] : index
+      %src0_element = index.assume %src0_e3 [range(%src0_e3, 0, 1073741823)] : index
+      %value = view.load %src0_view[%src0_element] : view<1073741824xf32> -> f32
+      %dst_m1_raw = index.mul %row, %dst_nb1 : index
+      %dst_m1 = index.assume %dst_m1_raw [range(%dst_m1_raw, 0, 1073741823)] : index
+      %dst_e1_raw = index.add %dst_m1, %i0 : index
+      %dst_e1 = index.assume %dst_e1_raw [range(%dst_e1_raw, 0, 1073741823)] : index
+      %dst_m2_raw = index.mul %i2, %dst_nb2 : index
+      %dst_m2 = index.assume %dst_m2_raw [range(%dst_m2_raw, 0, 1073741823)] : index
+      %dst_e2_raw = index.add %dst_m2, %dst_e1 : index
+      %dst_e2 = index.assume %dst_e2_raw [range(%dst_e2_raw, 0, 1073741823)] : index
+      %dst_m3_raw = index.mul %i3, %dst_nb3 : index
+      %dst_m3 = index.assume %dst_m3_raw [range(%dst_m3_raw, 0, 1073741823)] : index
+      %dst_e3_raw = index.add %dst_m3, %dst_e2 : index
+      %dst_e3 = index.assume %dst_e3_raw [range(%dst_e3_raw, 0, 1073741823)] : index
+      %dst_element = index.assume %dst_e3 [range(%dst_e3, 0, 1073741823)] : index
+      %half = scalar.fptrunc %value : f32 to f16
+      %half_bits = scalar.bitcast %half : f16 to i16
+      view.store %half_bits, %dst_view[%dst_element] : i16, view<1073741824xi16>
+    }
+  }
+  kernel.return
+}

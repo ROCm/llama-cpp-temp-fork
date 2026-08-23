@@ -61,7 +61,8 @@ CommandProgramBindings GraphExecutor::bind_external_value_buffers(const GraphPro
             binding.identity   = value_binding.identity;
             binding.generation = value_binding.generation;
             binding.capacity   = value_binding.capacity;
-            binding.weight     = value_binding.weight;
+            binding.weight      = value_binding.weight;
+            binding.empty_value = ggml_nbytes(external.tensor) == 0;
         } else {
             status.log("external value %d is not bound", external.value.value);
         }
@@ -92,8 +93,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
-    const bool use_graph_prepared =
-        !lookup.program->has_prepared_program() || lookup.program->can_use_prepared_fast_path(graph);
+    const bool        use_graph_prepared = lookup.program->can_use_prepared_fast_path(graph);
     GraphProgramMatch binding_match = std::move(lookup.match);
     if (use_graph_prepared && lookup.program->has_prepared_program()) {
         binding_match = lookup.program->match_host_staging_graph(graph);

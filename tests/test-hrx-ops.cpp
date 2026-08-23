@@ -570,6 +570,48 @@ static void require_close(const std::vector<float> & actual,
     }
 }
 
+static void require_quantized_close(const std::vector<float> & actual,
+                                    const std::vector<float> & expected,
+                                    double                     max_relative_l2,
+                                    double                     min_cosine) {
+    REQUIRE(actual.size() == expected.size());
+    double squared_error    = 0.0;
+    double actual_norm      = 0.0;
+    double expected_norm    = 0.0;
+    double dot_product      = 0.0;
+    size_t non_finite_count = 0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        if (!std::isfinite(actual[i]) || !std::isfinite(expected[i])) {
+            if (non_finite_count < 16) {
+                std::fprintf(stderr, "non-finite quantized result at %zu: actual=%g expected=%g\n", i, actual[i],
+                             expected[i]);
+            }
+            ++non_finite_count;
+            continue;
+        }
+        const double actual_value   = actual[i];
+        const double expected_value = expected[i];
+        const double error          = actual_value - expected_value;
+        squared_error += error * error;
+        actual_norm += actual_value * actual_value;
+        expected_norm += expected_value * expected_value;
+        dot_product += actual_value * expected_value;
+    }
+    if (non_finite_count != 0) {
+        std::fprintf(stderr, "non-finite quantized result count: %zu/%zu\n", non_finite_count, actual.size());
+        std::abort();
+    }
+    REQUIRE(expected_norm > 0.0);
+    REQUIRE(actual_norm > 0.0);
+    const double relative_l2 = std::sqrt(squared_error / expected_norm);
+    const double cosine      = dot_product / std::sqrt(actual_norm * expected_norm);
+    if (relative_l2 > max_relative_l2 || cosine < min_cosine) {
+        std::fprintf(stderr, "quantized mismatch: relative_l2=%g cosine=%g limits=(%g,%g)\n", relative_l2, cosine,
+                     max_relative_l2, min_cosine);
+        std::abort();
+    }
+}
+
 static ggml_backend_t init_cpu_backend() {
     ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     REQUIRE(backend != nullptr);
@@ -1139,13 +1181,10 @@ static void run_qwen_flash_attention_case() {
     ggml_backend_free(backend);
 }
 
-static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t token_count) {
+static void run_qwen_full_cache_attention_metadata_scheduling_case(int64_t token_count) {
     constexpr int64_t kQueryHeadCount    = 32;
     constexpr int64_t kKeyValueHeadCount = 4;
     constexpr int64_t kFullCacheRowCount = 40960;
-    const size_t      active_mask_byte_count =
-        static_cast<size_t>(token_count) * static_cast<size_t>(token_count) * sizeof(ggml_fp16_t);
-
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
     params.no_alloc         = true;
@@ -1173,15 +1212,9 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
     ggml::hrx::DispatchMatch postprocess_match;
     match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
                             producer_index_for_tensor(imported.graph, attention.query_reshape), postprocess_match);
-    ggml::hrx::DispatchMatch flash_match;
-    match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
-                            producer_index_for_tensor(imported.graph, flash_output), flash_match);
-
     const ggml::hrx::Value * mask_value = imported.graph.values().find_tensor(attention.attention_mask);
     REQUIRE(mask_value != nullptr);
-    const ggml::hrx::CommandPlanAlternateValue * compact_mask =
-        ggml::hrx::find_alternate_value(plan, mask_value->id, GGML_TYPE_F16, active_mask_byte_count);
-    REQUIRE(compact_mask != nullptr);
+    REQUIRE(ggml::hrx::find_alternate_value(plan, mask_value->id) == nullptr);
 
     const ggml::hrx::Dispatch * metadata_dispatch = nullptr;
     for (const ggml::hrx::Dispatch & dispatch : plan.initialization_dispatches) {
@@ -1191,23 +1224,10 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
     }
     REQUIRE(metadata_dispatch != nullptr);
     REQUIRE(metadata_dispatch->kernel.integer_parameters.at("token_count") == token_count);
-    REQUIRE(metadata_dispatch->kernel.integer_parameters.at("context_capacity") == token_count);
+    REQUIRE(metadata_dispatch->kernel.integer_parameters.at("context_capacity") == kFullCacheRowCount);
     REQUIRE(metadata_dispatch->bindings.size() == 5);
-    REQUIRE(metadata_dispatch->bindings[4].value == compact_mask->alternate_value);
-    REQUIRE(metadata_dispatch->bindings[4].length == active_mask_byte_count);
-
-    const ggml::hrx::Dispatch * flash_dispatch = nullptr;
-    for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen3_moe_flash_attention_f32_f16_wmma") {
-            flash_dispatch = &dispatch;
-        }
-    }
-    REQUIRE(flash_dispatch != nullptr);
-    REQUIRE(flash_dispatch->kernel.integer_parameters.at("query_token_count") == token_count);
-    REQUIRE(flash_dispatch->kernel.integer_parameters.at("key_value_token_count") == token_count);
-    REQUIRE(flash_dispatch->bindings.size() == 5);
-    REQUIRE(flash_dispatch->bindings[3].value == compact_mask->alternate_value);
-    REQUIRE(flash_dispatch->bindings[3].length == active_mask_byte_count);
+    REQUIRE(metadata_dispatch->bindings[4].value == mask_value->id);
+    REQUIRE(metadata_dispatch->bindings[4].length == mask_value->byte_count);
 
     ggml_free(ctx);
 }
@@ -1426,7 +1446,6 @@ static void run_add_f32_cpu_reference_case() {
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
     REQUIRE(cpu_buffer != nullptr);
     REQUIRE(hrx_buffer != nullptr);
-
     const std::vector<float> a = make_pattern_f32(element_count, 1, 0.125f);
     const std::vector<float> b = make_pattern_f32(element_count, 2, 0.25f);
     set_tensor_pair_bytes(cpu_backend, cpu_a, hrx_backend, hrx_a, a.data(), a.size() * sizeof(float));
@@ -1574,7 +1593,8 @@ static void run_token_embedding_q4k_cpu_reference_case() {
 static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 const char * expected_kernel,
                                                 int64_t      token_count,
-                                                int64_t      output_size) {
+                                                int64_t      output_size,
+                                                bool         lossy_activation_quantization = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -1582,16 +1602,20 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     ggml_init_params params = {};
     params.mem_size         = static_cast<size_t>(32 * 1024 * 1024);
     params.no_alloc         = true;
-    ggml_context * cpu_ctx  = ggml_init(params);
-    ggml_context * hrx_ctx  = ggml_init(params);
+    ggml_context * cpu_ctx        = ggml_init(params);
+    ggml_context * cpu_weight_ctx = ggml_init(params);
+    ggml_context * hrx_ctx        = ggml_init(params);
+    ggml_context * hrx_weight_ctx = ggml_init(params);
     REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(cpu_weight_ctx != nullptr);
     REQUIRE(hrx_ctx != nullptr);
+    REQUIRE(hrx_weight_ctx != nullptr);
 
     constexpr int64_t input_size = kQwenHiddenSize;
-    ggml_tensor *     cpu_weight = ggml_new_tensor_2d(cpu_ctx, weight_type, input_size, output_size);
+    ggml_tensor *     cpu_weight = ggml_new_tensor_2d(cpu_weight_ctx, weight_type, input_size, output_size);
     ggml_tensor *     cpu_input  = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, input_size, token_count);
     ggml_tensor *     cpu_output = ggml_mul_mat(cpu_ctx, cpu_weight, cpu_input);
-    ggml_tensor *     hrx_weight = ggml_new_tensor_2d(hrx_ctx, weight_type, input_size, output_size);
+    ggml_tensor *     hrx_weight = ggml_new_tensor_2d(hrx_weight_ctx, weight_type, input_size, output_size);
     ggml_tensor *     hrx_input  = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, input_size, token_count);
     ggml_tensor *     hrx_output = ggml_mul_mat(hrx_ctx, hrx_weight, hrx_input);
     REQUIRE(cpu_output != nullptr);
@@ -1606,10 +1630,15 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
 
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
 
-    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
-    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    ggml_backend_buffer_t cpu_weight_buffer = ggml_backend_alloc_ctx_tensors(cpu_weight_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_weight_buffer = ggml_backend_alloc_ctx_tensors(hrx_weight_ctx, hrx_backend);
+    ggml_backend_buffer_t cpu_buffer        = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer        = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_weight_buffer != nullptr);
+    REQUIRE(hrx_weight_buffer != nullptr);
     REQUIRE(cpu_buffer != nullptr);
     REQUIRE(hrx_buffer != nullptr);
+    ggml_backend_buffer_set_usage(hrx_weight_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
     const std::vector<uint8_t> weight = make_quantized_rows(weight_type, input_size, output_size, 6);
     const std::vector<float>   input  = make_pattern_f32(input_size * token_count, 7, 0.01f);
@@ -1620,12 +1649,22 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
-    require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 3.0e-1f, 2.0e-2f);
+    const std::vector<float> actual   = get_f32_tensor(hrx_backend, hrx_output);
+    const std::vector<float> expected = get_f32_tensor(cpu_backend, cpu_output);
+    if (lossy_activation_quantization) {
+        require_quantized_close(actual, expected, 0.15, 0.99);
+    } else {
+        require_close(actual, expected, 3.0e-1f, 2.0e-2f);
+    }
 
+    ggml_backend_buffer_free(cpu_weight_buffer);
+    ggml_backend_buffer_free(hrx_weight_buffer);
     ggml_backend_buffer_free(cpu_buffer);
     ggml_backend_buffer_free(hrx_buffer);
     ggml_free(cpu_ctx);
+    ggml_free(cpu_weight_ctx);
     ggml_free(hrx_ctx);
+    ggml_free(hrx_weight_ctx);
     ggml_backend_free(cpu_backend);
     ggml_backend_free(hrx_backend);
 }
@@ -2002,8 +2041,10 @@ int main() {
     run_add_f32_cpu_reference_case();
     run_gather_add_f32_cpu_reference_case();
     run_token_embedding_q4k_cpu_reference_case();
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "qwen3_moe:qwen3_moe_dense_linear_q4k_f16_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "qwen3_moe:qwen3_moe_dense_linear_q6k_f16_wmma", 2, 128);
+    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "qwen3_moe:qwen3_moe_dense_linear_q4k_f16_wmma", 2, 127);
+    run_dense_matmul_cpu_reference_case(
+        GGML_TYPE_Q4_K, "qwen3_moe:qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x16x64_splitk2", 2, 128, true);
+    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "qwen3_moe:ggml_linear_q6k_q8_1_x4", 2, 128);
     run_endpoint_rmsnorm_q6k_q8_cpu_reference_case();
     run_attention_postprocess_cpu_reference_case();
     run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true);
@@ -2022,7 +2063,7 @@ int main() {
     run_qwen_decode_split_flash_attention_scheduling_case(4, 513);
     run_qwen_decode_attention_output_next_q8_scheduling_case(false);
     run_qwen_decode_attention_output_next_q8_scheduling_case(true);
-    run_qwen_full_cache_prefill_flash_attention_scheduling_case(16);
-    run_qwen_full_cache_prefill_flash_attention_scheduling_case(512);
+    run_qwen_full_cache_attention_metadata_scheduling_case(16);
+    run_qwen_full_cache_attention_metadata_scheduling_case(512);
     return 0;
 }

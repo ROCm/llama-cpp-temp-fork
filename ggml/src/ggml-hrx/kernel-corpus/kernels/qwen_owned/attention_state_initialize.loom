@@ -83,14 +83,14 @@ check.case public @qwen_attention_context_base_capture_case {
   %positions = check.generate.fill value(7) : tensor<1xi32>
   %control = check.generate.fill value(-1) : tensor<1xi32>
   %expected = check.generate.fill value(7) : tensor<1xi32>
-  kernel.launch @qwen_attention_context_base_capture[](%positions, %control) : [](tensor<1xi32>, tensor<1xi32>)
+  kernel.launch @qwen_attention_context_base_capture(%positions, %control) : (tensor<1xi32>, tensor<1xi32>)
   check.expect.equal actual(%control) expected(%expected) : tensor<1xi32>
   check.return
 }
 
 check.case public @qwen_attention_decode_state_initialize_case {
   %context_capacity = check.literal value(768) : index
-  %counter_count = check.literal value(56) : index
+  %completion_counter_count = check.literal value(56) : index
   %positions = check.generate.fill value(767) : tensor<1xi32>
   %key_cache_indices = check.generate.fill value(-1) : tensor<1xi64>
   %value_cache_indices = check.generate.fill value(-1) : tensor<1xi64>
@@ -99,7 +99,7 @@ check.case public @qwen_attention_decode_state_initialize_case {
   %expected_cache_indices = check.generate.fill value(767) : tensor<1xi64>
   %expected_mask = check.generate.fill value(0) : tensor<768xi16>
   %expected_counters = check.generate.fill value(0) : tensor<56xi32>
-  kernel.launch @qwen_attention_decode_state_initialize[%context_capacity, %counter_count](%context_capacity, %counter_count, %positions, %key_cache_indices, %value_cache_indices, %attention_mask, %counters) : [index, index](index, index, tensor<1xi32>, tensor<1xi64>, tensor<1xi64>, tensor<768xi16>, tensor<56xi32>)
+  kernel.launch @qwen_attention_decode_state_initialize[%context_capacity, %completion_counter_count](%context_capacity, %completion_counter_count, %positions, %key_cache_indices, %value_cache_indices, %attention_mask, %counters) : [index, index](index, index, tensor<1xi32>, tensor<1xi64>, tensor<1xi64>, tensor<768xi16>, tensor<56xi32>)
   check.expect.equal actual(%key_cache_indices) expected(%expected_cache_indices) : tensor<1xi64>
   check.expect.equal actual(%value_cache_indices) expected(%expected_cache_indices) : tensor<1xi64>
   check.expect.equal actual(%attention_mask) expected(%expected_mask) : tensor<768xi16>
