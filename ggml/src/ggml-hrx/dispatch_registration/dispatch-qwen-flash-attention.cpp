@@ -325,6 +325,7 @@ static bool match_qwen_flash_attention_direct_gate_dispatch(const DispatchMatchC
     const int64_t head_size             = query->ne[0];
     const int64_t query_token_count     = query->ne[1];
     const int64_t query_head_count      = query->ne[2];
+    const int64_t sequence_count        = query->ne[3];
     const int64_t key_value_token_count = key->ne[1];
     const int64_t key_value_head_count  = key->ne[2];
     const float   expected_scale        = 1.0f / std::sqrt(static_cast<float>(head_size));
@@ -333,9 +334,10 @@ static bool match_qwen_flash_attention_direct_gate_dispatch(const DispatchMatchC
         key_value_token_count > 32768 || key_value_token_count % 64 != 0 || key_value_head_count < 1 ||
         query_head_count % key_value_head_count != 0 || key->ne[0] != head_size || value->ne[0] != head_size ||
         value->ne[1] != key_value_token_count || value->ne[2] != key_value_head_count || fa_out->ne[0] != head_size ||
-        fa_out->ne[1] != query_head_count || fa_out->ne[2] != query_token_count || query->ne[3] != 1 ||
-        key->ne[3] != 1 || value->ne[3] != 1 || fa_out->ne[3] != 1 || mask->ne[0] != key_value_token_count ||
-        mask->ne[1] != query_token_count || mask->ne[2] != 1 || mask->ne[3] != 1 || query->nb[0] != sizeof(float) ||
+        fa_out->ne[1] != query_head_count || fa_out->ne[2] != query_token_count || sequence_count < 1 ||
+        sequence_count > 3 || key->ne[3] != sequence_count || value->ne[3] != sequence_count ||
+        fa_out->ne[3] != sequence_count || mask->ne[0] != key_value_token_count || mask->ne[1] != query_token_count ||
+        mask->ne[2] != 1 || mask->ne[3] != sequence_count || query->nb[0] != sizeof(float) ||
         key->nb[0] != sizeof(ggml_fp16_t) || value->nb[0] != sizeof(ggml_fp16_t) ||
         mask->nb[0] != sizeof(ggml_fp16_t) || fa_out->nb[0] != sizeof(float) ||
         !nearly_equal(params->scale, expected_scale) || !nearly_equal(params->max_bias, 0.0f) ||
@@ -353,7 +355,7 @@ static bool match_qwen_flash_attention_direct_gate_dispatch(const DispatchMatchC
         reshaped != nullptr ? single_consumer_with_op(context.graph, reshaped->id, GGML_OP_MUL) : nullptr;
     if (reshaped == nullptr || mul == nullptr || mul->inputs.size() != 2 || reshaped->type != GGML_TYPE_F32 ||
         !reshaped->contiguous || reshaped->ne[0] != head_size * query_head_count ||
-        reshaped->ne[1] != query_token_count || reshaped->ne[2] != 1 || reshaped->ne[3] != 1) {
+        reshaped->ne[1] != query_token_count * sequence_count || reshaped->ne[2] != 1 || reshaped->ne[3] != 1) {
         return false;
     }
 
@@ -382,8 +384,9 @@ static bool match_qwen_flash_attention_direct_gate_dispatch(const DispatchMatchC
     const Value *     output    = graph_value(context.graph, mul->output);
     if (gate_view == nullptr || gate_view->op != GGML_OP_VIEW || gate_view->inputs.size() != 1 || raw_gate == nullptr ||
         output == nullptr || raw_gate->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 ||
-        raw_gate->ne[0] != head_size || raw_gate->ne[1] != query_head_count || raw_gate->ne[2] != query_token_count ||
-        raw_gate->ne[3] != 1 || raw_gate->nb[0] != sizeof(float) || output->ne != reshaped->ne || !output->contiguous ||
+        raw_gate->ne[0] != head_size || raw_gate->ne[1] != query_head_count ||
+        raw_gate->ne[2] != query_token_count * sequence_count || raw_gate->ne[3] != 1 ||
+        raw_gate->nb[0] != sizeof(float) || output->ne != reshaped->ne || !output->contiguous ||
         single_consumer_with_op(context.graph, gate_view->output, GGML_OP_CONT) != cont) {
         return false;
     }
@@ -392,43 +395,6 @@ static bool match_qwen_flash_attention_direct_gate_dispatch(const DispatchMatchC
         return false;
     }
 
-    Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenFlashAttentionDirectGateKernel);
-    auto & config   = dispatch.kernel.compile_parameters;
-    config.emplace("hrx2_shape_fa_d", to_config_value(head_size));
-    config.emplace("hrx2_shape_fa_ntokens", to_config_value(query_token_count));
-    config.emplace("hrx2_shape_fa_nheads", to_config_value(query_head_count));
-    config.emplace("hrx2_shape_fa_nkv", to_config_value(key_value_token_count));
-    config.emplace("hrx2_shape_fa_gqa", to_config_value(query_head_count / key_value_head_count));
-    config.emplace("hrx2_shape_fa_q_stride_token", to_config_value(static_cast<int64_t>(query->nb[1] / sizeof(float))));
-    config.emplace("hrx2_shape_fa_q_stride_head", to_config_value(static_cast<int64_t>(query->nb[2] / sizeof(float))));
-    config.emplace("hrx2_shape_fa_k_stride_pos",
-                   to_config_value(static_cast<int64_t>(key->nb[1] / sizeof(ggml_fp16_t))));
-    config.emplace("hrx2_shape_fa_k_stride_head",
-                   to_config_value(static_cast<int64_t>(key->nb[2] / sizeof(ggml_fp16_t))));
-    config.emplace("hrx2_shape_fa_v_stride_pos",
-                   to_config_value(static_cast<int64_t>(value->nb[1] / sizeof(ggml_fp16_t))));
-    config.emplace("hrx2_shape_fa_v_stride_head",
-                   to_config_value(static_cast<int64_t>(value->nb[2] / sizeof(ggml_fp16_t))));
-    config.emplace("hrx2_shape_fa_mask_stride_token",
-                   to_config_value(static_cast<int64_t>(mask->nb[1] / sizeof(ggml_fp16_t))));
-    config.emplace("hrx2_shape_fa_dst_stride_head",
-                   to_config_value(static_cast<int64_t>(fa_out->nb[1] / sizeof(float))));
-    config.emplace("hrx2_shape_fa_dst_stride_token",
-                   to_config_value(static_cast<int64_t>(fa_out->nb[2] / sizeof(float))));
-    config.emplace("hrx2_shape_fa_gate_stride_head",
-                   to_config_value(static_cast<int64_t>(raw_gate->nb[1] / sizeof(float))));
-    config.emplace("hrx2_shape_fa_gate_stride_token",
-                   to_config_value(static_cast<int64_t>(raw_gate->nb[2] / sizeof(float))));
-    config.emplace("hrx2_fa_apply_gate", "1");
-    config.emplace("hrx2_fa_scale", std::to_string(params->scale));
-    dispatch.bindings.push_back({ query->id, 0, query->byte_count });
-    dispatch.bindings.push_back({ key->id, 0, key->byte_count });
-    dispatch.bindings.push_back({ value->id, 0, value->byte_count });
-    dispatch.bindings.push_back({ mask->id, 0, mask->byte_count });
-    dispatch.bindings.push_back({ raw_gate->id, 0, raw_gate->byte_count });
-    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
-
     dispatch_match.covered_nodes.push_back(context.root_index);
     for (const GraphNode * covered : { reshape, gate_view, cont, sigmoid, mul }) {
         if (!append_covered_node_index_once(context.graph, context.covered_nodes, covered,
@@ -436,7 +402,67 @@ static bool match_qwen_flash_attention_direct_gate_dispatch(const DispatchMatchC
             return false;
         }
     }
-    dispatch_match.dispatches.push_back(std::move(dispatch));
+    const size_t query_plane_bytes = static_cast<size_t>(query_head_count - 1) * query->nb[2] +
+                                     static_cast<size_t>(query_token_count - 1) * query->nb[1] +
+                                     static_cast<size_t>(head_size) * sizeof(float);
+    const size_t key_plane_bytes = static_cast<size_t>(key_value_head_count - 1) * key->nb[2] +
+                                   static_cast<size_t>(key_value_token_count - 1) * key->nb[1] +
+                                   static_cast<size_t>(head_size) * sizeof(ggml_fp16_t);
+    const size_t value_plane_bytes = static_cast<size_t>(key_value_head_count - 1) * value->nb[2] +
+                                     static_cast<size_t>(key_value_token_count - 1) * value->nb[1] +
+                                     static_cast<size_t>(head_size) * sizeof(ggml_fp16_t);
+    const size_t mask_plane_bytes = static_cast<size_t>(query_token_count - 1) * mask->nb[1] +
+                                    static_cast<size_t>(key_value_token_count) * sizeof(ggml_fp16_t);
+    const size_t gate_plane_bytes = static_cast<size_t>(query_token_count - 1) * raw_gate->nb[2] +
+                                    static_cast<size_t>(query_head_count - 1) * raw_gate->nb[1] +
+                                    static_cast<size_t>(head_size) * sizeof(float);
+    const size_t output_plane_bytes = static_cast<size_t>(query_token_count) * output->nb[1];
+
+    for (int64_t sequence = 0; sequence < sequence_count; ++sequence) {
+        Dispatch dispatch;
+        dispatch.kernel = make_kernel_specialization(kQwenFlashAttentionDirectGateKernel);
+        auto & config   = dispatch.kernel.compile_parameters;
+        config.emplace("hrx2_shape_fa_d", to_config_value(head_size));
+        config.emplace("hrx2_shape_fa_ntokens", to_config_value(query_token_count));
+        config.emplace("hrx2_shape_fa_nheads", to_config_value(query_head_count));
+        config.emplace("hrx2_shape_fa_nkv", to_config_value(key_value_token_count));
+        config.emplace("hrx2_shape_fa_gqa", to_config_value(query_head_count / key_value_head_count));
+        config.emplace("hrx2_shape_fa_q_stride_token",
+                       to_config_value(static_cast<int64_t>(query->nb[1] / sizeof(float))));
+        config.emplace("hrx2_shape_fa_q_stride_head",
+                       to_config_value(static_cast<int64_t>(query->nb[2] / sizeof(float))));
+        config.emplace("hrx2_shape_fa_k_stride_pos",
+                       to_config_value(static_cast<int64_t>(key->nb[1] / sizeof(ggml_fp16_t))));
+        config.emplace("hrx2_shape_fa_k_stride_head",
+                       to_config_value(static_cast<int64_t>(key->nb[2] / sizeof(ggml_fp16_t))));
+        config.emplace("hrx2_shape_fa_v_stride_pos",
+                       to_config_value(static_cast<int64_t>(value->nb[1] / sizeof(ggml_fp16_t))));
+        config.emplace("hrx2_shape_fa_v_stride_head",
+                       to_config_value(static_cast<int64_t>(value->nb[2] / sizeof(ggml_fp16_t))));
+        config.emplace("hrx2_shape_fa_mask_stride_token",
+                       to_config_value(static_cast<int64_t>(mask->nb[1] / sizeof(ggml_fp16_t))));
+        config.emplace("hrx2_shape_fa_dst_stride_head",
+                       to_config_value(static_cast<int64_t>(fa_out->nb[1] / sizeof(float))));
+        config.emplace("hrx2_shape_fa_dst_stride_token",
+                       to_config_value(static_cast<int64_t>(fa_out->nb[2] / sizeof(float))));
+        config.emplace("hrx2_shape_fa_gate_stride_head",
+                       to_config_value(static_cast<int64_t>(raw_gate->nb[1] / sizeof(float))));
+        config.emplace("hrx2_shape_fa_gate_stride_token",
+                       to_config_value(static_cast<int64_t>(raw_gate->nb[2] / sizeof(float))));
+        config.emplace("hrx2_fa_apply_gate", "1");
+        config.emplace("hrx2_fa_scale", std::to_string(params->scale));
+
+        const size_t sequence_offset = static_cast<size_t>(sequence);
+        dispatch.bindings.push_back({ query->id, sequence_offset * query->nb[3], query_plane_bytes });
+        dispatch.bindings.push_back({ key->id, sequence_offset * key->nb[3], key_plane_bytes });
+        dispatch.bindings.push_back({ value->id, sequence_offset * value->nb[3], value_plane_bytes });
+        dispatch.bindings.push_back({ mask->id, sequence_offset * mask->nb[3], mask_plane_bytes });
+        dispatch.bindings.push_back({ raw_gate->id,
+                                      sequence_offset * static_cast<size_t>(query_token_count) * raw_gate->nb[2],
+                                      gate_plane_bytes });
+        dispatch.bindings.push_back({ output->id, sequence_offset * output_plane_bytes, output_plane_bytes });
+        dispatch_match.dispatches.push_back(std::move(dispatch));
+    }
     return true;
 }
 

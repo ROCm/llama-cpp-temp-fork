@@ -10,12 +10,12 @@
 amdgpu.target<gfx11-generic> @ggml_gather_add_gfx11_wave64 {subgroup_size = 64}
 
 kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_add_f32") @ggml_gather_add_f32(%source_token_count: index, %output_token_count: index, %hidden_size: index) {
-  %one = index.constant 1 : index
-  %twofiftysix = index.constant 256 : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
   %rounding = index.constant 255 : index
   %rounded_width = index.add %hidden_size, %rounding : index
-  %column_workgroup_count = index.div %rounded_width, %twofiftysix : index
-  kernel.launch.config workgroups(%column_workgroup_count, %output_token_count, %one) workgroup_size(%twofiftysix, %one, %one) : index
+  %column_workgroup_count = index.div %rounded_width, %c256 : index
+  kernel.launch.config workgroups(%column_workgroup_count, %output_token_count, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%source_token_count: index, %output_token_count: index, %hidden_size: index, %attention: buffer, %residual: buffer, %output_ids: buffer, %output: buffer) {
   %source_count = index.assume %source_token_count [range(%source_token_count, 1, 2048)] : index
   %output_count = index.assume %output_token_count [range(%output_token_count, 1, 2048)] : index
@@ -23,18 +23,18 @@ kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_add_f32") @
   %column_workgroup = kernel.workgroup.id<x> : index
   %output_row0 = kernel.workgroup.id<y> : index
   %workitem = kernel.workitem.id<x> : index
-  %twofiftysix = index.constant 256 : index
+  %c256 = index.constant 256 : index
   %output_row, %launch_output_count = index.assume %output_row0, %output_count [lt(%output_row0, %output_count)] : index, index
-  %base0 = index.mul %column_workgroup, %twofiftysix : index
+  %base0 = index.mul %column_workgroup, %c256 : index
   %column0 = index.add %base0, %workitem : index
   %column = index.assume %column0 [range(%column0, 0, 65535)] : index
   %in_bounds = index.cmp ult, %column, %width : index
-  %zero_offset = index.constant 0 : offset
+  %c0_offset = index.constant 0 : offset
   %attention_noalias, %residual_noalias, %ids_noalias, %output_noalias = buffer.assume.noalias %attention, %residual, %output_ids, %output : buffer, buffer, buffer, buffer
-  %attention_view = buffer.view %attention_noalias[%zero_offset] : buffer -> view<[%source_count]x[%width]xf32>
-  %residual_view = buffer.view %residual_noalias[%zero_offset] : buffer -> view<[%source_count]x[%width]xf32>
-  %ids_view = buffer.view %ids_noalias[%zero_offset] : buffer -> view<[%launch_output_count]xi32>
-  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%launch_output_count]x[%width]xf32>
+  %attention_view = buffer.view %attention_noalias[%c0_offset] : buffer -> view<[%source_count]x[%width]xf32>
+  %residual_view = buffer.view %residual_noalias[%c0_offset] : buffer -> view<[%source_count]x[%width]xf32>
+  %ids_view = buffer.view %ids_noalias[%c0_offset] : buffer -> view<[%launch_output_count]xi32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_output_count]x[%width]xf32>
   scf.if %in_bounds {
     %safe_column = index.assume %column [lt(%column, %width)] : index
     %source_row_i32 = view.load %ids_view[%output_row] : view<[%launch_output_count]xi32> -> i32
@@ -50,15 +50,15 @@ kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_add_f32") @
 
 // Select source row 2 rather than a positional tail inferred by the host.
 check.case public @ggml_gather_add_noncontiguous_case {
-  %one = check.literal value(1) : index
-  %three = check.literal value(3) : index
-  %four = check.literal value(4) : index
+  %c1 = check.literal value(1) : index
+  %c3 = check.literal value(3) : index
+  %c4 = check.literal value(4) : index
   %attention = check.generate.iota offset(0.0) step(1.0) : tensor<3x4xf32>
   %residual = check.generate.fill value(100.0) : tensor<3x4xf32>
   %output_ids = check.generate.fill value(2) : tensor<1xi32>
   %output = check.generate.fill value(0.0) : tensor<1x4xf32>
   %expected = check.generate.iota offset(108.0) step(1.0) : tensor<1x4xf32>
-  kernel.launch @ggml_gather_add_f32[%three, %one, %four](%three, %one, %four, %attention, %residual, %output_ids, %output) : [index, index, index](index, index, index, tensor<3x4xf32>, tensor<3x4xf32>, tensor<1xi32>, tensor<1x4xf32>)
+  kernel.launch @ggml_gather_add_f32[%c3, %c1, %c4](%c3, %c1, %c4, %attention, %residual, %output_ids, %output) : [index, index, index](index, index, index, tensor<3x4xf32>, tensor<3x4xf32>, tensor<1xi32>, tensor<1x4xf32>)
   check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<1x4xf32>
   check.return
 }
@@ -66,12 +66,12 @@ check.case public @ggml_gather_add_noncontiguous_case {
 check.benchmark<@ggml_gather_add_noncontiguous_case> @ggml_gather_add_noncontiguous
 
 kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_f32") @ggml_gather_f32(%source_row_count: index, %output_row_count: index, %row_width: index) {
-  %one = index.constant 1 : index
-  %twofiftysix = index.constant 256 : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
   %rounding = index.constant 255 : index
   %rounded_width = index.add %row_width, %rounding : index
-  %column_workgroup_count = index.div %rounded_width, %twofiftysix : index
-  kernel.launch.config workgroups(%column_workgroup_count, %output_row_count, %one) workgroup_size(%twofiftysix, %one, %one) : index
+  %column_workgroup_count = index.div %rounded_width, %c256 : index
+  kernel.launch.config workgroups(%column_workgroup_count, %output_row_count, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%source_row_count: index, %output_row_count: index, %row_width: index, %source: buffer, %row_ids: buffer, %output: buffer) {
   %source_count = index.assume %source_row_count [range(%source_row_count, 1, 32768)] : index
   %output_count = index.assume %output_row_count [range(%output_row_count, 1, 2048)] : index
@@ -79,18 +79,18 @@ kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_f32") @ggml
   %column_workgroup = kernel.workgroup.id<x> : index
   %output_row0 = kernel.workgroup.id<y> : index
   %workitem = kernel.workitem.id<x> : index
-  %twofiftysix = index.constant 256 : index
+  %c256 = index.constant 256 : index
   %output_row, %launch_output_count = index.assume %output_row0, %output_count [lt(%output_row0, %output_count)] : index, index
-  %base0 = index.mul %column_workgroup, %twofiftysix : index
+  %base0 = index.mul %column_workgroup, %c256 : index
   %column0 = index.add %base0, %workitem : index
   %column = index.assume %column0 [range(%column0, 0, 33023)] : index
   %in_bounds = index.cmp ult, %column, %width : index
-  %zero_offset = index.constant 0 : offset
+  %c0_offset = index.constant 0 : offset
   %minimum_row_id = scalar.constant 0 : i32
   %source_noalias, %ids_noalias, %output_noalias = buffer.assume.noalias %source, %row_ids, %output : buffer, buffer, buffer
-  %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%source_count]x[%width]xf32>
-  %ids_view = buffer.view %ids_noalias[%zero_offset] : buffer -> view<[%launch_output_count]xi32>
-  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%launch_output_count]x[%width]xf32>
+  %source_view = buffer.view %source_noalias[%c0_offset] : buffer -> view<[%source_count]x[%width]xf32>
+  %ids_view = buffer.view %ids_noalias[%c0_offset] : buffer -> view<[%launch_output_count]xi32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_output_count]x[%width]xf32>
   scf.if %in_bounds {
     %safe_column = index.assume %column [lt(%column, %width)] : index
     %source_row_i32 = view.load %ids_view[%output_row] : view<[%launch_output_count]xi32> -> i32
@@ -109,14 +109,14 @@ kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_f32") @ggml
 }
 
 check.case public @ggml_gather_f32_noncontiguous_case {
-  %one = check.literal value(1) : index
-  %three = check.literal value(3) : index
-  %four = check.literal value(4) : index
+  %c1 = check.literal value(1) : index
+  %c3 = check.literal value(3) : index
+  %c4 = check.literal value(4) : index
   %source = check.generate.iota offset(0.0) step(1.0) : tensor<3x4xf32>
   %row_ids = check.generate.fill value(2) : tensor<1xi32>
   %output = check.generate.fill value(0.0) : tensor<1x4xf32>
   %expected = check.generate.iota offset(8.0) step(1.0) : tensor<1x4xf32>
-  kernel.launch @ggml_gather_f32[%three, %one, %four](%three, %one, %four, %source, %row_ids, %output) : [index, index, index](index, index, index, tensor<3x4xf32>, tensor<1xi32>, tensor<1x4xf32>)
+  kernel.launch @ggml_gather_f32[%c3, %c1, %c4](%c3, %c1, %c4, %source, %row_ids, %output) : [index, index, index](index, index, index, tensor<3x4xf32>, tensor<1xi32>, tensor<1x4xf32>)
   check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<1x4xf32>
   check.return
 }
@@ -138,31 +138,31 @@ check.case public @ggml_gather_f32_identity512_case {
 // Wide state rows use small row counts, keeping their flat address domain
 // bounded independently from the multi-row logits gather above.
 kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_f32_wide_row") @ggml_gather_f32_wide_row(%source_row_count: index, %output_row_count: index, %row_width: index) {
-  %one = index.constant 1 : index
-  %twofiftysix = index.constant 256 : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
   %rounding = index.constant 255 : index
   %rounded_width = index.add %row_width, %rounding : index
-  %column_workgroup_count = index.div %rounded_width, %twofiftysix : index
-  kernel.launch.config workgroups(%column_workgroup_count, %output_row_count, %one) workgroup_size(%twofiftysix, %one, %one) : index
+  %column_workgroup_count = index.div %rounded_width, %c256 : index
+  kernel.launch.config workgroups(%column_workgroup_count, %output_row_count, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%source_row_count: index, %output_row_count: index, %row_width: index, %source: buffer, %row_ids: buffer, %output: buffer) {
-  %source_count = index.assume %source_row_count [range(%source_row_count, 1, 32)] : index
+  %source_count = index.assume %source_row_count [range(%source_row_count, 1, 64)] : index
   %output_count = index.assume %output_row_count [range(%output_row_count, 1, 16)] : index
   %width = index.assume %row_width [range(%row_width, 32769, 1048576)] : index
   %column_workgroup = kernel.workgroup.id<x> : index
   %output_row0 = kernel.workgroup.id<y> : index
   %workitem = kernel.workitem.id<x> : index
-  %twofiftysix = index.constant 256 : index
+  %c256 = index.constant 256 : index
   %output_row, %launch_output_count = index.assume %output_row0, %output_count [lt(%output_row0, %output_count)] : index, index
-  %base0 = index.mul %column_workgroup, %twofiftysix : index
+  %base0 = index.mul %column_workgroup, %c256 : index
   %column0 = index.add %base0, %workitem : index
   %column = index.assume %column0 [range(%column0, 0, 1048831)] : index
   %in_bounds = index.cmp ult, %column, %width : index
-  %zero_offset = index.constant 0 : offset
+  %c0_offset = index.constant 0 : offset
   %minimum_row_id = scalar.constant 0 : i32
   %source_noalias, %ids_noalias, %output_noalias = buffer.assume.noalias %source, %row_ids, %output : buffer, buffer, buffer
-  %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%source_count]x[%width]xf32>
-  %ids_view = buffer.view %ids_noalias[%zero_offset] : buffer -> view<[%launch_output_count]xi32>
-  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%launch_output_count]x[%width]xf32>
+  %source_view = buffer.view %source_noalias[%c0_offset] : buffer -> view<[%source_count]x[%width]xf32>
+  %ids_view = buffer.view %ids_noalias[%c0_offset] : buffer -> view<[%launch_output_count]xi32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_output_count]x[%width]xf32>
   scf.if %in_bounds {
     %safe_column = index.assume %column [lt(%column, %width)] : index
     %source_row_i32 = view.load %ids_view[%output_row] : view<[%launch_output_count]xi32> -> i32
@@ -171,7 +171,7 @@ kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_f32_wide_ro
       %source_row0 = index.cast %source_row_i32 : i32 to index
       %source_row_valid = index.cmp ult, %source_row0, %source_count : index
       scf.if %source_row_valid {
-        %source_row = index.assume %source_row0 [range(%source_row0, 0, 31), lt(%source_row0, %source_count)] : index
+        %source_row = index.assume %source_row0 [range(%source_row0, 0, 63), lt(%source_row0, %source_count)] : index
         %value = view.load %source_view[%source_row, %safe_column] : view<[%source_count]x[%width]xf32> -> f32
         view.store %value, %output_view[%output_row, %safe_column] : f32, view<[%launch_output_count]x[%width]xf32>
       }
@@ -181,12 +181,12 @@ kernel.def target(@ggml_gather_add_gfx11_wave64) export("ggml_gather_f32_wide_ro
 }
 
 check.case public @ggml_gather_f32_wide_identity_case {
-  %one = check.literal value(1) : index
+  %c1 = check.literal value(1) : index
   %width = check.literal value(786432) : index
   %source = check.generate.iota offset(0.0) step(1.0) : tensor<1x786432xf32>
   %row_ids = check.generate.fill value(0) : tensor<1xi32>
   %output = check.generate.fill value(0.0) : tensor<1x786432xf32>
-  kernel.launch @ggml_gather_f32_wide_row[%one, %one, %width](%one, %one, %width, %source, %row_ids, %output) : [index, index, index](index, index, index, tensor<1x786432xf32>, tensor<1xi32>, tensor<1x786432xf32>)
+  kernel.launch @ggml_gather_f32_wide_row[%c1, %c1, %width](%c1, %c1, %width, %source, %row_ids, %output) : [index, index, index](index, index, index, tensor<1x786432xf32>, tensor<1xi32>, tensor<1x786432xf32>)
   check.expect.close actual(%output) expected(%source) atol(0.0) rtol(0.0) nan(same) : tensor<1x786432xf32>
   check.return
 }

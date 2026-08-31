@@ -37,6 +37,7 @@ struct LlmSymmetricI4ActivationLayout {
 };
 
 inline constexpr const char * kLlmSymmetricI4ActivationAlternateName = "llm.symmetric_i4.activation";
+inline constexpr const char * kLlmQ8SwiGluPlaneAlternateName         = "qwen.prefill.q8_swiglu_plane";
 
 constexpr size_t llm_align_up(size_t value, size_t alignment) {
     return (value + alignment - 1) / alignment * alignment;

@@ -97,7 +97,7 @@ def binding_access(symbol: str, name: str) -> str:
     """Authoritative launch ABI access contract; no name inference at runtime."""
     if symbol == "qwen3_quant_act_u4asym":
         return "write" if name in ("qs", "ds", "meta") else "read"
-    if symbol == "qwen3_quant_act_i4":
+    if symbol in ("qwen3_quant_act_i4", "qwen3_quant_act_i4_k64_plane"):
         return "write" if name in ("qs", "ds", "sums") else "read"
     if symbol in ("qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x128x64",
                   "qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x16x64"):
@@ -105,9 +105,11 @@ def binding_access(symbol: str, name: str) -> str:
     if symbol == "qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x16x64_splitk2":
         return "read_write" if name in ("dst", "partial", "completion_counters") else "read"
     if symbol in ("qwen3_moe_dense_linear_q4k_u4asym_prepacked_dual_grid_64x16x64",
-                  "qwen3_moe_dense_linear_symi4_i4_adjacent_dual_grid_m16n16_wg64"):
+                  "qwen3_moe_dense_linear_symi4_i4_adjacent_dual_grid_m16n16_wg64",
+                  "qwen3_moe_dense_linear_symi4_i4_adjacent_dual_c5_dot_wg32"):
         return "write" if name in ("gate_output", "up_output") else "read"
     if symbol in ("qwen3_moe_dense_linear_symi4_i4_adjacent_m16n16_wg64",
+                  "qwen3_moe_dense_linear_symi4_i4_adjacent_c5_dot_wg128",
                   "qwen3_moe_dense_linear_symi2_i4_adjacent_m16n16_wg64"):
         return "write" if name == "output" else "read"
     if symbol == "qwen3_moe_dense_linear_symi4_i4_adjacent_m16n16_wg64_splitk2":
@@ -124,8 +126,8 @@ def binding_access(symbol: str, name: str) -> str:
         return "write" if name == "dst" else "read"
     if symbol == "qwen3_moe_dense_linear_q4k_i4_dual_gate_up_swiglu_m32n32_u4out":
         return "write" if name in ("dst", "qout_qs", "qout_ds", "qout_sums") else "read"
-    if symbol == "qwen3_moe_dense_linear_symi4_i4_dual_gate_up_swiglu_m32n32_f32out":
-        return "write" if name == "dst" else "read"
+    if symbol == "qwen3_moe_dense_linear_symi4_i4_dual_gate_up_swiglu_m32n32_q8_plane":
+        return "write" if name == "q8_output" else "read"
     if symbol == "hrx2_concat_window_tail":
         return "write" if name in ("dst", "cache") else "read"
     if symbol in ("hrx2_ssm_conv_f32_state_materialized_decode_silu",

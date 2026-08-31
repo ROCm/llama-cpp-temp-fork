@@ -210,7 +210,7 @@ static bool match_gather_f32_dispatch(const DispatchMatchContext & context, Disp
     }
 
     const bool wide_row = row_width > 32768;
-    if (wide_row && (source_row_count > 32 || output_row_count > 16)) {
+    if (wide_row && (source_row_count > 64 || output_row_count > 16)) {
         return false;
     }
 

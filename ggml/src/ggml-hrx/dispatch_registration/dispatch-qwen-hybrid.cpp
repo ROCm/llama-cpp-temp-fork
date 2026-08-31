@@ -52,8 +52,8 @@ static constexpr KernelCatalogRef kQwenSwiGluSplitF32I4ParallelKernel =
 static constexpr KernelCatalogRef kQuantizeQ8_1X4Kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_quantize_q8_1_x4_f32");
 static constexpr KernelCatalogRef kQuantizeActI4Kernel  = GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_quant_act_i4");
 static constexpr KernelCatalogRef kQuantizeActU4AsymKernel = GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_quant_act_u4asym");
-static constexpr KernelCatalogRef kDenseSymmetricI4DualGateUpSwiGluF32Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_dual_gate_up_swiglu_m32n32_f32out");
+static constexpr KernelCatalogRef kDenseSymmetricI4DualGateUpSwiGluQ8PlaneKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_dual_gate_up_swiglu_m32n32_q8_plane");
 static constexpr KernelCatalogRef kDenseSymmetricI4DualGateUpSwiGluU4Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_i4_dual_gate_up_swiglu_m32n32_u4out");
 static constexpr KernelCatalogRef kDenseSymmetricI4DualGateUpSwiGluF16Kernel =
@@ -64,6 +64,8 @@ static constexpr KernelCatalogRef kDenseQ4KU4AsymDualGridLowRowKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_u4asym_prepacked_dual_grid_64x16x64");
 static constexpr KernelCatalogRef kDenseSymmetricI4AdjacentDualGridLowRowKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_adjacent_dual_grid_m16n16_wg64");
+static constexpr KernelCatalogRef kDenseSymmetricI4AdjacentDualC5DotKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_adjacent_dual_c5_dot_wg32");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -83,6 +85,11 @@ static bool is_f32(const Value * value) {
 
 static bool same_shape(const Value & lhs, const Value & rhs) {
     return lhs.ne == rhs.ne;
+}
+
+static bool has_contiguous_rows(const Value & value, int64_t column_count, int64_t row_count) {
+    return value.contiguous && column_count > 0 && row_count > 0 && value.ne[0] == column_count &&
+           value.element_count == column_count * row_count;
 }
 
 static const Value * root_alias_value(const Graph & graph, const Value * value) {
@@ -153,7 +160,7 @@ static bool has_prefill_q5_dense_consumer(const Graph & graph, const Value & val
 }
 
 static bool has_direct_low_row_symmetric_i4_consumer(const Graph & graph, const Value & value) {
-    if (!graph.has_index() || value.ne[0] <= 0 || value.ne[0] > 32768 || value.ne[0] % 64 != 0 ||
+    if (!graph.has_index() || !value.contiguous || value.ne[0] <= 0 || value.ne[0] > 32768 || value.ne[0] % 64 != 0 ||
         value.element_count <= 0 || value.element_count % value.ne[0] != 0) {
         return false;
     }
@@ -170,8 +177,8 @@ static bool has_direct_low_row_symmetric_i4_consumer(const Graph & graph, const 
         const Value * output = graph_value(graph, consumer->output);
         if (weight == nullptr || output == nullptr || output->type != GGML_TYPE_F32 || !weight->contiguous ||
             !output->contiguous || weight->ne[0] != value.ne[0] || weight->ne[1] != output->ne[0] ||
-            output->ne[1] != token_count || output->ne[2] != 1 || output->ne[3] != 1 || output->ne[0] <= 0 ||
-            output->ne[0] > 262144 || output->ne[0] % 64 != 0) {
+            output->ne[0] <= 0 || output->ne[0] > 262144 || output->ne[0] % 64 != 0 ||
+            output->element_count != output->ne[0] * token_count) {
             continue;
         }
         if (weight->type == GGML_TYPE_Q5_K || weight->type == GGML_TYPE_IQ4_XS ||
@@ -229,8 +236,9 @@ struct QwenHybridSsmPrefillMatch {
     const Value *                         filter = nullptr;
     const Value *                         output = nullptr;
     std::vector<QwenHybridSsmCacheUpdate> cache_updates;
-    int64_t                               hidden_size = 0;
-    int64_t                               token_count = 0;
+    int64_t                               hidden_size    = 0;
+    int64_t                               token_count    = 0;
+    int64_t                               sequence_count = 0;
 
     bool matched() const {
         return concat != nullptr && ssm != nullptr && silu != nullptr && state != nullptr && x != nullptr &&
@@ -255,22 +263,31 @@ static QwenHybridSsmPrefillMatch match_qwen_hybrid_ssm_prefill(const Graph & gra
     if (transpose == nullptr || transpose->op != GGML_OP_TRANSPOSE || transpose->inputs.size() != 1) {
         return {};
     }
-    const Value * x = root_alias_value(graph, graph_value(graph, transpose->inputs[0]));
-    if (!is_f32(x) || !x->contiguous) {
+    const Value * x_layout = graph_value(graph, transpose->inputs[0]);
+    const Value * x        = root_alias_value(graph, x_layout);
+    if (!is_f32(x_layout) || !x_layout->contiguous || !is_f32(x) || !x->contiguous) {
         return {};
     }
 
-    const int64_t hidden_size = x->ne[0];
-    const int64_t token_count = x->ne[1];
-    if (!is_supported_hidden_size(hidden_size) || token_count < 1 || token_count > 512 ||
-        !is_shape(*x, hidden_size, token_count, 1, 1) || !is_shape(*x_transposed, token_count, hidden_size, 1, 1) ||
-        !is_shape(*state, 3, hidden_size, 1, 1) || !is_shape(*window, token_count + 3, hidden_size, 1, 1)) {
+    const int64_t hidden_size    = x_layout->ne[0];
+    const int64_t token_count    = x_layout->ne[1];
+    const int64_t sequence_count = x_layout->ne[2];
+    if (!is_supported_hidden_size(hidden_size) || token_count < 1 || token_count > 512 || sequence_count < 1 ||
+        sequence_count > 3 || !is_shape(*x_layout, hidden_size, token_count, sequence_count, 1) ||
+        !is_shape(*x_transposed, token_count, hidden_size, sequence_count, 1) ||
+        !is_shape(*state, 3, hidden_size, sequence_count, 1) ||
+        !is_shape(*window, token_count + 3, hidden_size, sequence_count, 1)) {
         return {};
     }
-    if (x->nb[0] != sizeof(float) || x->nb[1] != static_cast<size_t>(hidden_size) * sizeof(float) ||
+    if (x_layout->nb[0] != sizeof(float) || x_layout->nb[1] != static_cast<size_t>(hidden_size) * sizeof(float) ||
+        x_layout->nb[2] != static_cast<size_t>(hidden_size * token_count) * sizeof(float) ||
         x_transposed->nb[0] != static_cast<size_t>(hidden_size) * sizeof(float) ||
-        x_transposed->nb[1] != sizeof(float) || state->nb[0] != sizeof(float) || state->nb[1] != 3 * sizeof(float) ||
-        window->nb[0] != sizeof(float) || window->nb[1] != static_cast<size_t>(token_count + 3) * sizeof(float)) {
+        x_transposed->nb[1] != sizeof(float) ||
+        x_transposed->nb[2] != static_cast<size_t>(hidden_size * token_count) * sizeof(float) ||
+        state->nb[0] != sizeof(float) || state->nb[1] != 3 * sizeof(float) ||
+        state->nb[2] != static_cast<size_t>(3 * hidden_size) * sizeof(float) || window->nb[0] != sizeof(float) ||
+        window->nb[1] != static_cast<size_t>(token_count + 3) * sizeof(float) ||
+        window->nb[2] != static_cast<size_t>((token_count + 3) * hidden_size) * sizeof(float)) {
         return {};
     }
 
@@ -300,8 +317,9 @@ static QwenHybridSsmPrefillMatch match_qwen_hybrid_ssm_prefill(const Graph & gra
     const Value * filter     = graph_value(graph, ssm->inputs[1]);
     const Value * ssm_output = graph_value(graph, ssm->output);
     if (!is_f32(filter) || !is_f32(ssm_output) || !filter->contiguous || !ssm_output->contiguous ||
-        !is_shape(*filter, 4, hidden_size, 1, 1) || !is_shape(*ssm_output, hidden_size, token_count, 1, 1) ||
-        filter->nb[0] != sizeof(float) || filter->nb[1] != 4 * sizeof(float)) {
+        !is_shape(*filter, 4, hidden_size, 1, 1) ||
+        !is_shape(*ssm_output, hidden_size, token_count, sequence_count, 1) || filter->nb[0] != sizeof(float) ||
+        filter->nb[1] != 4 * sizeof(float)) {
         return {};
     }
 
@@ -312,7 +330,8 @@ static QwenHybridSsmPrefillMatch match_qwen_hybrid_ssm_prefill(const Graph & gra
         }
         const Value * state_tail = graph_value(graph, state_tail_view->output);
         if (!is_f32(state_tail) || state_tail->alias_source != window->id ||
-            state_tail->storage_offset % sizeof(float) != 0 || !is_shape(*state_tail, 3, hidden_size, 1, 1)) {
+            state_tail->storage_offset % sizeof(float) != 0 ||
+            !is_shape(*state_tail, 3, hidden_size, sequence_count, 1)) {
             return {};
         }
         const int64_t source_row = static_cast<int64_t>(state_tail->storage_offset / sizeof(float));
@@ -331,7 +350,7 @@ static QwenHybridSsmPrefillMatch match_qwen_hybrid_ssm_prefill(const Graph & gra
         const GraphNode * cache_view   = cache_target != nullptr ? graph.index().producer(cache_target->id) : nullptr;
         if (!is_f32(cache_target) || !is_f32(cache) || cache_view == nullptr || cache_view->op != GGML_OP_VIEW ||
             cache_view->inputs.size() != 1 || !same_full_value_range(*cache_target, *cache) ||
-            cache->byte_count != static_cast<size_t>(3 * hidden_size) * sizeof(float)) {
+            cache->byte_count != static_cast<size_t>(3 * hidden_size * sequence_count) * sizeof(float)) {
             return {};
         }
         cache_updates.push_back({ state_tail_view, cache_view, cache_copy, state_tail, cache, source_row });
@@ -361,7 +380,7 @@ static QwenHybridSsmPrefillMatch match_qwen_hybrid_ssm_prefill(const Graph & gra
     const UnaryParams * unary  = op_params_as<UnaryParams>(silu->params);
     const Value *       output = graph_value(graph, silu->output);
     if (unary == nullptr || unary->op != GGML_UNARY_OP_SILU || !is_f32(output) || !output->contiguous ||
-        !is_shape(*output, hidden_size, token_count, 1, 1)) {
+        !is_shape(*output, hidden_size, token_count, sequence_count, 1)) {
         return {};
     }
 
@@ -377,16 +396,17 @@ static QwenHybridSsmPrefillMatch match_qwen_hybrid_ssm_prefill(const Graph & gra
         }
     }
 
-    match.concat        = node;
-    match.ssm           = ssm;
-    match.silu          = silu;
-    match.state         = state;
-    match.x             = x;
-    match.filter        = filter;
-    match.output        = output;
-    match.cache_updates = std::move(cache_updates);
-    match.hidden_size   = hidden_size;
-    match.token_count   = token_count;
+    match.concat         = node;
+    match.ssm            = ssm;
+    match.silu           = silu;
+    match.state          = state;
+    match.x              = x;
+    match.filter         = filter;
+    match.output         = output;
+    match.cache_updates  = std::move(cache_updates);
+    match.hidden_size    = hidden_size;
+    match.token_count    = token_count;
+    match.sequence_count = sequence_count;
     return match;
 }
 
@@ -428,7 +448,7 @@ struct QwenHybridGdnPrefillMatch {
     int64_t                        token_count    = 0;
     int64_t                        sequence_count = 0;
     int64_t                        snapshot_count = 0;
-    float                          l2_epsilon      = 0.0f;
+    float                          l2_epsilon     = 0.0f;
 
     bool matched() const {
         return !covered.empty() && alpha_raw != nullptr && beta_raw != nullptr && bias != nullptr &&
@@ -439,21 +459,23 @@ struct QwenHybridGdnPrefillMatch {
 };
 
 struct QwenHybridGdnProjectionPairMatch {
-    const GraphNode * alpha_node   = nullptr;
-    const GraphNode * beta_node    = nullptr;
-    const Value *     alpha_weight = nullptr;
-    const Value *     beta_weight  = nullptr;
-    const Value *     input        = nullptr;
-    const Value *     alpha_output = nullptr;
-    const Value *     beta_output  = nullptr;
-    ValueId           activation;
-    int64_t           input_size  = 0;
-    int64_t           output_size = 0;
-    int64_t           token_count = 0;
+    const GraphNode *         alpha_node   = nullptr;
+    const GraphNode *         beta_node    = nullptr;
+    const Value *             alpha_weight = nullptr;
+    const Value *             beta_weight  = nullptr;
+    const Value *             input        = nullptr;
+    const Value *             alpha_output = nullptr;
+    const Value *             beta_output  = nullptr;
+    ValueId                   activation;
+    int64_t                   input_size  = 0;
+    int64_t                   output_size = 0;
+    int64_t                   token_count = 0;
+    QwenHybridGdnPrefillMatch gdn;
 
     bool matched() const {
         return alpha_node != nullptr && beta_node != nullptr && alpha_weight != nullptr && beta_weight != nullptr &&
-               input != nullptr && alpha_output != nullptr && beta_output != nullptr && activation.value >= 0;
+               input != nullptr && alpha_output != nullptr && beta_output != nullptr && activation.value >= 0 &&
+               gdn.matched();
     }
 };
 
@@ -632,25 +654,27 @@ static DispatchBinding symmetric_i4_prefill_weight_binding(const Value & weight,
                                                            int64_t       input_size,
                                                            int64_t       output_size) {
     DispatchBinding binding;
-    binding.value         = weight.id;
-    binding.length        = static_cast<size_t>(output_size) * static_cast<size_t>(input_size / 256) * 144;
-    binding.layout        = kSymmetricI4K64Row64Layout;
-    binding.source_type   = weight.type;
-    binding.input_size    = input_size;
-    binding.output_size   = output_size;
-    binding.source_length = weight.byte_count;
+    const size_t    padded_output_size = (static_cast<size_t>(output_size) + 63) / 64 * 64;
+    binding.value                      = weight.id;
+    binding.length                     = padded_output_size * static_cast<size_t>(input_size / 256) * 144;
+    binding.layout                     = kSymmetricI4K32Row64Layout;
+    binding.source_type                = weight.type;
+    binding.input_size                 = input_size;
+    binding.output_size                = output_size;
+    binding.source_length              = weight.byte_count;
     return binding;
 }
 
 static DispatchBinding q4_k_i4_k32_weight_binding(const Value & weight, int64_t input_size, int64_t output_size) {
     DispatchBinding binding;
-    binding.value         = weight.id;
-    binding.length        = weight.byte_count;
-    binding.layout        = kQ4KI4K32Row64Layout;
-    binding.source_type   = GGML_TYPE_Q4_K;
-    binding.input_size    = input_size;
-    binding.output_size   = output_size;
-    binding.source_length = weight.byte_count;
+    const size_t    padded_output_size = (static_cast<size_t>(output_size) + 63) / 64 * 64;
+    binding.value                      = weight.id;
+    binding.length                     = padded_output_size * static_cast<size_t>(input_size / 256) * 144;
+    binding.layout                     = kQ4KI4K32Row64Layout;
+    binding.source_type                = GGML_TYPE_Q4_K;
+    binding.input_size                 = input_size;
+    binding.output_size                = output_size;
+    binding.source_length              = weight.byte_count;
     return binding;
 }
 
@@ -825,7 +849,7 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
     const int64_t sequence_count = raw_q->ne[3];
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
-        token_count < 1 || token_count > 512 || sequence_count != 1) {
+        token_count < 1 || token_count > 512 || sequence_count < 1 || sequence_count > 3) {
         return {};
     }
     const int64_t hidden_size = width * (2 * q_head_count + head_count);
@@ -836,11 +860,15 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
         !is_shape(*gate, 1, head_count, token_count, sequence_count) ||
         !is_shape(*beta, 1, head_count, token_count, sequence_count) ||
         !is_shape(*state, width, width, head_count, sequence_count) || gdn_output->ne[0] != width * head_count ||
-        gdn_output->ne[2] != 1 || gdn_output->ne[3] != 1 || gdn_output->ne[1] <= token_count ||
-        (gdn_output->ne[1] - token_count) % width != 0) {
+        gdn_output->ne[2] != 1 || gdn_output->ne[3] != 1) {
         return {};
     }
-    const int64_t snapshot_count = (gdn_output->ne[1] - token_count) / width;
+    const int64_t attention_rows = token_count * sequence_count;
+    const int64_t snapshot_rows  = width * sequence_count;
+    if (gdn_output->ne[1] <= attention_rows || (gdn_output->ne[1] - attention_rows) % snapshot_rows != 0) {
+        return {};
+    }
+    const int64_t snapshot_count = (gdn_output->ne[1] - attention_rows) / snapshot_rows;
     if (snapshot_count < 1 || snapshot_count > 5) {
         return {};
     }
@@ -895,8 +923,9 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
                                  nullptr;
     if (!is_f32(alpha_raw) || !is_f32(beta_raw) || !is_f32(alpha) || !is_f32(alpha_biased) || !is_f32(alpha_softplus) ||
         !is_f32(a_scale) || !is_f32(bias) || !is_f32(gate_flat) || !is_f32(beta_pre) ||
-        !is_shape(*alpha_raw, head_count, token_count, 1, 1) || !is_shape(*beta_raw, head_count, token_count, 1, 1) ||
-        !is_shape(*gate_flat, head_count, token_count, 1, 1) || !is_shape(*bias, head_count, 1, 1, 1) ||
+        !is_shape(*alpha_raw, head_count, token_count * sequence_count, 1, 1) ||
+        !is_shape(*beta_raw, head_count, token_count * sequence_count, 1, 1) ||
+        !is_shape(*gate_flat, head_count, token_count, sequence_count, 1) || !is_shape(*bias, head_count, 1, 1, 1) ||
         !is_shape(*a_scale, head_count, 1, 1, 1) || !alpha_raw->contiguous || !beta_raw->contiguous ||
         !bias->contiguous || !a_scale->contiguous || !gate_flat->contiguous || !beta->contiguous) {
         return {};
@@ -919,9 +948,10 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
     if (gdn_consumers.size() != 2) {
         return {};
     }
-    const GraphNode * new_state_view  = nullptr;
-    const GraphNode * attention_view  = nullptr;
-    const size_t      attention_bytes = static_cast<size_t>(width * head_count * token_count) * sizeof(float);
+    const GraphNode * new_state_view = nullptr;
+    const GraphNode * attention_view = nullptr;
+    const size_t      attention_bytes =
+        static_cast<size_t>(width * head_count * token_count * sequence_count) * sizeof(float);
     for (const GraphNode * consumer : gdn_consumers) {
         const Value * output =
             consumer != nullptr && consumer->op == GGML_OP_VIEW ? graph_value(graph, consumer->output) : nullptr;
@@ -942,6 +972,7 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
     }
     const int64_t written_snapshot_count = std::min(token_count, snapshot_count);
     const size_t  state_bytes            = static_cast<size_t>(width * width * head_count) * sizeof(float);
+    const size_t  state_plane_bytes      = state_bytes * static_cast<size_t>(sequence_count);
     const bool    single_snapshot_state =
         snapshot_count == 1 && is_shape(*new_state, width, width, head_count, sequence_count);
     const bool rollback_snapshot_state =
@@ -949,7 +980,7 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
     if ((!single_snapshot_state && !rollback_snapshot_state) || !new_state->contiguous ||
         new_state->storage != gdn_output->storage ||
         new_state->storage_offset != gdn_output->storage_offset + attention_bytes ||
-        new_state->byte_count != state_bytes * static_cast<size_t>(written_snapshot_count)) {
+        new_state->byte_count != state_plane_bytes * static_cast<size_t>(written_snapshot_count)) {
         return {};
     }
     const std::vector<const GraphNode *> & state_consumers = graph.index().consumers(new_state->id);
@@ -970,12 +1001,12 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
         cache->nb[2] > (std::numeric_limits<size_t>::max() - state_bytes) / snapshot_stride_count) {
         return {};
     }
-    const size_t required_cache_bytes = state_bytes + snapshot_stride_count * cache->nb[2];
+    const size_t required_cache_bytes = state_plane_bytes + snapshot_stride_count * cache->nb[2];
     if (cache_view->op != GGML_OP_VIEW || cache_view->inputs.size() != 1 ||
         !same_full_value_range(*cache_target, *cache) || cache->ne[0] != width * width * head_count ||
         cache->ne[1] != sequence_count || cache->ne[2] != written_snapshot_count || cache->ne[3] != 1 ||
         cache->nb[0] != sizeof(float) || cache->nb[1] != state_bytes ||
-        (written_snapshot_count > 1 && cache->nb[2] < state_bytes) || cache->byte_count < required_cache_bytes ||
+        (written_snapshot_count > 1 && cache->nb[2] < state_plane_bytes) || cache->byte_count < required_cache_bytes ||
         !distinct_storage(*new_state, *cache)) {
         return {};
     }
@@ -1008,7 +1039,7 @@ static QwenHybridGdnPrefillMatch match_qwen_hybrid_gdn_prefill(const Graph & gra
     match.token_count    = token_count;
     match.sequence_count = sequence_count;
     match.snapshot_count = snapshot_count;
-    match.l2_epsilon      = l2_params->eps;
+    match.l2_epsilon     = l2_params->eps;
     return match;
 }
 
@@ -1039,7 +1070,7 @@ static QwenHybridGdnProjectionPairMatch match_qwen_hybrid_gdn_projection_pair(co
 
     const GraphNode *               q_norm    = producer_with_op(context.graph, gdn->inputs[0], GGML_OP_L2_NORM);
     const QwenHybridGdnPrefillMatch gdn_match = match_qwen_hybrid_gdn_prefill(context.graph, q_norm);
-    if (!gdn_match.matched() || gdn_match.alpha_raw->id != alpha_node->output) {
+    if (!gdn_match.matched() || gdn_match.sequence_count != 1 || gdn_match.alpha_raw->id != alpha_node->output) {
         return {};
     }
 
@@ -1057,8 +1088,7 @@ static QwenHybridGdnProjectionPairMatch match_qwen_hybrid_gdn_projection_pair(co
     if (alpha_weight == nullptr || beta_weight == nullptr || input == nullptr || alpha_output == nullptr ||
         beta_output == nullptr || alpha_weight->type != GGML_TYPE_Q4_K || beta_weight->type != GGML_TYPE_Q4_K ||
         input->type != GGML_TYPE_F32 || alpha_output->type != GGML_TYPE_F32 || beta_output->type != GGML_TYPE_F32 ||
-        !is_dense_2d(*alpha_weight) || !is_dense_2d(*beta_weight) || !is_dense_2d(*input) ||
-        !is_dense_2d(*alpha_output) || !is_dense_2d(*beta_output) || !alpha_weight->contiguous ||
+        !is_dense_2d(*alpha_weight) || !is_dense_2d(*beta_weight) || !alpha_weight->contiguous ||
         !beta_weight->contiguous || !input->contiguous || !alpha_output->contiguous || !beta_output->contiguous ||
         alpha_weight->alias_source.value >= 0 || beta_weight->alias_source.value >= 0) {
         return {};
@@ -1066,14 +1096,18 @@ static QwenHybridGdnProjectionPairMatch match_qwen_hybrid_gdn_projection_pair(co
 
     const int64_t input_size  = alpha_weight->ne[0];
     const int64_t output_size = alpha_weight->ne[1];
-    const int64_t token_count = input->ne[1];
+    if (input_size <= 0 || input->element_count <= 0 || input->element_count % input_size != 0) {
+        return {};
+    }
+    const int64_t token_count   = input->element_count / input_size;
+    const int64_t gdn_row_count = gdn_match.token_count * gdn_match.sequence_count;
     if (input_size < 256 || input_size > 32768 || input_size % 256 != 0 || output_size < 1 || output_size > 256 ||
         token_count < 1 || token_count > 16 || input->ne[0] != input_size || beta_weight->ne[0] != input_size ||
-        beta_weight->ne[1] != output_size || output_size != gdn_match.head_count ||
-        token_count != gdn_match.token_count || !is_shape(*alpha_output, output_size, token_count, 1, 1) ||
-        !is_shape(*beta_output, output_size, token_count, 1, 1) || !distinct_storage(*alpha_weight, *beta_weight) ||
-        !distinct_storage(*alpha_weight, *input) || !distinct_storage(*beta_weight, *input) ||
-        !distinct_storage(*alpha_output, *beta_output) ||
+        beta_weight->ne[1] != output_size || output_size != gdn_match.head_count || token_count != gdn_row_count ||
+        !has_contiguous_rows(*alpha_output, output_size, token_count) ||
+        !has_contiguous_rows(*beta_output, output_size, token_count) ||
+        !distinct_storage(*alpha_weight, *beta_weight) || !distinct_storage(*alpha_weight, *input) ||
+        !distinct_storage(*beta_weight, *input) || !distinct_storage(*alpha_output, *beta_output) ||
         !has_mixed_quant_symmetric_i4_consumer(context.graph, *input, alpha_node, beta_node)) {
         return {};
     }
@@ -1097,6 +1131,7 @@ static QwenHybridGdnProjectionPairMatch match_qwen_hybrid_gdn_projection_pair(co
     match.input_size   = input_size;
     match.output_size  = output_size;
     match.token_count  = token_count;
+    match.gdn          = gdn_match;
     return match;
 }
 
@@ -1127,7 +1162,7 @@ static void configure_qwen_gdn_kernel(Dispatch &                        dispatch
     set_compile_parameter(dispatch.kernel, "hrx2_shape_gdn_sb2", match.beta->nb[2] / sizeof(float));
     set_compile_parameter(dispatch.kernel, "hrx2_shape_gdn_sb3", match.beta->nb[3] / sizeof(float));
     set_compile_parameter(dispatch.kernel, "hrx2_shape_gdn_neqk1", match.q_head_count);
-    set_compile_parameter(dispatch.kernel, "hrx2_shape_gdn_rq3", match.sequence_count);
+    set_compile_parameter(dispatch.kernel, "hrx2_shape_gdn_rq3", 1);
     set_float_compile_parameter(dispatch.kernel, "hrx2_gdn_l2_epsilon", match.l2_epsilon);
     set_compile_parameter(dispatch.kernel, "hrx2_tuning_gdn_workgroup_size", 256);
 }
@@ -1173,7 +1208,9 @@ static bool match_qwen_dense_mixed_gate_up_dispatch(const DispatchMatchContext &
         }
 
         Dispatch gate_up;
-        gate_up.kernel = make_kernel_specialization(kDenseSymmetricI4AdjacentDualGridLowRowKernel);
+        gate_up.kernel = make_kernel_specialization(match.token_count == 5 && match.input_size % 256 == 0 ?
+                                                        kDenseSymmetricI4AdjacentDualC5DotKernel :
+                                                        kDenseSymmetricI4AdjacentDualGridLowRowKernel);
         set_compile_parameter(gate_up.kernel, "qwen3.dense_q4_i4.lowrow.shape_k", match.input_size);
         set_compile_parameter(gate_up.kernel, "qwen3.dense_q4_i4.lowrow.shape_rows", match.output_size);
         set_compile_parameter(gate_up.kernel, "qwen3.dense_q4_i4.lowrow.shape_cols", match.token_count);
@@ -1385,7 +1422,7 @@ static bool match_qwen_dense_mixed_gate_up_dispatch(const DispatchMatchContext &
     dispatch_match.transients.push_back({ i4_payload, "qwen.prefill.i4_input", i4_payload_bytes, 256 });
     dispatch_match.transients.push_back({ i4_scales, "qwen.prefill.i4_scales", i4_metadata_bytes, 256 });
     dispatch_match.transients.push_back({ i4_sums, "qwen.prefill.i4_sums", i4_metadata_bytes, 256 });
-    dispatch_match.transients.push_back({ q8_output, "qwen.prefill.q8_swiglu", q8_output_bytes, 256 });
+    dispatch_match.transients.push_back({ q8_output, kLlmQ8SwiGluPlaneAlternateName, q8_output_bytes, 256 });
 
     Dispatch quantize_i4;
     quantize_i4.kernel = make_kernel_specialization(kQuantizeActI4Kernel);
@@ -1397,7 +1434,7 @@ static bool match_qwen_dense_mixed_gate_up_dispatch(const DispatchMatchContext &
     quantize_i4.bindings.push_back({ i4_sums, 0, i4_metadata_bytes });
 
     Dispatch gate_up;
-    gate_up.kernel = make_kernel_specialization(kDenseSymmetricI4DualGateUpSwiGluF32Kernel);
+    gate_up.kernel = make_kernel_specialization(kDenseSymmetricI4DualGateUpSwiGluQ8PlaneKernel);
     set_compile_parameter(gate_up.kernel, "qwen3.dense_q4_i4.dual_m32n32.shape_k", match.input_size);
     set_compile_parameter(gate_up.kernel, "qwen3.dense_q4_i4.dual_m32n32.shape_rows", match.output_size);
     set_compile_parameter(gate_up.kernel, "qwen3.dense_q4_i4.dual_m32n32.shape_cols", match.token_count);
@@ -1411,25 +1448,17 @@ static bool match_qwen_dense_mixed_gate_up_dispatch(const DispatchMatchContext &
     gate_up.bindings.push_back({ i4_scales, 0, i4_metadata_bytes });
     gate_up.bindings.push_back({ i4_sums, 0, i4_metadata_bytes });
 
-    Dispatch quantize_q8;
-    quantize_q8.kernel = make_kernel_specialization(kQuantizeQ8_1X4Kernel);
-    quantize_q8.kernel.integer_parameters.emplace("token_count", match.token_count);
-    quantize_q8.kernel.integer_parameters.emplace("input_size", match.output_size);
-    set_compile_parameter(quantize_q8.kernel, "ggml.quantize_q8_1_x4.group_capacity",
-                          match.token_count * ((match.output_size + 127) / 128));
-    quantize_q8.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-    quantize_q8.bindings.push_back({ q8_output, 0, q8_output_bytes });
+    gate_up.bindings.push_back({ q8_output, 0, q8_output_bytes });
 
     Status metadata_status;
     if (!dispatch_match.metadata.append_alternate_value(
-            { match.output->id, q8_output, GGML_TYPE_Q8_1, q8_output_bytes, "qwen.prefill.q8_swiglu" },
+            { match.output->id, q8_output, GGML_TYPE_Q8_1, q8_output_bytes, kLlmQ8SwiGluPlaneAlternateName },
             metadata_status)) {
         dispatch_match.status.append(metadata_status);
         return false;
     }
     dispatch_match.dispatches.push_back(std::move(quantize_i4));
     dispatch_match.dispatches.push_back(std::move(gate_up));
-    dispatch_match.dispatches.push_back(std::move(quantize_q8));
     return true;
 }
 
@@ -1443,6 +1472,7 @@ static bool match_qwen_hybrid_gdn_projection_pair_dispatch(const DispatchMatchCo
 
     const LlmSymmetricI4ActivationLayout activation_layout =
         llm_symmetric_i4_activation_layout(match.input_size, match.token_count);
+
     Dispatch projections;
     projections.kernel = make_kernel_specialization(kDenseSymmetricI4AdjacentDualGridLowRowKernel);
     set_compile_parameter(projections.kernel, "qwen3.dense_q4_i4.lowrow.shape_k", match.input_size);
@@ -1521,35 +1551,33 @@ static bool match_qwen_hybrid_ssm_prefill_dispatch(const DispatchMatchContext & 
         }
     }
 
-    if (match.token_count == 1 && match.cache_updates.size() == 1) {
-        Dispatch ssm;
-        ssm.kernel = make_kernel_specialization(kQwenSsmConvF32DecodeKernel);
-        set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_decode_d_inner", match.hidden_size);
-        set_compile_parameter(ssm.kernel, "hrx2_tuning_ssm_decode_workgroup_size", 256);
+    if (match.token_count != 512 || match.sequence_count != 1 || match.cache_updates.size() != 1) {
+        Dispatch   ssm;
+        const bool decode = match.token_count == 1 && match.sequence_count == 1 && match.cache_updates.size() == 1;
+        if (decode) {
+            ssm.kernel = make_kernel_specialization(kQwenSsmConvF32DecodeKernel);
+            set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_decode_d_inner", match.hidden_size);
+            set_compile_parameter(ssm.kernel, "hrx2_tuning_ssm_decode_workgroup_size", 256);
+        } else {
+            ssm.kernel = make_kernel_specialization(kQwenSsmConvF32RollbackKernel);
+            set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_rollback_d_inner", match.hidden_size);
+            set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_rollback_n_t", match.token_count);
+            set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_rollback_n_s", match.sequence_count);
+            set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_rollback_cache_count", match.cache_updates.size());
+            set_compile_parameter(ssm.kernel, "hrx2_tuning_ssm_rollback_workgroup_size", 256);
+        }
         ssm.bindings.push_back({ match.state->id, 0, match.state->byte_count });
         ssm.bindings.push_back({ match.x->id, 0, match.x->byte_count });
         ssm.bindings.push_back({ match.filter->id, 0, match.filter->byte_count });
         ssm.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-        ssm.bindings.push_back(
-            { match.cache_updates.front().cache->id, 0, match.cache_updates.front().cache->byte_count });
-        dispatch_match.dispatches.push_back(std::move(ssm));
-        return true;
-    }
-
-    if (match.token_count != 512 || match.cache_updates.size() != 1) {
-        Dispatch ssm;
-        ssm.kernel = make_kernel_specialization(kQwenSsmConvF32RollbackKernel);
-        set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_rollback_d_inner", match.hidden_size);
-        set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_rollback_n_t", match.token_count);
-        set_compile_parameter(ssm.kernel, "hrx2_shape_ssm_rollback_cache_count", match.cache_updates.size());
-        set_compile_parameter(ssm.kernel, "hrx2_tuning_ssm_rollback_workgroup_size", 256);
-        ssm.bindings.push_back({ match.state->id, 0, match.state->byte_count });
-        ssm.bindings.push_back({ match.x->id, 0, match.x->byte_count });
-        ssm.bindings.push_back({ match.filter->id, 0, match.filter->byte_count });
-        ssm.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-        for (size_t slot = 0; slot < 5; ++slot) {
-            const Value * cache = match.cache_updates[std::min(slot, match.cache_updates.size() - 1)].cache;
+        if (decode) {
+            const Value * cache = match.cache_updates.front().cache;
             ssm.bindings.push_back({ cache->id, 0, cache->byte_count });
+        } else {
+            for (size_t slot = 0; slot < 5; ++slot) {
+                const Value * cache = match.cache_updates[std::min(slot, match.cache_updates.size() - 1)].cache;
+                ssm.bindings.push_back({ cache->id, 0, cache->byte_count });
+            }
         }
         dispatch_match.dispatches.push_back(std::move(ssm));
         return true;
@@ -1609,14 +1637,16 @@ static bool match_qwen_hybrid_gdn_prefill_dispatch(const DispatchMatchContext & 
         }
     }
 
-    const size_t  rms_scales_bytes = static_cast<size_t>(match.head_count * match.token_count) * sizeof(float);
-    const ValueId rms_scales       = context.next_plan_value;
+    const size_t rms_scales_bytes =
+        static_cast<size_t>(match.head_count * match.token_count * match.sequence_count) * sizeof(float);
+    const ValueId rms_scales = context.next_plan_value;
     dispatch_match.transients.push_back({ rms_scales, "qwen_hybrid_gdn_rms_scales", rms_scales_bytes, 256 });
 
     Dispatch epilogue;
     epilogue.kernel = make_kernel_specialization(kQwenGdnProjectionEpilogueF32Kernel);
     set_compile_parameter(epilogue.kernel, "hrx2_gdn_epilogue_head_count", match.head_count);
-    set_compile_parameter(epilogue.kernel, "hrx2_gdn_epilogue_element_count", match.head_count * match.token_count);
+    set_compile_parameter(epilogue.kernel, "hrx2_gdn_epilogue_element_count",
+                          match.head_count * match.token_count * match.sequence_count);
     set_compile_parameter(epilogue.kernel, "hrx2_gdn_epilogue_workgroup_size", 256);
     epilogue.bindings.push_back({ match.alpha_raw->id, 0, match.alpha_raw->byte_count });
     epilogue.bindings.push_back({ match.beta_raw->id, 0, match.beta_raw->byte_count });
@@ -1657,11 +1687,13 @@ static bool match_qwen_hybrid_gdn_prefill_dispatch(const DispatchMatchContext & 
     const size_t  v_token_bytes          = static_cast<size_t>(match.width * match.head_count) * sizeof(float);
     const size_t  gate_token_bytes       = static_cast<size_t>(match.head_count) * sizeof(float);
     const size_t  attention_token_bytes  = v_token_bytes;
-    const size_t  state_bytes  = static_cast<size_t>(match.width * match.width * match.head_count) * sizeof(float);
-    const size_t  cache_stride = match.cache->nb[2];
+    const size_t  state_bytes       = static_cast<size_t>(match.width * match.width * match.head_count) * sizeof(float);
+    const size_t  state_plane_bytes = state_bytes * static_cast<size_t>(match.sequence_count);
+    const size_t  cache_stride      = match.cache->nb[2];
 
-    if (prefix_token_count == 0 && written_snapshot_count == match.token_count && match.token_count >= 2 &&
-        match.token_count <= 5 && cache_stride % sizeof(float) == 0) {
+    if (prefix_token_count == 0 && written_snapshot_count == match.token_count &&
+        (match.token_count >= 2 || match.sequence_count > 1) && match.token_count <= 5 &&
+        cache_stride % sizeof(float) == 0) {
         Dispatch gdn;
         gdn.kernel = make_kernel_specialization(kQwenGdnF32SnapshotRollbackKernel);
         configure_qwen_gdn_kernel(gdn, match, match.token_count);
@@ -1671,11 +1703,12 @@ static bool match_qwen_hybrid_gdn_prefill_dispatch(const DispatchMatchContext & 
         gdn.bindings.push_back({ match.v->id, 0, match.v->byte_count });
         gdn.bindings.push_back({ match.gate->id, 0, match.gate->byte_count });
         gdn.bindings.push_back({ match.beta->id, 0, match.beta->byte_count });
-        gdn.bindings.push_back({ match.state->id, 0, state_bytes });
+        gdn.bindings.push_back({ match.state->id, 0, state_plane_bytes });
         gdn.bindings.push_back(
-            { match.cache->id, 0, state_bytes + static_cast<size_t>(written_snapshot_count - 1) * cache_stride });
+            { match.cache->id, 0, state_plane_bytes + static_cast<size_t>(written_snapshot_count - 1) * cache_stride });
         gdn.bindings.push_back(
-            { match.gdn_output->id, 0, static_cast<size_t>(match.token_count) * attention_token_bytes });
+            { match.gdn_output->id, 0,
+              static_cast<size_t>(match.token_count * match.sequence_count) * attention_token_bytes });
         gdn.bindings.push_back({ rms_scales, 0, rms_scales_bytes });
         dispatch_match.dispatches.push_back(std::move(gdn));
         return true;

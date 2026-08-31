@@ -113,8 +113,8 @@ kernel.def export("hrx2_gated_delta_net_f32_sv128_qk_l2_full_head_rms_scale_snap
 template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gdn_sv128_qk_l2_full_head_rms_scale_body(%state_inplace: i1, %publish_snapshots: i1, %snapshot_stride: index, %scale: f32, %q: buffer, %k: buffer, %v: buffer, %g: buffer, %beta: buffer, %state_in: buffer, %dst: buffer, %rms_scales: buffer, %snapshot_cache: buffer) {
   %base = index.constant 0 : offset
   %rms_output_off = index.constant 0 : offset
-  %zero = index.constant 0 : index
-  %one = index.constant 1 : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
   %k0 = index.constant 0 : index
   %k1 = index.constant 1 : index
   %k2 = index.constant 2 : index
@@ -247,8 +247,8 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
   %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
   %wave0 = kernel.subgroup.id : index
   %wave = index.assume %wave0 [range(%wave0, 0, 7)] : index
-  %is_w0 = index.cmp eq, %wave, %zero : index
-  %is_w1 = index.cmp eq, %wave, %one : index
+  %is_w0 = index.cmp eq, %wave, %c0 : index
+  %is_w1 = index.cmp eq, %wave, %c1 : index
   %lane_live = index.cmp ult, %lane, %k16 : index
   %lane_lo = index.cmp ult, %lane, %k16 : index
 
@@ -375,7 +375,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
   // update's two 64-row halves split exactly on the lane-16 boundary.
   %row0_m = index.mul %lane, %k4 : index
   %row0 = index.assume %row0_m [range(%row0_m, 0, 124)] : index
-  %lc_s = scf.select %lane_live, %lane, %zero : index
+  %lc_s = scf.select %lane_live, %lane, %c0 : index
   %lc = index.assume %lc_s [range(%lc_s, 0, 15)] : index
   %rec_col0 = index.add %waveoff0, %lc : index
   %rec_col = index.assume %rec_col0 [range(%rec_col0, 0, 127)] : index
@@ -448,13 +448,13 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
   %fz8 = vector.constant 0.0 : vector<8xf32>
   %zv8 = vector.constant 0.0 : vector<8xf32>
   %fzh8 = vector.constant 0.0 : vector<8xf16>
-  %sf0, %sf1, %sf2, %sf3, %sf4, %sf5, %sf6, %sf7, %sf8, %sf9, %sf10, %sf11, %sf12, %sf13, %sf14, %sf15 = scf.for %ch = [%zero to %n_chunks step %one](%sa0 = %s0_init : vector<4xf32>, %sa1 = %s1_init : vector<4xf32>, %sa2 = %s2_init : vector<4xf32>, %sa3 = %s3_init : vector<4xf32>, %sa4 = %s4_init : vector<4xf32>, %sa5 = %s5_init : vector<4xf32>, %sa6 = %s6_init : vector<4xf32>, %sa7 = %s7_init : vector<4xf32>, %sa8 = %s8_init : vector<4xf32>, %sa9 = %s9_init : vector<4xf32>, %sa10 = %s10_init : vector<4xf32>, %sa11 = %s11_init : vector<4xf32>, %sa12 = %s12_init : vector<4xf32>, %sa13 = %s13_init : vector<4xf32>, %sa14 = %s14_init : vector<4xf32>, %sa15 = %s15_init : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %sf0, %sf1, %sf2, %sf3, %sf4, %sf5, %sf6, %sf7, %sf8, %sf9, %sf10, %sf11, %sf12, %sf13, %sf14, %sf15 = scf.for %ch = [%c0 to %n_chunks step %c1](%sa0 = %s0_init : vector<4xf32>, %sa1 = %s1_init : vector<4xf32>, %sa2 = %s2_init : vector<4xf32>, %sa3 = %s3_init : vector<4xf32>, %sa4 = %s4_init : vector<4xf32>, %sa5 = %s5_init : vector<4xf32>, %sa6 = %s6_init : vector<4xf32>, %sa7 = %s7_init : vector<4xf32>, %sa8 = %s8_init : vector<4xf32>, %sa9 = %s9_init : vector<4xf32>, %sa10 = %s10_init : vector<4xf32>, %sa11 = %s11_init : vector<4xf32>, %sa12 = %s12_init : vector<4xf32>, %sa13 = %s13_init : vector<4xf32>, %sa14 = %s14_init : vector<4xf32>, %sa15 = %s15_init : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
     %t0 = index.mul %ch, %k16 : index
     // Compute gate prefix and suffix decays once in log space to avoid product underflow.
     // Masked tokens use g=1 and beta=0; threads 0..15 each own one token.
     %gtok_r = index.add %t0, %tid : index
     %gtok_ok = index.cmp ult, %gtok_r, %n_tokens : index
-    %gtok_s = scf.select %gtok_ok, %gtok_r, %zero : index
+    %gtok_s = scf.select %gtok_ok, %gtok_r, %c0 : index
     %gtok = index.assume %gtok_s [range(%gtok_s, 0, 1048575)] : index
     scf.if %tid_lt_c {
       %gbi_m = index.mul %gtok, %sb2 : index
@@ -588,7 +588,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %stk0_r = index.add %t0, %k0 : index
     %stk0_s = index.add %stk0_r, %stokl : index
     %stk0_ok = index.cmp ult, %stk0_s, %n_tokens : index
-    %stk0_c = scf.select %stk0_ok, %stk0_s, %zero : index
+    %stk0_c = scf.select %stk0_ok, %stk0_s, %c0 : index
     %stk0 = index.assume %stk0_c [range(%stk0_c, 0, 1048575)] : index
     %sgi0_m = index.mul %stk0, %sq2 : index
     %sgi0_a = index.add %qk_base, %sgi0_m : index
@@ -1033,7 +1033,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt0_r = index.add %t0, %k0 : index
     %vlt0_s = index.add %vlt0_r, %vs_tok : index
     %vlt0_ok = index.cmp ult, %vlt0_s, %n_tokens : index
-    %vlt0_c = scf.select %vlt0_ok, %vlt0_s, %zero : index
+    %vlt0_c = scf.select %vlt0_ok, %vlt0_s, %c0 : index
     %vlt0 = index.assume %vlt0_c [range(%vlt0_c, 0, 1048575)] : index
     %vli0_m = index.mul %vlt0, %sv2 : index
     %vli0_a = index.add %v_head_base, %vli0_m : index
@@ -1048,7 +1048,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt1_r = index.add %t0, %k2 : index
     %vlt1_s = index.add %vlt1_r, %vs_tok : index
     %vlt1_ok = index.cmp ult, %vlt1_s, %n_tokens : index
-    %vlt1_c = scf.select %vlt1_ok, %vlt1_s, %zero : index
+    %vlt1_c = scf.select %vlt1_ok, %vlt1_s, %c0 : index
     %vlt1 = index.assume %vlt1_c [range(%vlt1_c, 0, 1048575)] : index
     %vli1_m = index.mul %vlt1, %sv2 : index
     %vli1_a = index.add %v_head_base, %vli1_m : index
@@ -1063,7 +1063,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt2_r = index.add %t0, %k4 : index
     %vlt2_s = index.add %vlt2_r, %vs_tok : index
     %vlt2_ok = index.cmp ult, %vlt2_s, %n_tokens : index
-    %vlt2_c = scf.select %vlt2_ok, %vlt2_s, %zero : index
+    %vlt2_c = scf.select %vlt2_ok, %vlt2_s, %c0 : index
     %vlt2 = index.assume %vlt2_c [range(%vlt2_c, 0, 1048575)] : index
     %vli2_m = index.mul %vlt2, %sv2 : index
     %vli2_a = index.add %v_head_base, %vli2_m : index
@@ -1078,7 +1078,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt3_r = index.add %t0, %k6 : index
     %vlt3_s = index.add %vlt3_r, %vs_tok : index
     %vlt3_ok = index.cmp ult, %vlt3_s, %n_tokens : index
-    %vlt3_c = scf.select %vlt3_ok, %vlt3_s, %zero : index
+    %vlt3_c = scf.select %vlt3_ok, %vlt3_s, %c0 : index
     %vlt3 = index.assume %vlt3_c [range(%vlt3_c, 0, 1048575)] : index
     %vli3_m = index.mul %vlt3, %sv2 : index
     %vli3_a = index.add %v_head_base, %vli3_m : index
@@ -1093,7 +1093,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt4_r = index.add %t0, %k8 : index
     %vlt4_s = index.add %vlt4_r, %vs_tok : index
     %vlt4_ok = index.cmp ult, %vlt4_s, %n_tokens : index
-    %vlt4_c = scf.select %vlt4_ok, %vlt4_s, %zero : index
+    %vlt4_c = scf.select %vlt4_ok, %vlt4_s, %c0 : index
     %vlt4 = index.assume %vlt4_c [range(%vlt4_c, 0, 1048575)] : index
     %vli4_m = index.mul %vlt4, %sv2 : index
     %vli4_a = index.add %v_head_base, %vli4_m : index
@@ -1108,7 +1108,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt5_r = index.add %t0, %k10 : index
     %vlt5_s = index.add %vlt5_r, %vs_tok : index
     %vlt5_ok = index.cmp ult, %vlt5_s, %n_tokens : index
-    %vlt5_c = scf.select %vlt5_ok, %vlt5_s, %zero : index
+    %vlt5_c = scf.select %vlt5_ok, %vlt5_s, %c0 : index
     %vlt5 = index.assume %vlt5_c [range(%vlt5_c, 0, 1048575)] : index
     %vli5_m = index.mul %vlt5, %sv2 : index
     %vli5_a = index.add %v_head_base, %vli5_m : index
@@ -1123,7 +1123,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt6_r = index.add %t0, %k12 : index
     %vlt6_s = index.add %vlt6_r, %vs_tok : index
     %vlt6_ok = index.cmp ult, %vlt6_s, %n_tokens : index
-    %vlt6_c = scf.select %vlt6_ok, %vlt6_s, %zero : index
+    %vlt6_c = scf.select %vlt6_ok, %vlt6_s, %c0 : index
     %vlt6 = index.assume %vlt6_c [range(%vlt6_c, 0, 1048575)] : index
     %vli6_m = index.mul %vlt6, %sv2 : index
     %vli6_a = index.add %v_head_base, %vli6_m : index
@@ -1138,7 +1138,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %vlt7_r = index.add %t0, %k14 : index
     %vlt7_s = index.add %vlt7_r, %vs_tok : index
     %vlt7_ok = index.cmp ult, %vlt7_s, %n_tokens : index
-    %vlt7_c = scf.select %vlt7_ok, %vlt7_s, %zero : index
+    %vlt7_c = scf.select %vlt7_ok, %vlt7_s, %c0 : index
     %vlt7 = index.assume %vlt7_c [range(%vlt7_c, 0, 1048575)] : index
     %vli7_m = index.mul %vlt7, %sv2 : index
     %vli7_a = index.add %v_head_base, %vli7_m : index
@@ -1159,7 +1159,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev0 = vector.extract %gq0[2] : vector<4xf32> -> f32
     %tk0_r = index.add %t0, %k0 : index
     %tk0_ok = index.cmp ult, %tk0_r, %n_tokens : index
-    %tk0_s = scf.select %tk0_ok, %tk0_r, %zero : index
+    %tk0_s = scf.select %tk0_ok, %tk0_r, %c0 : index
     %tk0 = index.assume %tk0_s [range(%tk0_s, 0, 1048575)] : index
     %av0_i = index.add %tile_row, %k0 : index
     %av0_b = index.assume %av0_i [range(%av0_i, 0, 271)] : index
@@ -1260,7 +1260,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev1 = vector.extract %gq1[2] : vector<4xf32> -> f32
     %tk1_r = index.add %t0, %k1 : index
     %tk1_ok = index.cmp ult, %tk1_r, %n_tokens : index
-    %tk1_s = scf.select %tk1_ok, %tk1_r, %zero : index
+    %tk1_s = scf.select %tk1_ok, %tk1_r, %c0 : index
     %tk1 = index.assume %tk1_s [range(%tk1_s, 0, 1048575)] : index
     %av1_i = index.add %tile_row, %k1 : index
     %av1_b = index.assume %av1_i [range(%av1_i, 0, 271)] : index
@@ -1357,7 +1357,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev2 = vector.extract %gq2[2] : vector<4xf32> -> f32
     %tk2_r = index.add %t0, %k2 : index
     %tk2_ok = index.cmp ult, %tk2_r, %n_tokens : index
-    %tk2_s = scf.select %tk2_ok, %tk2_r, %zero : index
+    %tk2_s = scf.select %tk2_ok, %tk2_r, %c0 : index
     %tk2 = index.assume %tk2_s [range(%tk2_s, 0, 1048575)] : index
     %av2_i = index.add %tile_row, %k2 : index
     %av2_b = index.assume %av2_i [range(%av2_i, 0, 271)] : index
@@ -1450,7 +1450,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev3 = vector.extract %gq3[2] : vector<4xf32> -> f32
     %tk3_r = index.add %t0, %k3 : index
     %tk3_ok = index.cmp ult, %tk3_r, %n_tokens : index
-    %tk3_s = scf.select %tk3_ok, %tk3_r, %zero : index
+    %tk3_s = scf.select %tk3_ok, %tk3_r, %c0 : index
     %tk3 = index.assume %tk3_s [range(%tk3_s, 0, 1048575)] : index
     %av3_i = index.add %tile_row, %k3 : index
     %av3_b = index.assume %av3_i [range(%av3_i, 0, 271)] : index
@@ -1539,7 +1539,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev4 = vector.extract %gq4[2] : vector<4xf32> -> f32
     %tk4_r = index.add %t0, %k4 : index
     %tk4_ok = index.cmp ult, %tk4_r, %n_tokens : index
-    %tk4_s = scf.select %tk4_ok, %tk4_r, %zero : index
+    %tk4_s = scf.select %tk4_ok, %tk4_r, %c0 : index
     %tk4 = index.assume %tk4_s [range(%tk4_s, 0, 1048575)] : index
     %av4_i = index.add %tile_row, %k4 : index
     %av4_b = index.assume %av4_i [range(%av4_i, 0, 271)] : index
@@ -1624,7 +1624,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev5 = vector.extract %gq5[2] : vector<4xf32> -> f32
     %tk5_r = index.add %t0, %k5 : index
     %tk5_ok = index.cmp ult, %tk5_r, %n_tokens : index
-    %tk5_s = scf.select %tk5_ok, %tk5_r, %zero : index
+    %tk5_s = scf.select %tk5_ok, %tk5_r, %c0 : index
     %tk5 = index.assume %tk5_s [range(%tk5_s, 0, 1048575)] : index
     %av5_i = index.add %tile_row, %k5 : index
     %av5_b = index.assume %av5_i [range(%av5_i, 0, 271)] : index
@@ -1705,7 +1705,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev6 = vector.extract %gq6[2] : vector<4xf32> -> f32
     %tk6_r = index.add %t0, %k6 : index
     %tk6_ok = index.cmp ult, %tk6_r, %n_tokens : index
-    %tk6_s = scf.select %tk6_ok, %tk6_r, %zero : index
+    %tk6_s = scf.select %tk6_ok, %tk6_r, %c0 : index
     %tk6 = index.assume %tk6_s [range(%tk6_s, 0, 1048575)] : index
     %av6_i = index.add %tile_row, %k6 : index
     %av6_b = index.assume %av6_i [range(%av6_i, 0, 271)] : index
@@ -1782,7 +1782,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev7 = vector.extract %gq7[2] : vector<4xf32> -> f32
     %tk7_r = index.add %t0, %k7 : index
     %tk7_ok = index.cmp ult, %tk7_r, %n_tokens : index
-    %tk7_s = scf.select %tk7_ok, %tk7_r, %zero : index
+    %tk7_s = scf.select %tk7_ok, %tk7_r, %c0 : index
     %tk7 = index.assume %tk7_s [range(%tk7_s, 0, 1048575)] : index
     %av7_i = index.add %tile_row, %k7 : index
     %av7_b = index.assume %av7_i [range(%av7_i, 0, 271)] : index
@@ -1855,7 +1855,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev8 = vector.extract %gq8[2] : vector<4xf32> -> f32
     %tk8_r = index.add %t0, %k8 : index
     %tk8_ok = index.cmp ult, %tk8_r, %n_tokens : index
-    %tk8_s = scf.select %tk8_ok, %tk8_r, %zero : index
+    %tk8_s = scf.select %tk8_ok, %tk8_r, %c0 : index
     %tk8 = index.assume %tk8_s [range(%tk8_s, 0, 1048575)] : index
     %av8_i = index.add %tile_row, %k8 : index
     %av8_b = index.assume %av8_i [range(%av8_i, 0, 271)] : index
@@ -1924,7 +1924,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev9 = vector.extract %gq9[2] : vector<4xf32> -> f32
     %tk9_r = index.add %t0, %k9 : index
     %tk9_ok = index.cmp ult, %tk9_r, %n_tokens : index
-    %tk9_s = scf.select %tk9_ok, %tk9_r, %zero : index
+    %tk9_s = scf.select %tk9_ok, %tk9_r, %c0 : index
     %tk9 = index.assume %tk9_s [range(%tk9_s, 0, 1048575)] : index
     %av9_i = index.add %tile_row, %k9 : index
     %av9_b = index.assume %av9_i [range(%av9_i, 0, 271)] : index
@@ -1989,7 +1989,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev10 = vector.extract %gq10[2] : vector<4xf32> -> f32
     %tk10_r = index.add %t0, %k10 : index
     %tk10_ok = index.cmp ult, %tk10_r, %n_tokens : index
-    %tk10_s = scf.select %tk10_ok, %tk10_r, %zero : index
+    %tk10_s = scf.select %tk10_ok, %tk10_r, %c0 : index
     %tk10 = index.assume %tk10_s [range(%tk10_s, 0, 1048575)] : index
     %av10_i = index.add %tile_row, %k10 : index
     %av10_b = index.assume %av10_i [range(%av10_i, 0, 271)] : index
@@ -2050,7 +2050,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev11 = vector.extract %gq11[2] : vector<4xf32> -> f32
     %tk11_r = index.add %t0, %k11 : index
     %tk11_ok = index.cmp ult, %tk11_r, %n_tokens : index
-    %tk11_s = scf.select %tk11_ok, %tk11_r, %zero : index
+    %tk11_s = scf.select %tk11_ok, %tk11_r, %c0 : index
     %tk11 = index.assume %tk11_s [range(%tk11_s, 0, 1048575)] : index
     %av11_i = index.add %tile_row, %k11 : index
     %av11_b = index.assume %av11_i [range(%av11_i, 0, 271)] : index
@@ -2107,7 +2107,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev12 = vector.extract %gq12[2] : vector<4xf32> -> f32
     %tk12_r = index.add %t0, %k12 : index
     %tk12_ok = index.cmp ult, %tk12_r, %n_tokens : index
-    %tk12_s = scf.select %tk12_ok, %tk12_r, %zero : index
+    %tk12_s = scf.select %tk12_ok, %tk12_r, %c0 : index
     %tk12 = index.assume %tk12_s [range(%tk12_s, 0, 1048575)] : index
     %av12_i = index.add %tile_row, %k12 : index
     %av12_b = index.assume %av12_i [range(%av12_i, 0, 271)] : index
@@ -2160,7 +2160,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev13 = vector.extract %gq13[2] : vector<4xf32> -> f32
     %tk13_r = index.add %t0, %k13 : index
     %tk13_ok = index.cmp ult, %tk13_r, %n_tokens : index
-    %tk13_s = scf.select %tk13_ok, %tk13_r, %zero : index
+    %tk13_s = scf.select %tk13_ok, %tk13_r, %c0 : index
     %tk13 = index.assume %tk13_s [range(%tk13_s, 0, 1048575)] : index
     %av13_i = index.add %tile_row, %k13 : index
     %av13_b = index.assume %av13_i [range(%av13_i, 0, 271)] : index
@@ -2209,7 +2209,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev14 = vector.extract %gq14[2] : vector<4xf32> -> f32
     %tk14_r = index.add %t0, %k14 : index
     %tk14_ok = index.cmp ult, %tk14_r, %n_tokens : index
-    %tk14_s = scf.select %tk14_ok, %tk14_r, %zero : index
+    %tk14_s = scf.select %tk14_ok, %tk14_r, %c0 : index
     %tk14 = index.assume %tk14_s [range(%tk14_s, 0, 1048575)] : index
     %av14_i = index.add %tile_row, %k14 : index
     %av14_b = index.assume %av14_i [range(%av14_i, 0, 271)] : index
@@ -2254,7 +2254,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %ev15 = vector.extract %gq15[2] : vector<4xf32> -> f32
     %tk15_r = index.add %t0, %k15 : index
     %tk15_ok = index.cmp ult, %tk15_r, %n_tokens : index
-    %tk15_s = scf.select %tk15_ok, %tk15_r, %zero : index
+    %tk15_s = scf.select %tk15_ok, %tk15_r, %c0 : index
     %tk15 = index.assume %tk15_s [range(%tk15_s, 0, 1048575)] : index
     %av15_i = index.add %tile_row, %k15 : index
     %av15_b = index.assume %av15_i [range(%av15_i, 0, 271)] : index
@@ -2345,14 +2345,14 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
 
     %rms_t_r = index.add %t0, %stokl : index
     %rms_t_ok = index.cmp ult, %rms_t_r, %n_tokens : index
-    %rms_t_s = scf.select %rms_t_ok, %rms_t_r, %zero : index
+    %rms_t_s = scf.select %rms_t_ok, %rms_t_r, %c0 : index
     %rms_t = index.assume %rms_t_s [range(%rms_t_s, 0, 1048575)] : index
     %rms_seq_m = index.mul %seq, %n_tokens : index
     %rms_seq_t = index.add %rms_seq_m, %rms_t : index
     %rms_head_m = index.mul %rms_seq_t, %n_heads : index
     %rms_row0 = index.add %rms_head_m, %h_idx : index
     %rms_row = index.assume %rms_row0 [range(%rms_row0, 0, 1073741823)] : index
-    %rms_lane0 = index.cmp eq, %srlane, %zero : index
+    %rms_lane0 = index.cmp eq, %srlane, %c0 : index
     scf.if %rms_lane0 {
       scf.if %rms_t_ok {
         view.store %rms_scale, %rms_scales_view[%rms_row] : f32, view<1073741824xf32>
@@ -2362,7 +2362,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow0_r = index.add %t0, %k0 : index
     %aow0_s = index.add %aow0_r, %vs_tok : index
     %aow0_ok = index.cmp ult, %aow0_s, %n_tokens : index
-    %aow0_c = scf.select %aow0_ok, %aow0_s, %zero : index
+    %aow0_c = scf.select %aow0_ok, %aow0_s, %c0 : index
     %aow0 = index.assume %aow0_c [range(%aow0_c, 0, 1048575)] : index
     %aol0_m = index.mul %vs_tok, %k128 : index
     %aol0_a = index.add %aol0_m, %vs_col : index
@@ -2379,7 +2379,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow1_r = index.add %t0, %k2 : index
     %aow1_s = index.add %aow1_r, %vs_tok : index
     %aow1_ok = index.cmp ult, %aow1_s, %n_tokens : index
-    %aow1_c = scf.select %aow1_ok, %aow1_s, %zero : index
+    %aow1_c = scf.select %aow1_ok, %aow1_s, %c0 : index
     %aow1 = index.assume %aow1_c [range(%aow1_c, 0, 1048575)] : index
     %aol1_m = index.mul %vs_tok, %k128 : index
     %aol1_a = index.add %aol1_m, %vs_col : index
@@ -2396,7 +2396,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow2_r = index.add %t0, %k4 : index
     %aow2_s = index.add %aow2_r, %vs_tok : index
     %aow2_ok = index.cmp ult, %aow2_s, %n_tokens : index
-    %aow2_c = scf.select %aow2_ok, %aow2_s, %zero : index
+    %aow2_c = scf.select %aow2_ok, %aow2_s, %c0 : index
     %aow2 = index.assume %aow2_c [range(%aow2_c, 0, 1048575)] : index
     %aol2_m = index.mul %vs_tok, %k128 : index
     %aol2_a = index.add %aol2_m, %vs_col : index
@@ -2413,7 +2413,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow3_r = index.add %t0, %k6 : index
     %aow3_s = index.add %aow3_r, %vs_tok : index
     %aow3_ok = index.cmp ult, %aow3_s, %n_tokens : index
-    %aow3_c = scf.select %aow3_ok, %aow3_s, %zero : index
+    %aow3_c = scf.select %aow3_ok, %aow3_s, %c0 : index
     %aow3 = index.assume %aow3_c [range(%aow3_c, 0, 1048575)] : index
     %aol3_m = index.mul %vs_tok, %k128 : index
     %aol3_a = index.add %aol3_m, %vs_col : index
@@ -2430,7 +2430,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow4_r = index.add %t0, %k8 : index
     %aow4_s = index.add %aow4_r, %vs_tok : index
     %aow4_ok = index.cmp ult, %aow4_s, %n_tokens : index
-    %aow4_c = scf.select %aow4_ok, %aow4_s, %zero : index
+    %aow4_c = scf.select %aow4_ok, %aow4_s, %c0 : index
     %aow4 = index.assume %aow4_c [range(%aow4_c, 0, 1048575)] : index
     %aol4_m = index.mul %vs_tok, %k128 : index
     %aol4_a = index.add %aol4_m, %vs_col : index
@@ -2447,7 +2447,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow5_r = index.add %t0, %k10 : index
     %aow5_s = index.add %aow5_r, %vs_tok : index
     %aow5_ok = index.cmp ult, %aow5_s, %n_tokens : index
-    %aow5_c = scf.select %aow5_ok, %aow5_s, %zero : index
+    %aow5_c = scf.select %aow5_ok, %aow5_s, %c0 : index
     %aow5 = index.assume %aow5_c [range(%aow5_c, 0, 1048575)] : index
     %aol5_m = index.mul %vs_tok, %k128 : index
     %aol5_a = index.add %aol5_m, %vs_col : index
@@ -2464,7 +2464,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow6_r = index.add %t0, %k12 : index
     %aow6_s = index.add %aow6_r, %vs_tok : index
     %aow6_ok = index.cmp ult, %aow6_s, %n_tokens : index
-    %aow6_c = scf.select %aow6_ok, %aow6_s, %zero : index
+    %aow6_c = scf.select %aow6_ok, %aow6_s, %c0 : index
     %aow6 = index.assume %aow6_c [range(%aow6_c, 0, 1048575)] : index
     %aol6_m = index.mul %vs_tok, %k128 : index
     %aol6_a = index.add %aol6_m, %vs_col : index
@@ -2481,7 +2481,7 @@ template.def<@qwen36.gdn.sv128_qk_l2_full_head_rms_scale.body> device @qwen36_gd
     %aow7_r = index.add %t0, %k14 : index
     %aow7_s = index.add %aow7_r, %vs_tok : index
     %aow7_ok = index.cmp ult, %aow7_s, %n_tokens : index
-    %aow7_c = scf.select %aow7_ok, %aow7_s, %zero : index
+    %aow7_c = scf.select %aow7_ok, %aow7_s, %c0 : index
     %aow7 = index.assume %aow7_c [range(%aow7_c, 0, 1048575)] : index
     %aol7_m = index.mul %vs_tok, %k128 : index
     %aol7_a = index.add %aol7_m, %vs_col : index
@@ -3503,10 +3503,10 @@ config.decl @hrx2_gdn_epilogue_workgroup_size : %value: index where [range(%valu
 
 kernel.def export("hrx2_gdn_projection_epilogue_f32") @hrx2_gdn_projection_epilogue_f32() {
   %unit = index.constant 1 : index
-  %minus_one = index.constant -1 : index
+  %cneg1 = index.constant -1 : index
   %elements = config.get @hrx2_gdn_epilogue_element_count : index
   %workgroup_size = config.get @hrx2_gdn_epilogue_workgroup_size : index
-  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounding = index.add %workgroup_size, %cneg1 : index
   %rounded = index.add %elements, %rounding : index
   %workgroups = index.div %rounded, %workgroup_size : index
   kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
@@ -3546,15 +3546,15 @@ kernel.def export("hrx2_gdn_projection_epilogue_f32") @hrx2_gdn_projection_epilo
     %beta = view.load %beta_view[%linear] : view<1048576xf32> -> f32
     %bias_value = view.load %bias_view[%head] : view<4096xf32> -> f32
     %a_value = view.load %a_scale_view[%head] : view<4096xf32> -> f32
-    %zero = scalar.constant 0.0 : f32
-    %one = scalar.constant 1.0 : f32
+    %c0 = scalar.constant 0.0 : f32
+    %c1 = scalar.constant 1.0 : f32
     %biased = scalar.addf<nnan|ninf|nsz> %alpha, %bias_value : f32
     %abs = scalar.absf %biased : f32
     %neg_abs = scalar.negf %abs : f32
     %exp = scalar.expf<afn> %neg_abs : f32
-    %one_plus = scalar.addf<nnan|ninf|nsz> %one, %exp : f32
+    %one_plus = scalar.addf<nnan|ninf|nsz> %c1, %exp : f32
     %log = scalar.logf<afn> %one_plus : f32
-    %positive = scalar.maxnumf %biased, %zero : f32
+    %positive = scalar.maxnumf %biased, %c0 : f32
     %softplus = scalar.addf<nnan|ninf|nsz> %positive, %log : f32
     %gate = scalar.mulf<nnan|ninf|nsz> %softplus, %a_value : f32
     %beta_result = scalar.logisticf<afn> %beta : f32
@@ -3578,9 +3578,9 @@ config.decl @hrx2_tuning_rms_norm_mul_vector_width : %value: index where [range(
 
 template.def<@hrx2.recurrent_rms_raw_gate_silu_mul.body> device @hrx2_recurrent_rms_raw_gate_silu_mul_body(%publish_f16: i1, %publish_i4: i1, %src: buffer, %weight: buffer, %raw_gate: buffer, %dst: buffer, %f16_dst: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
   %base = index.constant 0 : offset
-  %zero = index.constant 0 : index
-  %one = index.constant 1 : index
-  %two = index.constant 2 : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %c8 = index.constant 8 : index
   %c16 = index.constant 16 : index
@@ -3603,7 +3603,7 @@ template.def<@hrx2.recurrent_rms_raw_gate_silu_mul.body> device @hrx2_recurrent_
   %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
   %subgroup_lane0 = kernel.subgroup.lane.id : index
   %subgroup_lane = index.assume %subgroup_lane0 [range(%subgroup_lane0, 0, 31)] : index
-  %zero_f32 = scalar.constant 0.0 : f32
+  %c0_f32 = scalar.constant 0.0 : f32
   %amax_eps = scalar.constant 1.0000000000000001e-30 : f32
   %inv7 = scalar.constant 0.14285714285714285 : f32
   %f7 = scalar.constant 7.0 : f32
@@ -3642,11 +3642,11 @@ template.def<@hrx2.recurrent_rms_raw_gate_silu_mul.body> device @hrx2_recurrent_
   %lane_in_group = index.rem %subgroup_lane, %c16 : index
   %group_half = index.div %lane_in_group, %c8 : index
   %lane_in_half = index.rem %lane_in_group, %c8 : index
-  %is_scale_leader = index.cmp eq, %lane_in_group, %zero : index
-  %is_sum_leader = index.cmp eq, %lane_in_half, %zero : index
+  %is_scale_leader = index.cmp eq, %lane_in_group, %c0 : index
+  %is_sum_leader = index.cmp eq, %lane_in_half, %c0 : index
   %row_group_base = index.mul %row, %groups64_per_row : index
 
-  %sum_vec = scf.for %vcol = [%lane to %logical_cols step %workgroup_size](%acc = %zero_f32 : f32) -> (f32) {
+  %sum_vec = scf.for %vcol = [%lane to %logical_cols step %workgroup_size](%acc = %c0_f32 : f32) -> (f32) {
     %col0 = index.mul %vcol, %vector_width_bounded : index
     %linear0 = index.add %row_base, %col0 : index
     %linear = index.assume %linear0 [range(%linear0, 0, 67108863)] : index
@@ -3694,7 +3694,7 @@ template.def<@hrx2.recurrent_rms_raw_gate_silu_mul.body> device @hrx2_recurrent_
       %group_in_row = index.div %vcol, %c16 : index
       %group64 = index.add %row_group_base, %group_in_row : index
       %absolute_values = vector.absf %result : vector<[%vector_width_bounded]xf32>
-      %lane_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %absolute_values, %zero_f32 : vector<[%vector_width_bounded]xf32>, f32
+      %lane_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %absolute_values, %c0_f32 : vector<[%vector_width_bounded]xf32>, f32
       %max_x1_peer, %max_x1_valid = kernel.subgroup.shuffle<xor> %lane_max, %xor1, %shuffle_width : f32, i32, i32
       %max_x1 = scalar.maxnumf %lane_max, %max_x1_peer : f32
       %max_x2_peer, %max_x2_valid = kernel.subgroup.shuffle<xor> %max_x1, %xor2, %shuffle_width : f32, i32, i32
@@ -3706,8 +3706,8 @@ template.def<@hrx2.recurrent_rms_raw_gate_silu_mul.body> device @hrx2_recurrent_
       %amax = scalar.maxnumf %group_max, %amax_eps : f32
       %activation_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %amax, %inv7 : f32
       %activation_rscale = scalar.divf<reassoc|nnan|ninf|nsz> %f7, %amax : f32
-      %group32_base = index.mul %group64, %two : index
-      %group32_high = index.add %group32_base, %one : index
+      %group32_base = index.mul %group64, %c2 : index
+      %group32_high = index.add %group32_base, %c1 : index
       scf.if %is_scale_leader {
         view.store %activation_scale, %i4_ds_view[%group32_base] : f32, view<[%groups32]xf32>
         view.store %activation_scale, %i4_ds_view[%group32_high] : f32, view<[%groups32]xf32>
@@ -3733,7 +3733,7 @@ template.def<@hrx2.recurrent_rms_raw_gate_silu_mul.body> device @hrx2_recurrent_
       %word_index = index.add %word_base, %lane_in_group : index
       view.store %packed_i16, %i4_qs_view[%word_index] : i16, view<[%qs_halfwords]xi16>
 
-      %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %zero_f32 : vector<[%vector_width_bounded]xf32>, f32
+      %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %c0_f32 : vector<[%vector_width_bounded]xf32>, f32
       %sum_x1_peer, %sum_x1_valid = kernel.subgroup.shuffle<xor> %lane_sum, %xor1, %shuffle_width : f32, i32, i32
       %sum_x1 = scalar.addf<reassoc|nnan|nsz> %lane_sum, %sum_x1_peer : f32
       %sum_x2_peer, %sum_x2_valid = kernel.subgroup.shuffle<xor> %sum_x1, %xor2, %shuffle_width : f32, i32, i32
@@ -3812,16 +3812,16 @@ config.decl @hrx2_tuning_swiglu_workgroup_size : %value: index where [range(%val
 
 template.def<@hrx2.swiglu_split_f32.body> device @hrx2_swiglu_split_f32_body(%publish_f16: i1, %publish_i4: i1, %gate: buffer, %up: buffer, %dst: buffer, %f16_dst: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
   %base = index.constant 0 : offset
-  %zero = index.constant 0 : index
-  %one = index.constant 1 : index
-  %two = index.constant 2 : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %c8 = index.constant 8 : index
   %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
   %c256 = index.constant 256 : index
-  %zero_f32 = scalar.constant 0.0 : f32
+  %c0_f32 = scalar.constant 0.0 : f32
   %amax_eps = scalar.constant 1.0000000000000001e-30 : f32
   %inv7 = scalar.constant 0.14285714285714285 : f32
   %f7 = scalar.constant 7.0 : f32
@@ -3868,7 +3868,7 @@ template.def<@hrx2.swiglu_split_f32.body> device @hrx2_swiglu_split_f32_body(%pu
     %valid_group = index.cmp ult, %group64, %groups64 : index
     scf.if %valid_group {
       %group_element_base = index.mul %group64, %c64 : index
-      %lane_element_offset = index.mul %subgroup_lane, %two : index
+      %lane_element_offset = index.mul %subgroup_lane, %c2 : index
       %linear0 = index.add %group_element_base, %lane_element_offset : index
       %linear = index.assume %linear0 [range(%linear0, 0, 1073741822), mul(%linear0, 2)] : index
       %gate_values = vector.load %gate_view[%linear] : view<1073741824xf32> -> vector<2xf32>
@@ -3878,14 +3878,14 @@ template.def<@hrx2.swiglu_split_f32.body> device @hrx2_swiglu_split_f32_body(%pu
       vector.store %result, %dst_view[%linear] : vector<2xf32>, view<1073741824xf32>
 
       %absolute = vector.absf %result : vector<2xf32>
-      %lane_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %absolute, %zero_f32 : vector<2xf32>, f32
+      %lane_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %absolute, %c0_f32 : vector<2xf32>, f32
       %group_max = kernel.subgroup.reduce<maxnumf> %lane_max : f32
       %amax = scalar.maxnumf %group_max, %amax_eps : f32
       %scale = scalar.mulf<reassoc|nnan|ninf|nsz> %amax, %inv7 : f32
-      %is_scale_leader = index.cmp eq, %subgroup_lane, %zero : index
+      %is_scale_leader = index.cmp eq, %subgroup_lane, %c0 : index
       scf.if %is_scale_leader {
-        %group32_base = index.mul %group64, %two : index
-        %group32_high = index.add %group32_base, %one : index
+        %group32_base = index.mul %group64, %c2 : index
+        %group32_high = index.add %group32_base, %c1 : index
         view.store %scale, %i4_ds_view[%group32_base] : f32, view<[%groups32]xf32>
         view.store %scale, %i4_ds_view[%group32_high] : f32, view<[%groups32]xf32>
       }
@@ -3904,16 +3904,16 @@ template.def<@hrx2.swiglu_split_f32.body> device @hrx2_swiglu_split_f32_body(%pu
       %peer_shifted = scalar.shli %peer_pair, %shift8 : i32
       %packed_word = scalar.ori %packed_pair, %peer_shifted : i32
       %packed_i16 = scalar.trunci %packed_word : i32 to i16
-      %lane_pair = index.div %subgroup_lane, %two : index
+      %lane_pair = index.div %subgroup_lane, %c2 : index
       %word_base = index.mul %group64, %c16 : index
       %word_index = index.add %word_base, %lane_pair : index
-      %lane_in_pair = index.rem %subgroup_lane, %two : index
-      %is_word_leader = index.cmp eq, %lane_in_pair, %zero : index
+      %lane_in_pair = index.rem %subgroup_lane, %c2 : index
+      %is_word_leader = index.cmp eq, %lane_in_pair, %c0 : index
       scf.if %is_word_leader {
         view.store %packed_i16, %i4_qs_view[%word_index] : i16, view<[%qs_halfwords]xi16>
       }
 
-      %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %zero_f32 : vector<2xf32>, f32
+      %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %c0_f32 : vector<2xf32>, f32
       %sum_x1_peer, %sum_x1_valid = kernel.subgroup.shuffle<xor> %lane_sum, %xor1, %shuffle_width : f32, i32, i32
       %sum_x1 = scalar.addf<reassoc|nnan|nsz> %lane_sum, %sum_x1_peer : f32
       %sum_x2_peer, %sum_x2_valid = kernel.subgroup.shuffle<xor> %sum_x1, %xor2, %shuffle_width : f32, i32, i32
@@ -3924,9 +3924,9 @@ template.def<@hrx2.swiglu_split_f32.body> device @hrx2_swiglu_split_f32_body(%pu
       %group_sum = scalar.addf<reassoc|nnan|nsz> %sum_x4, %sum_x8_peer : f32
       %group_half = index.div %subgroup_lane, %c16 : index
       %lane_in_half = index.rem %subgroup_lane, %c16 : index
-      %is_sum_leader = index.cmp eq, %lane_in_half, %zero : index
+      %is_sum_leader = index.cmp eq, %lane_in_half, %c0 : index
       scf.if %is_sum_leader {
-        %group32_base = index.mul %group64, %two : index
+        %group32_base = index.mul %group64, %c2 : index
         %sum_index = index.add %group32_base, %group_half : index
         %sum_value = scalar.fptosi %group_sum : f32 to i32
         view.store %sum_value, %i4_sums_view[%sum_index] : i32, view<[%groups32]xi32>
@@ -3954,10 +3954,10 @@ template.def<@hrx2.swiglu_split_f32.body> device @hrx2_swiglu_split_f32_body(%pu
 
 kernel.def export("hrx2_swiglu_split_f32") @hrx2_swiglu_split_f32() {
   %unit = index.constant 1 : index
-  %minus_one = index.constant -1 : index
+  %cneg1 = index.constant -1 : index
   %elements = config.get @hrx2_shape_swiglu_element_count : index
   %workgroup_size = config.get @hrx2_tuning_swiglu_workgroup_size : index
-  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounding = index.add %workgroup_size, %cneg1 : index
   %rounded = index.add %elements, %rounding : index
   %workgroups = index.div %rounded, %workgroup_size : index
   kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
@@ -3971,10 +3971,10 @@ kernel.def export("hrx2_swiglu_split_f32") @hrx2_swiglu_split_f32() {
 
 kernel.def export("hrx2_swiglu_split_f32_f16") @hrx2_swiglu_split_f32_f16() {
   %unit = index.constant 1 : index
-  %minus_one = index.constant -1 : index
+  %cneg1 = index.constant -1 : index
   %elements = config.get @hrx2_shape_swiglu_element_count : index
   %workgroup_size = config.get @hrx2_tuning_swiglu_workgroup_size : index
-  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounding = index.add %workgroup_size, %cneg1 : index
   %rounded = index.add %elements, %rounding : index
   %workgroups = index.div %rounded, %workgroup_size : index
   kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index

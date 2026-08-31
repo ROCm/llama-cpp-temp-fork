@@ -368,13 +368,13 @@ kernel.def export("hrx2_rms_norm_strided_mul_rope_f32") @hrx2_rms_norm_strided_m
   kernel.launch.config workgroups(%rows, %unit, %unit) workgroup_size(%wg, %unit, %unit) : index
 } launch(%src0: buffer, %weight: buffer, %pos: buffer, %dst: buffer) {
   %base = index.constant 0 : offset
-  %zero = index.constant 0 : index
-  %one = index.constant 1 : index
-  %two = index.constant 2 : index
-  %three = index.constant 3 : index
-  %forty = index.constant 40 : index
-  %zero_f32 = scalar.constant 0.0 : f32
-  %minus_two_f32 = scalar.constant -2.0 : f32
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c40 = index.constant 40 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %cneg2_f32 = scalar.constant -2.0 : f32
   %eps = config.get @hrx2_attn_norm_rope_eps : f32
   %freq_base = config.get @hrx2_attn_norm_rope_freq_base : f32
   %freq_scale = config.get @hrx2_attn_norm_rope_freq_scale : f32
@@ -429,7 +429,7 @@ kernel.def export("hrx2_rms_norm_strided_mul_rope_f32") @hrx2_rms_norm_strided_m
   %src_base0 = index.add %o12, %o3 : index
   %src_base = index.assume %src_base0 [range(%src_base0, 0, 1073741823)] : index
 
-  %sum = scf.for %col = [%lane to %ncols_b step %wg](%acc = %zero_f32 : f32) -> (f32) {
+  %sum = scf.for %col = [%lane to %ncols_b step %wg](%acc = %c0_f32 : f32) -> (f32) {
     %si0 = index.add %src_base, %col : index
     %si = index.assume %si0 [range(%si0, 0, 1073741823)] : index
     %value = view.load %src_view[%si] : view<1073741824xf32> -> f32
@@ -444,33 +444,33 @@ kernel.def export("hrx2_rms_norm_strided_mul_rope_f32") @hrx2_rms_norm_strided_m
   %biased = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
   %rms_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased : f32
 
-  %half = index.div %ncols_b, %two : index
+  %half = index.div %ncols_b, %c2 : index
   %active = index.cmp ult, %lane, %half : index
   scf.if %active {
-    %ih = index.add %lane, %zero : index
-    %i0 = index.mul %ih, %two : index
-    %half_dims = index.div %n_dims_b, %two : index
+    %ih = index.add %lane, %c0 : index
+    %i0 = index.mul %ih, %c2 : index
+    %half_dims = index.div %n_dims_b, %c2 : index
     %rotate = index.cmp ult, %i0, %n_dims_b : index
 
     %sd01 = index.add %sec0, %sec1 : index
     %sd012 = index.add %sd01, %sec2 : index
     %sect_dims = index.add %sd012, %sec3 : index
     %sector = index.rem %ih, %sect_dims : index
-    %m3 = index.rem %sector, %three : index
-    %s0lim = index.mul %sec0, %three : index
-    %s1lim = index.mul %sec1, %three : index
-    %s2lim = index.mul %sec2, %three : index
-    %is0 = index.cmp eq, %m3, %zero : index
-    %is1 = index.cmp eq, %m3, %one : index
-    %is2 = index.cmp eq, %m3, %two : index
+    %m3 = index.rem %sector, %c3 : index
+    %s0lim = index.mul %sec0, %c3 : index
+    %s1lim = index.mul %sec1, %c3 : index
+    %s2lim = index.mul %sec2, %c3 : index
+    %is0 = index.cmp eq, %m3, %c0 : index
+    %is1 = index.cmp eq, %m3, %c1 : index
+    %is2 = index.cmp eq, %m3, %c2 : index
     %ok0 = index.cmp ult, %sector, %s0lim : index
     %ok1 = index.cmp ult, %sector, %s1lim : index
     %ok2 = index.cmp ult, %sector, %s2lim : index
-    %im_p0 = scf.select %ok0, %zero, %three : index
-    %im_a = scf.select %is0, %im_p0, %three : index
-    %im_p2 = scf.select %ok2, %two, %three : index
+    %im_p0 = scf.select %ok0, %c0, %c3 : index
+    %im_a = scf.select %is0, %im_p0, %c3 : index
+    %im_p2 = scf.select %ok2, %c2, %c3 : index
     %im_b = scf.select %is2, %im_p2, %im_a : index
-    %im_p1 = scf.select %ok1, %one, %three : index
+    %im_p1 = scf.select %ok1, %c1, %c3 : index
     %plane_im = scf.select %is1, %im_p1, %im_b : index
 
     %sec_w = index.add %sec0, %sec1 : index
@@ -478,10 +478,10 @@ kernel.def export("hrx2_rms_norm_strided_mul_rope_f32") @hrx2_rms_norm_strided_m
     %lt0 = index.cmp ult, %sector, %sec0 : index
     %ltw = index.cmp ult, %sector, %sec_w : index
     %ltw2 = index.cmp ult, %sector, %sec_w2 : index
-    %mr_a = scf.select %ltw2, %two, %three : index
-    %mr_b = scf.select %ltw, %one, %mr_a : index
-    %plane_mr = scf.select %lt0, %zero, %mr_b : index
-    %is_im = index.cmp eq, %mode, %forty : index
+    %mr_a = scf.select %ltw2, %c2, %c3 : index
+    %mr_b = scf.select %ltw, %c1, %mr_a : index
+    %plane_mr = scf.select %lt0, %c0, %mr_b : index
+    %is_im = index.cmp eq, %mode, %c40 : index
     %plane = scf.select %is_im, %plane_im, %plane_mr : index
 
     %plane_off = index.mul %plane, %ne2_b : index
@@ -493,19 +493,19 @@ kernel.def export("hrx2_rms_norm_strided_mul_rope_f32") @hrx2_rms_norm_strided_m
     %n_dims_f32 = scalar.sitofp %n_dims_i32 : i32 to f32
     %ih_i32 = index.cast %ih : index to i32
     %ih_f = scalar.sitofp %ih_i32 : i32 to f32
-    %scaled_ih = scalar.mulf<nnan|ninf|nsz> %minus_two_f32, %ih_f : f32
+    %scaled_ih = scalar.mulf<nnan|ninf|nsz> %cneg2_f32, %ih_f : f32
     %theta_exponent = scalar.divf<nnan|ninf|nsz> %scaled_ih, %n_dims_f32 : f32
     %freq = scalar.powf<afn> %freq_base, %theta_exponent : f32
     %theta_base = scalar.mulf<nnan|ninf|nsz> %pos_f, %freq : f32
     %theta = scalar.mulf<nnan|ninf|nsz> %theta_base, %freq_scale : f32
-    %c0 = scalar.cosf<afn> %theta : f32
+    %cos_theta_raw = scalar.cosf<afn> %theta : f32
     %s0v = scalar.sinf<afn> %theta : f32
-    %cos_theta = scalar.mulf<nnan|ninf|nsz> %c0, %attn_factor : f32
+    %cos_theta = scalar.mulf<nnan|ninf|nsz> %cos_theta_raw, %attn_factor : f32
     %sin_theta = scalar.mulf<nnan|ninf|nsz> %s0v, %attn_factor : f32
 
     %off_a = scf.select %rotate, %ih, %i0 : index
     %rot_b = index.add %ih, %half_dims : index
-    %pass_b = index.add %i0, %one : index
+    %pass_b = index.add %i0, %c1 : index
     %off_b = scf.select %rotate, %rot_b, %pass_b : index
     %sa0 = index.add %src_base, %off_a : index
     %sa = index.assume %sa0 [range(%sa0, 0, 1073741823)] : index
@@ -582,7 +582,7 @@ config.decl @hrx2_tuning_set_rows_workgroup_size : %value: index where [range(%v
 
 kernel.def export("hrx2_set_rows_f32_f16") @hrx2_set_rows_f32_f16() {
   %unit = index.constant 1 : index
-  %minus_one = index.constant -1 : index
+  %cneg1 = index.constant -1 : index
   %nc = config.get @hrx2_shape_set_rows_nc : index
   %nr = config.get @hrx2_shape_set_rows_nr : index
   %ne02 = config.get @hrx2_shape_set_rows_ne02 : index
@@ -591,14 +591,14 @@ kernel.def export("hrx2_set_rows_f32_f16") @hrx2_set_rows_f32_f16() {
   %total0 = index.mul %nc, %nr : index
   %total1 = index.mul %total0, %ne02 : index
   %total = index.mul %total1, %ne03 : index
-  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounding = index.add %workgroup_size, %cneg1 : index
   %rounded = index.add %total, %rounding : index
   %workgroups = index.div %rounded, %workgroup_size : index
   kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
 } launch(%src0: buffer, %idx: buffer, %dst: buffer) {
   %base = index.constant 0 : offset
-  %zero = index.constant 0 : index
-  %two = index.constant 2 : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
   %nc = config.get @hrx2_shape_set_rows_nc : index
   %nr = config.get @hrx2_shape_set_rows_nr : index
   %ne02 = config.get @hrx2_shape_set_rows_ne02 : index
@@ -658,7 +658,7 @@ kernel.def export("hrx2_set_rows_f32_f16") @hrx2_set_rows_f32_f16() {
     %idx_e2_raw = index.add %idx_m2, %idx_e1 : index
     %idx_e2 = index.assume %idx_e2_raw [range(%idx_e2_raw, 0, 134217727)] : index
     %idx_element = index.assume %idx_e2 [range(%idx_e2, 0, 134217727)] : index
-    %idx_element_i32_raw = index.mul %idx_element, %two : index
+    %idx_element_i32_raw = index.mul %idx_element, %c2 : index
     %idx_element_i32 = index.assume %idx_element_i32_raw [range(%idx_element_i32_raw, 0, 268435455)] : index
     %row_i32 = view.load %idx_view[%idx_element_i32] : view<268435456xi32> -> i32
     %row = index.cast %row_i32 : i32 to index

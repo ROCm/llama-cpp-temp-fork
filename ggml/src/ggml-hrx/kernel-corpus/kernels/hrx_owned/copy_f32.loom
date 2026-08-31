@@ -7,10 +7,10 @@ config.decl @tuning_copy_workgroup_size : %value: index where [range(%value, 32,
 
 kernel.def export("copy_f32_f32_contiguous_1d") @copy_f32_f32_contiguous_1d() {
   %unit = index.constant 1 : index
-  %minus_one = index.constant -1 : index
+  %cneg1 = index.constant -1 : index
   %n = config.get @shape_copy_n : index
   %workgroup_size = config.get @tuning_copy_workgroup_size : index
-  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounding = index.add %workgroup_size, %cneg1 : index
   %rounded = index.add %n, %rounding : index
   %workgroups = index.div %rounded, %workgroup_size : index
   kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index

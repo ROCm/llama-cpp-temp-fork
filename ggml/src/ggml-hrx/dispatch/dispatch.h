@@ -19,7 +19,10 @@ inline constexpr const char kQ6KPackedK256Row64Layout[] = "q6k-packed-k256-row64
 inline constexpr const char kQ6KPackedScaleRowLayout[]  = "q6k-packed-k256-row64-scalerow";
 inline constexpr const char kQ6KSymmetricI2PackedScaleRowLayout[] =
     "q6k-symi2-k32-eightgroups-shared4-plus-packed-scalerow";
+inline constexpr const char kQ5KSymmetricI8K256Row64Layout[]          = "q5k-symi8-k256-row64";
+inline constexpr const char kQ5KSymmetricI5K32Layout[]                = "q5k-symi5-k32-native-footprint";
 inline constexpr const char kSymmetricI4K64Row64Layout[]              = "symi4-k64-row64";
+inline constexpr const char kSymmetricI4K32Row64Layout[]              = "symi4-k32-row64";
 inline constexpr const char kSymmetricI4K32EightGroupsShared4Layout[] = "symi4-k32-eightgroups-shared4-payload-first";
 
 struct KernelSpecialization {

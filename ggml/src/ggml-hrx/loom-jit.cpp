@@ -389,12 +389,19 @@ hrx_status_t ggml_hrx_loom_jit_copy_artifact_bytes(const loomc_artifact_t * arti
     if (!artifact || !out_data || !out_size) {
         return hrx_ok_status();
     }
-    void * copy = ggml_hrx_loom_jit_malloc_copy(artifact->contents.data, artifact->contents.data_length, nul_terminate);
+    const loomc_allocator_t allocator = loomc_allocator_system();
+    loomc_byte_span_t       contents  = {};
+    loomc_status_t          status    = loomc_byte_sequence_clone(artifact->contents, allocator, &contents);
+    if (!loomc_status_is_ok(status)) {
+        return ggml_hrx_loom_jit_status_from_loom(status, "copy Loom artifact bytes");
+    }
+    void * copy = ggml_hrx_loom_jit_malloc_copy(contents.data, contents.data_length, nul_terminate);
+    loomc_allocator_free(allocator, const_cast<uint8_t *>(contents.data));
     if (!copy) {
         return ggml_hrx_loom_jit_make_status(HRX_STATUS_OUT_OF_MEMORY, "failed to copy Loom artifact");
     }
     *out_data = copy;
-    *out_size = artifact->contents.data_length;
+    *out_size = contents.data_length;
     return hrx_ok_status();
 }
 
@@ -411,8 +418,7 @@ hrx_status_t ggml_hrx_loom_jit_evaluate_launch_config(const loomc_artifact_t *  
     }
 
     LoomLaunchConfigProgram program;
-    loomc_status_t          status =
-        loomc_launch_config_program_load(artifact, nullptr, nullptr, loomc_allocator_system(), program.out());
+    loomc_status_t status = loomc_launch_config_program_load(artifact, loomc_allocator_system(), program.out());
     if (!loomc_status_is_ok(status)) {
         return ggml_hrx_loom_jit_status_from_loom(status, "load Loom launch config program");
     }
@@ -749,7 +755,7 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
         dependency_sources.push_back(dependency_source);
         loomc_link_index_source_options_t dependency_link_options = {};
         dependency_link_options.provider_name = loomc_make_cstring_view(dependency.source_identifier);
-        if (dependency.source_format == GGML_HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE) {
+        if (options->dependency_count > 0 || dependency.source_format == GGML_HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE) {
             dependency_link_options.role = LOOMC_LINK_PROVIDER_ROLE_INPUT;
         } else {
             const std::string dependency_text(static_cast<const char *>(dependency.source_data),
@@ -806,6 +812,7 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
         archive_options.structure_size       = sizeof(archive_options);
         archive_options.link_index           = link_index.get();
         archive_options.module_name          = loomc_make_cstring_view(options->module_name);
+        archive_options.mode                 = LOOMC_LINK_MODE_MERGE;
         archive_options.flags                = LOOMC_LINK_FLAG_STRIP_TEST_SYMBOLS;
         status = loomc_link_module(linker.get(), workspace.get(), &archive_options, archive_module.out(), result.out());
         if (!loomc_status_is_ok(status)) {
@@ -881,6 +888,7 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     link_options.next                        = nullptr;
     link_options.link_index                  = link_index.get();
     link_options.module_name                 = loomc_make_cstring_view(options->module_name);
+    link_options.mode                        = LOOMC_LINK_MODE_LINK;
     link_options.root_symbols                = root_symbols;
     link_options.root_symbol_count           = 1;
     link_options.flags                       = LOOMC_LINK_FLAG_STRIP_TEST_SYMBOLS;
@@ -914,9 +922,7 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     if (options->evaluate_launch_config) {
         compile_options.artifact_flags |= LOOMC_COMPILE_ARTIFACT_FLAG_LAUNCH_CONFIG;
     }
-    compile_options.config.bindings      = config_bindings.get();
-    compile_options.config.binding_count = options->config_binding_count;
-    compile_options.config.flags         = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
+    compile_options.config_flags = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
     status = loomc_compile_module(jit->compiler, workspace.get(), jit->pass_program, module.get(), &compile_options,
                                   loomc_allocator_system(), result.out());
     if (!loomc_status_is_ok(status)) {

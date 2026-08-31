@@ -25,23 +25,23 @@ config.decl @hrx2_tuning_concat_tail_workgroup_size : %value: index where [range
 
 kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
   %unit = index.constant 1 : index
-  %minus_one = index.constant -1 : index
+  %cneg1 = index.constant -1 : index
   %x_snapshot_rows = index.constant 61 : index
   %d_conv = config.get @hrx2_shape_concat_tail_d_conv : index
   %d_inner = config.get @hrx2_shape_concat_tail_d_inner : index
   %n_s = config.get @hrx2_shape_concat_tail_n_s : index
   %wg = config.get @hrx2_tuning_concat_tail_workgroup_size : index
-  %carry = index.add %d_conv, %minus_one : index
+  %carry = index.add %d_conv, %cneg1 : index
   %snapshot_rows = index.add %carry, %x_snapshot_rows : index
   %rows = index.mul %snapshot_rows, %n_s : index
   %total = index.mul %rows, %d_inner : index
-  %rounding = index.add %wg, %minus_one : index
+  %rounding = index.add %wg, %cneg1 : index
   %rounded = index.add %total, %rounding : index
   %groups = index.div %rounded, %wg : index
   kernel.launch.config workgroups(%groups, %unit, %unit) workgroup_size(%wg, %unit, %unit) : index
 } launch(%state: buffer, %x: buffer, %dst: buffer, %cache: buffer) {
   %base = index.constant 0 : offset
-  %minus_one = index.constant -1 : index
+  %cneg1 = index.constant -1 : index
   %x_snapshot_rows = index.constant 61 : index
 
   %d_conv = config.get @hrx2_shape_concat_tail_d_conv : index
@@ -65,7 +65,7 @@ kernel.def export("hrx2_concat_window_tail") @hrx2_concat_window_tail() {
   %drsb = index.assume %drs [range(%drs, 1, 16777216)] : index
   %crsb = index.assume %crs [range(%crs, 1, 1)] : index
   %ccsb = index.assume %ccs [range(%ccs, 3, 3)] : index
-  %carry0 = index.add %d_conv, %minus_one : index
+  %carry0 = index.add %d_conv, %cneg1 : index
   %carry = index.assume %carry0 [range(%carry0, 3, 3)] : index
   %snapshot_rows0 = index.add %carry, %x_snapshot_rows : index
   %snapshot_rows = index.assume %snapshot_rows0 [range(%snapshot_rows0, 64, 64)] : index
@@ -169,18 +169,18 @@ config.decl @hrx2_shape_concat_dim0_row_count : %value: index where [range(%valu
 config.decl @hrx2_tuning_concat_dim0_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 
 kernel.def export("hrx2_concat_dim0_f32") @hrx2_concat_dim0_f32() {
-  %one = index.constant 1 : index
-  %minus_one = index.constant -1 : index
+  %c1 = index.constant 1 : index
+  %cneg1 = index.constant -1 : index
   %lhs_width = config.get @hrx2_shape_concat_dim0_lhs_width : index
   %rhs_width = config.get @hrx2_shape_concat_dim0_rhs_width : index
   %row_count = config.get @hrx2_shape_concat_dim0_row_count : index
   %workgroup_size = config.get @hrx2_tuning_concat_dim0_workgroup_size : index
   %output_width = index.add %lhs_width, %rhs_width : index
   %element_count = index.mul %output_width, %row_count : index
-  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounding = index.add %workgroup_size, %cneg1 : index
   %rounded = index.add %element_count, %rounding : index
   %workgroups = index.div %rounded, %workgroup_size : index
-  kernel.launch.config workgroups(%workgroups, %one, %one) workgroup_size(%workgroup_size, %one, %one) : index
+  kernel.launch.config workgroups(%workgroups, %c1, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
 } launch(%lhs: buffer, %rhs: buffer, %output: buffer) {
   %base = index.constant 0 : offset
   %lhs_width0 = config.get @hrx2_shape_concat_dim0_lhs_width : index

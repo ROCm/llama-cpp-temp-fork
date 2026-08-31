@@ -21,6 +21,10 @@ static constexpr KernelCatalogRef kLlmQuantizeQ8_1X4Kernel =
 static constexpr KernelCatalogRef kLlmQuantizeActU4AsymKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_quant_act_u4asym");
 static constexpr KernelCatalogRef kLlmQuantizeActI4Kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_quant_act_i4");
+static constexpr KernelCatalogRef kLlmQuantizeActI4K64PlaneKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_quant_act_i4_k64_plane");
+static constexpr KernelCatalogRef kLlmQuantizeActI8K256Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_quant_act_i8_k256_ls2");
 static constexpr KernelCatalogRef kLlmDenseLinearQ4KU4AsymKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_u4asym_prepacked_wmmai4_64x128x64");
 static constexpr KernelCatalogRef kLlmDenseLinearQ4KU4AsymLowRowKernel =
@@ -31,6 +35,10 @@ static constexpr KernelCatalogRef kLlmDenseLinearSymmetricI4AdjacentLowRowKernel
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_adjacent_m16n16_wg64");
 static constexpr KernelCatalogRef kLlmDenseLinearSymmetricI4AdjacentLowRowSplitK2Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_adjacent_m16n16_wg64_splitk2");
+static constexpr KernelCatalogRef kLlmDenseLinearSymmetricI4AdjacentC5DotKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_adjacent_c5_dot_wg128");
+static constexpr KernelCatalogRef kLlmDenseLinearSymmetricI4PrefillKernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi4_i4_prepacked_wmmai4_64x128x64");
 static constexpr KernelCatalogRef kLlmDenseLinearQ5KF16WmmaKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q5k_f16_wmma");
 static constexpr KernelCatalogRef kLlmDenseLinearQ5KF16WmmaLowRowKernel =
@@ -41,6 +49,10 @@ static constexpr KernelCatalogRef kLlmDenseLinearQ5KQ8_1X4WmmaKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q5k_q8_1_x4_wmmai8");
 static constexpr KernelCatalogRef kLlmDenseLinearQ5KQ8_1X4WmmaToken256Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q5k_q8_1_x4_wmmai8_token256");
+static constexpr KernelCatalogRef kLlmDenseLinearQ5KQ8PlaneWmmaToken256Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q5k_q8_plane_wmmai8_token256");
+static constexpr KernelCatalogRef kLlmDenseLinearQ5KSymmetricI8K256Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_symi8_k256_q8_k256_wmmai8_token256");
 static constexpr KernelCatalogRef kLlmDenseLinearIQ4XSQ8_1X4WmmaKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_iq4xs_q8_1_x4_wmmai8");
 static constexpr KernelCatalogRef kLlmDenseLinearIQ4XSQ8_1X4WmmaToken256Kernel =
@@ -70,13 +82,67 @@ static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
 }
 
+static const GraphNode * single_consumer_with_op(const Graph & graph, ValueId value, ggml_op op) {
+    const GraphNode * match = nullptr;
+    for (const GraphNode * consumer : graph.index().consumers(value)) {
+        if (consumer == nullptr || consumer->op != op) {
+            continue;
+        }
+        if (match != nullptr) {
+            return nullptr;
+        }
+        match = consumer;
+    }
+    return match;
+}
+
+static bool has_normalized_rope_consumer(const Graph & graph, const Value & value) {
+    if (!graph.has_index()) {
+        return false;
+    }
+    for (const GraphNode * layout : graph.index().consumers(value.id)) {
+        if (layout == nullptr || (layout->op != GGML_OP_RESHAPE && layout->op != GGML_OP_VIEW)) {
+            continue;
+        }
+        const GraphNode * rms = single_consumer_with_op(graph, layout->output, GGML_OP_RMS_NORM);
+        const GraphNode * mul = rms != nullptr ? single_consumer_with_op(graph, rms->output, GGML_OP_MUL) : nullptr;
+        if (mul != nullptr && single_consumer_with_op(graph, mul->output, GGML_OP_ROPE) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool has_reshaped_unary_mul_consumer(const Graph & graph, const Value & value) {
+    if (!graph.has_index()) {
+        return false;
+    }
+    const GraphNode * reshape = single_consumer_with_op(graph, value.id, GGML_OP_RESHAPE);
+    const GraphNode * unary =
+        reshape != nullptr ? single_consumer_with_op(graph, reshape->output, GGML_OP_UNARY) : nullptr;
+    return unary != nullptr && single_consumer_with_op(graph, unary->output, GGML_OP_MUL) != nullptr;
+}
+
+static bool has_reshaped_transpose_concat_consumer(const Graph & graph, const Value & value) {
+    if (!graph.has_index()) {
+        return false;
+    }
+    const GraphNode * reshape = single_consumer_with_op(graph, value.id, GGML_OP_RESHAPE);
+    const GraphNode * transpose =
+        reshape != nullptr ? single_consumer_with_op(graph, reshape->output, GGML_OP_TRANSPOSE) : nullptr;
+    return transpose != nullptr && single_consumer_with_op(graph, transpose->output, GGML_OP_CONCAT) != nullptr;
+}
+
 static bool is_2d(const Value & value) {
     return value.ne[0] > 0 && value.ne[1] > 0 && value.ne[2] == 1 && value.ne[3] == 1;
 }
 
-static bool same_shape(const Value & lhs, const Value & rhs) {
-    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-        if (lhs.ne[i] != rhs.ne[i]) {
+static bool has_matching_contiguous_rows(const Value & input, const Value & output) {
+    if (input.ne[0] <= 0 || output.ne[0] <= 0 || !input.contiguous || !output.contiguous) {
+        return false;
+    }
+    for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
+        if (input.ne[dim] != output.ne[dim]) {
             return false;
         }
     }
@@ -130,16 +196,17 @@ static LlmDenseMatmulMatch match_llm_dense_matmul(const Graph &       graph,
     const Value * weight = graph_value(graph, node->inputs[0]);
     const Value * input  = graph_value(graph, node->inputs[1]);
     const Value * output = graph_value(graph, node->output);
-    if (weight == nullptr || input == nullptr || output == nullptr || !is_2d(*weight) || !is_2d(*input) ||
-        !is_2d(*output) || !weight->contiguous || !input->contiguous || !output->contiguous ||
-        input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
+    if (weight == nullptr || input == nullptr || output == nullptr || !is_2d(*weight) ||
+        !has_matching_contiguous_rows(*input, *output) || !weight->contiguous || input->type != GGML_TYPE_F32 ||
+        output->type != GGML_TYPE_F32) {
         return {};
     }
 
     const int64_t input_size  = weight->ne[0];
     const int64_t output_size = weight->ne[1];
-    const int64_t token_count = input->ne[1];
-    if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
+    const int64_t token_count = input->element_count / input_size;
+    if (input->ne[0] != input_size || output->ne[0] != output_size ||
+        input->element_count != input_size * token_count || output->element_count != output_size * token_count ||
         !is_llm_supported_query_length(kActiveLlmMoeDispatchProfile, token_count) ||
         !is_supported_dense_input_size(input_size) || !is_supported_dense_output_size(output_size)) {
         return {};
@@ -177,7 +244,9 @@ static LlmDenseMatmulMatch match_llm_dense_matmul(const Graph &       graph,
             match.input_value = alternate->alternate_value;
             match.input_bytes = alternate->byte_count;
             if (route == LlmDenseMatmulRoute::Q5K) {
-                match.kernel = token_count % 256 == 0 ? kLlmDenseLinearQ5KQ8_1X4WmmaToken256Kernel :
+                match.kernel = token_count % 256 == 0 && alternate->name == kLlmQ8SwiGluPlaneAlternateName ?
+                                   kLlmDenseLinearQ5KQ8PlaneWmmaToken256Kernel :
+                               token_count % 256 == 0 ? kLlmDenseLinearQ5KQ8_1X4WmmaToken256Kernel :
                                                         kLlmDenseLinearQ5KQ8_1X4WmmaKernel;
             } else {
                 match.kernel = token_count % 256 == 0 ? kLlmDenseLinearIQ4XSQ8_1X4WmmaToken256Kernel :
@@ -222,11 +291,60 @@ static void build_llm_dense_matmul_dispatch(const LlmDenseMatmulMatch & match,
                                                to_config_value(match.output_size));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_accumulation", "0");
     dispatch.bindings.push_back({ match.input_value, 0, match.input_bytes });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    if (match.kernel.id == kLlmDenseLinearQ5KQ8PlaneWmmaToken256Kernel.id) {
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count, kQ5KSymmetricI5K32Layout,
+                                      GGML_TYPE_Q5_K, match.input_size, match.output_size, match.weight->byte_count });
+    } else {
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    }
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     dispatch_match.covered_nodes.push_back(root_index);
     dispatch_match.dispatches.push_back(std::move(dispatch));
+}
+
+static void build_llm_dense_q5k_symmetric_i8_k256_dispatch(const LlmDenseMatmulMatch &  match,
+                                                           DispatchMatch &              dispatch_match,
+                                                           const DispatchMatchContext & context) {
+    const size_t element_count = static_cast<size_t>(match.token_count) * static_cast<size_t>(match.input_size);
+    const size_t metadata_bytes =
+        static_cast<size_t>(match.token_count) * static_cast<size_t>(match.input_size / 256) * sizeof(int32_t);
+    const size_t q8_bytes = element_count + metadata_bytes;
+    const size_t materialized_weight_bytes =
+        static_cast<size_t>(match.output_size) * static_cast<size_t>(match.input_size / 256) * size_t{ 258 };
+    const ValueId q8_input(context.next_plan_value.value);
+    dispatch_match.transients.push_back({ q8_input, "llm.dense_q5.i8_k256", q8_bytes, 256 });
+
+    Dispatch quantize;
+    quantize.kernel = make_kernel_specialization(kLlmQuantizeActI8K256Kernel);
+    quantize.kernel.integer_parameters.emplace("token_count", match.token_count);
+    quantize.kernel.integer_parameters.emplace("input_size_arg", match.input_size);
+    quantize.kernel.compile_parameters.emplace("qwen3.qact_i8_k256.shape_cols", to_config_value(match.token_count));
+    quantize.kernel.compile_parameters.emplace("qwen3.qact_i8_k256.shape_k", to_config_value(match.input_size));
+    quantize.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+    quantize.bindings.push_back({ q8_input, 0, q8_bytes });
+
+    Dispatch contraction;
+    contraction.kernel = make_kernel_specialization(kLlmDenseLinearQ5KSymmetricI8K256Kernel);
+    contraction.kernel.integer_parameters.emplace("token_count", match.token_count);
+    contraction.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity_symi8_k256",
+                                                  to_config_value(match.token_count));
+    contraction.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.input_size_symi8_k256",
+                                                  to_config_value(match.input_size));
+    contraction.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_size_symi8_k256",
+                                                  to_config_value(match.output_size));
+    contraction.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.activation_cadence_symi8_k256", "256");
+    contraction.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.chunks_per_activation_symi8_k256", "4");
+    contraction.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.activation_blocks_per_weight_symi8_k256",
+                                                  "1");
+    contraction.bindings.push_back({ q8_input, 0, q8_bytes });
+    contraction.bindings.push_back({ match.weight->id, 0, materialized_weight_bytes, kQ5KSymmetricI8K256Row64Layout,
+                                     GGML_TYPE_Q5_K, match.input_size, match.output_size, match.weight->byte_count });
+    contraction.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(quantize));
+    dispatch_match.dispatches.push_back(std::move(contraction));
 }
 
 static void build_llm_dense_q4k_u4asym_dispatch(const LlmDenseMatmulMatch &  match,
@@ -304,6 +422,8 @@ static void build_llm_dense_symmetric_i4_dispatch(const LlmDenseMatmulMatch &  m
     // Split large contractions only when output-row parallelism is limited.
     const bool   split_k = match.input_size % 128 == 0 && materialized_weight_bytes >= size_t{ 16 } * 1024 * 1024 &&
                          match.output_size <= 2 * match.input_size;
+    const bool expanding_direct_dot =
+        !split_k && match.token_count == 5 && match.input_size % 256 == 0 && match.output_size > 2 * match.input_size;
     const uint32_t completion_counter_count =
         static_cast<uint32_t>(((match.output_size + 15) / 16) * ((match.token_count + 15) / 16));
     const CommandPlanAlternateValue * alternate = find_alternate_value(context.graph, context.plan, match.input->id,
@@ -340,9 +460,13 @@ static void build_llm_dense_symmetric_i4_dispatch(const LlmDenseMatmulMatch &  m
             completion_counter_count,
         });
     }
-    Dispatch contraction;
-    contraction.kernel = make_kernel_specialization(split_k ? kLlmDenseLinearSymmetricI4AdjacentLowRowSplitK2Kernel :
-                                                              kLlmDenseLinearSymmetricI4AdjacentLowRowKernel);
+    Dispatch         contraction;
+    KernelCatalogRef contraction_kernel = split_k ? kLlmDenseLinearSymmetricI4AdjacentLowRowSplitK2Kernel :
+                                                    kLlmDenseLinearSymmetricI4AdjacentLowRowKernel;
+    if (expanding_direct_dot) {
+        contraction_kernel = kLlmDenseLinearSymmetricI4AdjacentC5DotKernel;
+    }
+    contraction.kernel = make_kernel_specialization(contraction_kernel);
     contraction.kernel.compile_parameters.emplace("qwen3.dense_q4_i4.lowrow.shape_k",
                                                   to_config_value(match.input_size));
     contraction.kernel.compile_parameters.emplace("qwen3.dense_q4_i4.lowrow.shape_rows",
@@ -361,6 +485,56 @@ static void build_llm_dense_symmetric_i4_dispatch(const LlmDenseMatmulMatch &  m
         contraction.bindings.push_back({ partial, 0, match.output->byte_count });
         contraction.bindings.push_back({ completion_counters, 0, completion_counter_count * sizeof(int32_t) });
     }
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(contraction));
+}
+
+static void build_llm_dense_symmetric_i4_prefill_dispatch(const LlmDenseMatmulMatch &  match,
+                                                          DispatchMatch &              dispatch_match,
+                                                          const DispatchMatchContext & context) {
+    const LlmSymmetricI4ActivationLayout activation_layout =
+        llm_symmetric_i4_activation_layout(match.input_size, match.token_count);
+    const CommandPlanAlternateValue * alternate = find_alternate_value(context.graph, context.plan, match.input->id,
+                                                                       GGML_TYPE_COUNT, activation_layout.total_bytes);
+    if (alternate != nullptr && alternate->name != kLlmSymmetricI4ActivationAlternateName) {
+        alternate = nullptr;
+    }
+    const ValueId activation = alternate != nullptr ? alternate->alternate_value : context.next_plan_value;
+
+    if (alternate == nullptr) {
+        dispatch_match.transients.push_back(
+            { activation, kLlmSymmetricI4ActivationAlternateName, activation_layout.total_bytes, 256 });
+
+        Dispatch quantize;
+        quantize.kernel = make_kernel_specialization(kLlmQuantizeActI4K64PlaneKernel);
+        quantize.kernel.compile_parameters.emplace("qwen3.qact_i4.shape_k", to_config_value(match.input_size));
+        quantize.kernel.compile_parameters.emplace("qwen3.qact_i4.shape_cols", to_config_value(match.token_count));
+        quantize.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+        quantize.bindings.push_back({ activation, 0, activation_layout.payload_bytes });
+        quantize.bindings.push_back({ activation, activation_layout.scales_offset, activation_layout.metadata_bytes });
+        quantize.bindings.push_back({ activation, activation_layout.sums_offset, activation_layout.metadata_bytes });
+        dispatch_match.dispatches.push_back(std::move(quantize));
+    }
+
+    const size_t materialized_weight_bytes =
+        static_cast<size_t>(match.output_size) * static_cast<size_t>(match.input_size / 256) * size_t{ 144 };
+    Dispatch contraction;
+    contraction.kernel = make_kernel_specialization(kLlmDenseLinearSymmetricI4PrefillKernel);
+    contraction.kernel.compile_parameters.emplace("qwen3.dense_symi4_i4.prefill.shape_k",
+                                                  to_config_value(match.input_size));
+    contraction.kernel.compile_parameters.emplace("qwen3.dense_symi4_i4.prefill.shape_rows",
+                                                  to_config_value(match.output_size));
+    contraction.kernel.compile_parameters.emplace("qwen3.dense_symi4_i4.prefill.shape_cols",
+                                                  to_config_value(match.token_count));
+    contraction.bindings.push_back({ match.weight->id, 0, materialized_weight_bytes, kSymmetricI4K64Row64Layout,
+                                     match.weight->type, match.input_size, match.output_size,
+                                     match.weight->byte_count });
+    contraction.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+    contraction.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    contraction.bindings.push_back({ activation, 0, activation_layout.payload_bytes });
+    contraction.bindings.push_back({ activation, activation_layout.scales_offset, activation_layout.metadata_bytes });
+    contraction.bindings.push_back({ activation, activation_layout.sums_offset, activation_layout.metadata_bytes });
+
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(std::move(contraction));
 }
@@ -462,30 +636,6 @@ static void build_llm_dense_q6k_i8_prepacked_dispatch(const LlmDenseMatmulMatch 
     dispatch.bindings.push_back({ match.input_value, 0, match.input_bytes });
     dispatch.bindings.push_back({ match.weight->id, 0, materialized_weight_bytes, kQ6KI8K32Row64Layout, GGML_TYPE_Q6_K,
                                   match.input_size, match.output_size, match.weight->byte_count });
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-
-    dispatch_match.covered_nodes.push_back(root_index);
-    dispatch_match.dispatches.push_back(std::move(dispatch));
-}
-
-static void build_llm_dense_field16_dispatch(const LlmDenseMatmulMatch & match,
-                                             DispatchMatch &             dispatch_match,
-                                             size_t                      root_index,
-                                             KernelCatalogRef            kernel,
-                                             const char *                layout,
-                                             ggml_type                   source_type) {
-    Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kernel);
-    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(match.token_count));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.input_size",
-                                               to_config_value(match.input_size));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_size",
-                                               to_config_value(match.output_size));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.output_accumulation", "0");
-    dispatch.bindings.push_back({ match.input_value, 0, match.input_bytes });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count, layout, source_type, match.input_size,
-                                  match.output_size, match.weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     dispatch_match.covered_nodes.push_back(root_index);
@@ -605,8 +755,24 @@ static bool match_llm_dense_q5k_dispatch(const DispatchMatchContext & context, D
     if (!match.matched()) {
         return false;
     }
-    if (match.token_count >= 1 && match.token_count <= 16 && match.input_size % 64 == 0 &&
-        match.output_size % 64 == 0) {
+    const GraphNode * input_producer         = context.graph.index().producer(match.input->id);
+    const bool        uses_symmetric_i8_k256 = match.token_count >= 256 && match.token_count % 256 == 0 &&
+                                        match.input_size % 256 == 0 && match.output_size % 64 == 0 &&
+                                        match.output_size <= match.input_size &&
+                                        (input_producer == nullptr || input_producer->op != GGML_OP_GLU);
+    const bool uses_symmetric_i4_prefill = match.token_count >= 128 && match.token_count % 128 == 0 &&
+                                           match.input_size % 64 == 0 && match.output_size >= match.input_size &&
+                                           match.output_size % 128 == 0 &&
+                                           (input_producer == nullptr || input_producer->op != GGML_OP_GLU) &&
+                                           (has_normalized_rope_consumer(context.graph, *match.output) ||
+                                            has_reshaped_unary_mul_consumer(context.graph, *match.output) ||
+                                            has_reshaped_transpose_concat_consumer(context.graph, *match.output));
+    if (uses_symmetric_i8_k256) {
+        build_llm_dense_q5k_symmetric_i8_k256_dispatch(match, dispatch_match, context);
+    } else if (uses_symmetric_i4_prefill) {
+        build_llm_dense_symmetric_i4_prefill_dispatch(match, dispatch_match, context);
+    } else if (match.token_count >= 1 && match.token_count <= 16 && match.input_size % 64 == 0 &&
+               match.output_size % 64 == 0) {
         build_llm_dense_symmetric_i4_dispatch(match, dispatch_match, context);
     } else {
         build_llm_dense_matmul_dispatch(match, dispatch_match, context.root_index);
