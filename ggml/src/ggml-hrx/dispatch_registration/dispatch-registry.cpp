@@ -4,7 +4,11 @@
 #include "llm/dispatch-attention-qkv.h"
 #include "llm/dispatch-gated-delta-net.h"
 #include "llm/dispatch-ssm-conv.h"
-#include "qwen/dispatch-qwen.h"
+#include "common/dispatch-mul-mat-quantized-fusions.h"
+#include "common/dispatch-rmsnorm.h"
+#include "llm/dispatch-attention-postprocess.h"
+#include "llm/dispatch-moe-router.h"
+#include "llm/dispatch-routed-ffn.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -28,7 +32,8 @@ static void sort_registrations(std::vector<DispatchRegistration> & registrations
         [](const DispatchRegistration & lhs, const DispatchRegistration & rhs) { return lhs.priority > rhs.priority; });
 }
 
-static bool qwen_dispatch_disabled_from_environment() {
+static bool specialized_fusions_disabled_from_environment() {
+    // Retain the legacy diagnostic switch for this set of specialized fusions.
     const char * value = std::getenv("GGML_HRX_DISABLE_QWEN_DISPATCH");
     if (value == nullptr || value[0] == '\0') {
         return false;
@@ -37,14 +42,18 @@ static bool qwen_dispatch_disabled_from_environment() {
            std::strcmp(value, "off") != 0 && std::strcmp(value, "OFF") != 0;
 }
 
-static DispatchRegistry build_registry(bool include_qwen) {
+static DispatchRegistry build_registry(bool include_specialized_fusions) {
     DispatchRegistryBuilder builder;
     register_common_dispatches(builder);
     register_llm_attention_qkv_dispatches(builder);
     register_llm_gated_delta_net_dispatch(builder);
     register_llm_ssm_conv_dispatch(builder);
-    if (include_qwen) {
-        register_qwen_dispatches(builder);
+    if (include_specialized_fusions) {
+        register_llm_attention_postprocess_dispatches(builder);
+        register_mul_mat_quantized_fusion_dispatches(builder);
+        register_routed_ffn_dispatches(builder);
+        register_rmsnorm_quantized_fusion_dispatches(builder);
+        register_moe_router_dispatches(builder);
     }
     return builder.build();
 }
@@ -146,7 +155,7 @@ const DispatchRegistry * find_dispatch_registry(const DispatchTarget & target) {
     static const DispatchRegistry gfx1151_registry              = build_registry(true);
     static const DispatchRegistry gfx1151_generic_only_registry = build_registry(false);
 
-    const bool qwen_disabled = qwen_dispatch_disabled_from_environment();
+    const bool qwen_disabled = specialized_fusions_disabled_from_environment();
 
     if (target.architecture == "gfx1100") {
         return qwen_disabled ? &gfx1100_generic_only_registry : &gfx1100_registry;

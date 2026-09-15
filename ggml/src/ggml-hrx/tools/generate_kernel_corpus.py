@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -57,6 +58,7 @@ KERNEL_RECORD_TEMPLATE = """    {{
             {primary_sources},
             {library_sources},
         }},
+        {export_name},
     }},"""
 
 SOURCE_DATA_TEMPLATE = """{source_arrays}
@@ -318,6 +320,7 @@ def complete_manifest_source_metadata(manifest: dict, source_paths: Dict[str, pa
                 "name": export["name"],
                 "source": export["source"],
                 "symbol": export["symbol"],
+                "export_name": export.get("export_name", export["name"]),
                 "target_selector": export.get("target_selector", ""),
                 "compile_recipe": export["compile_recipe"],
             }
@@ -374,9 +377,24 @@ def merge_manifests(manifest_paths: List[pathlib.Path], corpus_dirs: List[pathli
     link_modules = []
     plan_cases = []
     metadata = []
+    source_root = pathlib.Path(os.path.commonpath([directory.resolve() for directory in corpus_dirs]))
 
     for manifest_path, corpus_dir, manifest in loaded:
-        manifest_source_paths = {file["path"]: corpus_dir / file["path"] for file in manifest.get("files", [])}
+        original_paths = {file["path"]: (corpus_dir / file["path"]).resolve() for file in manifest.get("files", [])}
+        source_names = {name: os.path.relpath(path, source_root) for name, path in original_paths.items()}
+
+        # Aliases in different manifests must share one embedded source and dependency record.
+        def canonicalize_sources(value):
+            if isinstance(value, str):
+                return source_names.get(value, value)
+            if isinstance(value, list):
+                return [canonicalize_sources(item) for item in value]
+            if isinstance(value, dict):
+                return {key: canonicalize_sources(item) for key, item in value.items()}
+            return value
+
+        manifest = canonicalize_sources(manifest)
+        manifest_source_paths = {source_names[name]: path for name, path in original_paths.items()}
         manifest = complete_manifest_source_metadata(manifest, manifest_source_paths)
         metadata.append({
             "manifest": str(manifest_path),
@@ -393,7 +411,7 @@ def merge_manifests(manifest_paths: List[pathlib.Path], corpus_dirs: List[pathli
                     raise RuntimeError(f"manifest file digest conflict for {path}: {previous} vs {digest}")
                 continue
             file_digests[path] = digest
-            source_paths[path] = corpus_dir / path
+            source_paths[path] = manifest_source_paths[path]
             files.append(dict(file))
         exports.extend(dict(export) for export in manifest.get("exports", []))
         link_modules.extend(dict(module) for module in manifest.get("link_modules", []))
@@ -409,6 +427,7 @@ def merge_manifests(manifest_paths: List[pathlib.Path], corpus_dirs: List[pathli
                 "name": export["name"],
                 "source": export["source"],
                 "symbol": export["symbol"],
+                "export_name": export.get("export_name", export["name"]),
                 "target_selector": export.get("target_selector", ""),
                 "compile_recipe": export["compile_recipe"],
             }
@@ -489,6 +508,7 @@ def generate_corpus_records(manifest: dict, source_records: Dict[str, str], sour
                 family=cpp_string(export.get("family", DEFAULT_KERNEL_FAMILY)),
                 name=cpp_string(export["name"]),
                 symbol=cpp_string(export["symbol"]),
+                export_name=cpp_string(export.get("export_name", export["name"])),
                 target_selector=cpp_string(export.get("target_selector", "")),
                 source=cpp_string(export["source"]),
                 dependencies=dependencies_span,

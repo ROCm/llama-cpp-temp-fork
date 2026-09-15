@@ -227,20 +227,15 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/llm/dispatch-gated-delta-net.h
     dispatch_registration/llm/dispatch-ssm-conv.cpp
     dispatch_registration/llm/dispatch-ssm-conv.h
-    dispatch_registration/qwen/dispatch-llm-profiles.h
-    dispatch_registration/qwen/dispatch-llm-shapes.h
-    dispatch_registration/qwen/dispatch-moe-router.cpp
-    dispatch_registration/qwen/dispatch-moe-router.h
-    dispatch_registration/qwen/dispatch-qwen.cpp
-    dispatch_registration/qwen/dispatch-qwen.h
-    dispatch_registration/qwen/dispatch-qwen-attention-postprocess.cpp
-    dispatch_registration/qwen/dispatch-qwen-attention-postprocess.h
-    dispatch_registration/qwen/dispatch-qwen-matmul.cpp
-    dispatch_registration/qwen/dispatch-qwen-matmul.h
-    dispatch_registration/qwen/dispatch-qwen-rmsnorm.cpp
-    dispatch_registration/qwen/dispatch-qwen-rmsnorm.h
-    dispatch_registration/qwen/dispatch-routed-ffn.cpp
-    dispatch_registration/qwen/dispatch-routed-ffn.h
+    dispatch_registration/llm/dispatch-moe-router.cpp
+    dispatch_registration/llm/dispatch-moe-router.h
+    dispatch_registration/llm/dispatch-attention-postprocess.cpp
+    dispatch_registration/llm/dispatch-attention-postprocess.h
+    dispatch_registration/common/dispatch-mul-mat-quantized-fusions.cpp
+    dispatch_registration/common/dispatch-quantized-fusion-shapes.h
+    dispatch_registration/common/dispatch-mul-mat-quantized-fusions.h
+    dispatch_registration/llm/dispatch-routed-ffn.cpp
+    dispatch_registration/llm/dispatch-routed-ffn.h
     status.h
     graph/graph.cpp
     graph/graph-diagnostics.cpp

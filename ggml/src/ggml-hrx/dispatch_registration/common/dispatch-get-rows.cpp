@@ -1,6 +1,6 @@
 #include "dispatch-get-rows.h"
 
-#include "../qwen/dispatch-llm-profiles.h"
+#include "dispatch-quantized-fusion-shapes.h"
 #include "dispatch-mul-mat-weight-format.h"
 #include "ggml.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -18,8 +18,6 @@ static constexpr KernelCatalogRef kGetRowsF32Kernel     = GGML_HRX_KERNEL_REF("l
 static constexpr KernelCatalogRef kGetRowsF32NextKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_f32_next");
 static constexpr int64_t          kMaximumHiddenElements = int64_t{ 1 } << 30;
 static constexpr int64_t          kQ1_0GetRowsFormat    = 10;
-static constexpr int64_t          kQwenHiddenSize       = kQwen30BMoeDispatchProfile.hidden_size;
-static constexpr int64_t          kQwenVocabularyCount  = 151936;
 static constexpr int64_t          kMaxGetRowsRowCount   = 262208;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -62,7 +60,7 @@ static size_t row_byte_count(ggml_type type, int64_t token_count, int64_t hidden
     return static_cast<size_t>(token_count) * ggml_row_size(type, hidden_size);
 }
 
-static bool is_qwen_q6k_q8_consumer(const Graph & graph, const GraphNode * consumer, const Value & input) {
+static bool is_endpoint_q6k_q8_consumer(const Graph & graph, const GraphNode * consumer, const Value & input) {
     if (consumer == nullptr || consumer->op != GGML_OP_MUL_MAT || consumer->inputs.size() != 2 ||
         consumer->inputs[1] != input.id) {
         return false;
@@ -75,9 +73,9 @@ static bool is_qwen_q6k_q8_consumer(const Graph & graph, const GraphNode * consu
         return false;
     }
 
-    return input.ne[0] == kQwenHiddenSize && input.ne[1] == 1 && input.ne[2] == 1 && input.ne[3] == 1 &&
-           weight->ne[0] == kQwenHiddenSize && weight->ne[1] == kQwenVocabularyCount && weight->ne[2] == 1 &&
-           weight->ne[3] == 1 && output->ne[0] == kQwenVocabularyCount && output->ne[1] == 1 && output->ne[2] == 1 &&
+    return input.ne[0] == kQuantizedEndpointInputSize && input.ne[1] == 1 && input.ne[2] == 1 && input.ne[3] == 1 &&
+           weight->ne[0] == kQuantizedEndpointInputSize && weight->ne[1] == kQuantizedEndpointOutputSize && weight->ne[2] == 1 &&
+           weight->ne[3] == 1 && output->ne[0] == kQuantizedEndpointOutputSize && output->ne[1] == 1 && output->ne[2] == 1 &&
            output->ne[3] == 1;
 }
 
@@ -95,7 +93,7 @@ static std::vector<ggml_type> collect_alternate_demands(const Graph & graph, con
 
     const std::vector<const GraphNode *> & consumers = graph.index().consumers(value.id);
     for (const GraphNode * consumer : consumers) {
-        if (is_qwen_q6k_q8_consumer(graph, consumer, value)) {
+        if (is_endpoint_q6k_q8_consumer(graph, consumer, value)) {
             append_unique_demand(demands, GGML_TYPE_Q8_1);
         }
     }

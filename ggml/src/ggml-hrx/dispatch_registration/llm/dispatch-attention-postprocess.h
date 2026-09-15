@@ -4,6 +4,6 @@
 
 namespace ggml::hrx {
 
-void register_qwen_matmul_dispatches(DispatchRegistryBuilder & registry);
+void register_llm_attention_postprocess_dispatches(DispatchRegistryBuilder & registry);
 
 }  // namespace ggml::hrx

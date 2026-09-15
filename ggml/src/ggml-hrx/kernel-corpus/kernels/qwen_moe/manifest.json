@@ -3,91 +3,91 @@
   "upstream_revision": "local",
   "files": [
     {
-      "path": "ggml/linear_q6k_f32.loom"
+      "path": "../loom-libs/ops/linear_q6k_f32.loom"
     },
     {
-      "path": "ggml/linear_q6k_q8_1_x4.loom"
+      "path": "../loom-libs/ops/linear_q6k_q8_1_x4.loom"
     },
     {
-      "path": "ggml/quantize_q8_1_x4.loom"
+      "path": "../loom-libs/ops/quantize_q8_1_x4.loom"
     },
     {
-      "path": "qwen3_moe/attention_postprocess_f32_f16.loom"
+      "path": "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom"
     },
     {
-      "path": "qwen3_moe/attention_prepare_quantized.loom"
+      "path": "../loom-libs/ops/llm/attention_prepare_quantized.loom"
     },
     {
-      "path": "qwen3_moe/attention_qkv_postprocess_fused.loom"
+      "path": "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom"
     },
     {
-      "path": "qwen3_moe/attention_qkv_quantized.loom"
+      "path": "../loom-libs/ops/llm/attention_qkv_quantized.loom"
     },
     {
-      "path": "qwen3_moe/attention_qkv_same_format_prefill.loom"
+      "path": "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom"
     },
     {
-      "path": "qwen3_moe/batched_decode_expert_dispatch.loom"
+      "path": "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom"
     },
     {
-      "path": "qwen3_moe/batched_decode_gate_up_q4k.loom"
+      "path": "../loom-libs/ops/llm/batched_decode_gate_up_q4k.loom"
     },
     {
-      "path": "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+      "path": "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
     },
     {
-      "path": "qwen3_moe/expert_table_partition_fused.loom"
+      "path": "../loom-libs/ops/llm/expert_table_partition_fused.loom"
     },
     {
-      "path": "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom"
+      "path": "../loom-libs/ops/llm/flash_attention_decode_f32_f16_wmma.loom"
     },
     {
-      "path": "qwen3_moe/flash_attention_decode_q128_f32_f16_wmma.loom"
+      "path": "../loom-libs/ops/llm/flash_attention_decode_q128_f32_f16_wmma.loom"
     },
     {
-      "path": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom"
+      "path": "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom"
     },
     {
-      "path": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+      "path": "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom"
     },
     {
-      "path": "qwen3_moe/flash_attention_f32_f16_wmma.loom"
+      "path": "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom"
     },
     {
-      "path": "qwen3_moe/model_config.loom"
+      "path": "../loom-libs/motifs/quantized_fusion_config.loom"
     },
     {
-      "path": "qwen3_moe/routed_down_q4k.loom"
+      "path": "../loom-libs/ops/llm/routed_down_q4k.loom"
     },
     {
-      "path": "qwen3_moe/routed_down_q6k.loom"
+      "path": "../loom-libs/ops/llm/routed_down_q6k.loom"
     },
     {
-      "path": "qwen3_moe/routed_down_next_q8.loom"
+      "path": "../loom-libs/ops/llm/routed_down_next_q8.loom"
     },
     {
-      "path": "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+      "path": "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom"
     },
     {
-      "path": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+      "path": "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
     },
     {
-      "path": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
+      "path": "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
     },
     {
-      "path": "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+      "path": "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom"
     },
     {
-      "path": "qwen3_moe/routed_linear_q4k_f16_wmma.loom"
+      "path": "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom"
     },
     {
-      "path": "qwen3_moe/router_projection_f32.loom"
+      "path": "../loom-libs/ops/llm/router_projection_f32.loom"
     },
     {
-      "path": "qwen3_moe/router_projection_top8_fused_f32.loom"
+      "path": "../loom-libs/ops/llm/router_projection_top8_fused_f32.loom"
     },
     {
-      "path": "qwen3_moe/router_top8_f32.loom"
+      "path": "../loom-libs/ops/llm/router_top8_f32.loom"
     },
     {
       "path": "../qwen/token_embedding_q4k.loom",
@@ -96,13 +96,16 @@
     {
       "path": "../qwen/attention_metadata.loom",
       "upstream_path": "experimental/qwen/kernels/attention_metadata.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/quantize_q8_1_x4.loom"
     }
   ],
   "exports": [
     {
       "name": "ggml_linear_q6k_f32_wave32",
       "symbol": "ggml_linear_q6k_f32_wave32",
-      "source": "ggml/linear_q6k_f32.loom",
+      "source": "../loom-libs/ops/linear_q6k_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -146,22 +149,24 @@
         "mode": "archive",
         "link_module": "linear_q6k_f32_linked",
         "primary_sources": [
-          "ggml/linear_q6k_f32.loom"
+          "../loom-libs/ops/linear_q6k_f32.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "ggml_linear_q6k_f32_wave64",
       "symbol": "ggml_linear_q6k_f32_wave64",
-      "source": "ggml/linear_q6k_f32.loom",
+      "source": "../loom-libs/ops/linear_q6k_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -205,22 +210,24 @@
         "mode": "archive",
         "link_module": "linear_q6k_f32_linked",
         "primary_sources": [
-          "ggml/linear_q6k_f32.loom"
+          "../loom-libs/ops/linear_q6k_f32.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "ggml_linear_q6k_q8_1_x4",
       "symbol": "ggml_linear_q6k_q8_1_x4",
-      "source": "ggml/linear_q6k_q8_1_x4.loom",
+      "source": "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -264,20 +271,22 @@
         "mode": "archive",
         "link_module": "linear_q6k_q8_1_x4_linked",
         "primary_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "ggml_linear_q6k_q8_1_x4",
       "symbol": "ggml_linear_q6k_q8_1_x4_wave64_block4",
-      "source": "ggml/linear_q6k_q8_1_x4.loom",
+      "source": "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -321,20 +330,22 @@
         "mode": "archive",
         "link_module": "linear_q6k_q8_1_x4_linked",
         "primary_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "ggml_q8_1_x4_inspect_one_group",
       "symbol": "ggml_q8_1_x4_inspect_one_group",
-      "source": "ggml/quantize_q8_1_x4.loom",
+      "source": "../loom-libs/ops/quantize_q8_1_x4.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -353,16 +364,20 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
+      ]
     },
     {
       "name": "ggml_quantize_q8_1_x4_f32",
       "symbol": "ggml_quantize_q8_1_x4_f32",
-      "source": "ggml/quantize_q8_1_x4.loom",
+      "source": "../loom-libs/ops/quantize_q8_1_x4.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -395,16 +410,20 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
+      ]
     },
     {
       "name": "qwen3_moe_attention_key_q4_aggregate_prefill_512",
       "symbol": "qwen3_moe_attention_key_q4_aggregate_prefill_512",
-      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -432,32 +451,34 @@
         "mode": "archive",
         "link_module": "attention_qkv_same_format_prefill_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_same_format_prefill.loom"
+          "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom"
         ],
         "library_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_postprocess_f32_f16",
       "symbol": "qwen3_moe_attention_postprocess_f32_f16",
-      "source": "qwen3_moe/attention_postprocess_f32_f16.loom",
+      "source": "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -511,20 +532,20 @@
         "mode": "archive",
         "link_module": "attention_postprocess_f32_f16_linked",
         "primary_sources": [
-          "qwen3_moe/attention_postprocess_f32_f16.loom"
+          "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_qkv_postprocess_fused_decode",
       "symbol": "qwen3_moe_attention_qkv_postprocess_fused_decode",
-      "source": "qwen3_moe/attention_qkv_postprocess_fused.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -588,36 +609,38 @@
         "mode": "archive",
         "link_module": "attention_qkv_postprocess_fused_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_postprocess_fused.loom"
+          "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom"
         ],
         "library_sources": [
-          "qwen3_moe/attention_postprocess_f32_f16.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/attention_qkv_quantized.loom",
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/attention_qkv_quantized.loom",
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/attention_postprocess_f32_f16.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/attention_qkv_quantized.loom",
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/attention_qkv_quantized.loom",
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_qkv_postprocess_fused_decode_q4",
       "symbol": "qwen3_moe_attention_qkv_postprocess_fused_decode_q4",
-      "source": "qwen3_moe/attention_qkv_postprocess_fused.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -681,36 +704,38 @@
         "mode": "archive",
         "link_module": "attention_qkv_postprocess_fused_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_postprocess_fused.loom"
+          "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom"
         ],
         "library_sources": [
-          "qwen3_moe/attention_postprocess_f32_f16.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/attention_qkv_quantized.loom",
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/attention_qkv_quantized.loom",
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/attention_postprocess_f32_f16.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/attention_qkv_quantized.loom",
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/attention_qkv_quantized.loom",
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_qkv_postprocess_fused_decode_q6",
       "symbol": "qwen3_moe_attention_qkv_postprocess_fused_decode_q6",
-      "source": "qwen3_moe/attention_qkv_postprocess_fused.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -774,36 +799,38 @@
         "mode": "archive",
         "link_module": "attention_qkv_postprocess_fused_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_postprocess_fused.loom"
+          "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom"
         ],
         "library_sources": [
-          "qwen3_moe/attention_postprocess_f32_f16.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/attention_qkv_quantized.loom",
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/attention_qkv_quantized.loom",
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/attention_postprocess_f32_f16.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/attention_qkv_quantized.loom",
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/attention_qkv_quantized.loom",
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_qkv_q4_prefill_512",
       "symbol": "qwen3_moe_attention_qkv_q4_prefill_512",
-      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -831,32 +858,34 @@
         "mode": "archive",
         "link_module": "attention_qkv_same_format_prefill_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_same_format_prefill.loom"
+          "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom"
         ],
         "library_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_qkv_quantized",
       "symbol": "qwen3_moe_attention_qkv_quantized",
-      "source": "qwen3_moe/attention_qkv_quantized.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_quantized.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -892,32 +921,34 @@
         "mode": "archive",
         "link_module": "attention_qkv_quantized_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_quantized.loom"
+          "../loom-libs/ops/llm/attention_qkv_quantized.loom"
         ],
         "library_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_query_q4_aggregate_prefill_512",
       "symbol": "qwen3_moe_attention_query_q4_aggregate_prefill_512",
-      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -945,32 +976,34 @@
         "mode": "archive",
         "link_module": "attention_qkv_same_format_prefill_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_same_format_prefill.loom"
+          "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom"
         ],
         "library_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_rmsnorm_quantize_q8_1_x4",
       "symbol": "qwen3_moe_attention_rmsnorm_quantize_q8_1_x4",
-      "source": "qwen3_moe/attention_prepare_quantized.loom",
+      "source": "../loom-libs/ops/llm/attention_prepare_quantized.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -998,22 +1031,24 @@
         "mode": "archive",
         "link_module": "attention_prepare_quantized_linked",
         "primary_sources": [
-          "qwen3_moe/attention_prepare_quantized.loom"
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_attention_value_q4_aggregate_prefill_512",
       "symbol": "qwen3_moe_attention_value_q4_aggregate_prefill_512",
-      "source": "qwen3_moe/attention_qkv_same_format_prefill.loom",
+      "source": "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1041,32 +1076,34 @@
         "mode": "archive",
         "link_module": "attention_qkv_same_format_prefill_linked",
         "primary_sources": [
-          "qwen3_moe/attention_qkv_same_format_prefill.loom"
+          "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom"
         ],
         "library_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_batched_decode_gate_up_q4k_rows2",
       "symbol": "qwen3_moe_batched_decode_gate_up_q4k_rows2",
-      "source": "qwen3_moe/batched_decode_gate_up_q4k.loom",
+      "source": "../loom-libs/ops/llm/batched_decode_gate_up_q4k.loom",
       "workload_parameters": [
         {
           "name": "descriptor_count",
@@ -1140,24 +1177,26 @@
         "mode": "archive",
         "link_module": "batched_decode_gate_up_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/batched_decode_gate_up_q4k.loom"
+          "../loom-libs/ops/llm/batched_decode_gate_up_q4k.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom",
-          "qwen3_moe/batched_decode_expert_dispatch.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/batched_decode_expert_dispatch.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_build_batched_decode_expert_dispatch",
       "symbol": "qwen3_moe_build_batched_decode_expert_dispatch",
-      "source": "qwen3_moe/batched_decode_expert_dispatch.loom",
+      "source": "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1211,20 +1250,20 @@
         "mode": "archive",
         "link_module": "batched_decode_expert_dispatch_linked",
         "primary_sources": [
-          "qwen3_moe/batched_decode_expert_dispatch.loom"
+          "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "qwen3_moe_build_batched_decode_expert_dispatch_reference",
       "symbol": "qwen3_moe_build_batched_decode_expert_dispatch_reference",
-      "source": "qwen3_moe/batched_decode_expert_dispatch.loom",
+      "source": "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1278,20 +1317,20 @@
         "mode": "archive",
         "link_module": "batched_decode_expert_dispatch_linked",
         "primary_sources": [
-          "qwen3_moe/batched_decode_expert_dispatch.loom"
+          "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "qwen3_moe_build_expert_partition_table",
       "symbol": "qwen3_moe_build_expert_partition_table",
-      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "source": "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1333,20 +1372,22 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_build_expert_table",
       "symbol": "qwen3_moe_build_expert_table",
-      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "source": "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1396,20 +1437,22 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_build_expert_table_partition_prefill_512",
       "symbol": "qwen3_moe_build_expert_table_partition_prefill_512",
-      "source": "qwen3_moe/expert_table_partition_fused.loom",
+      "source": "../loom-libs/ops/llm/expert_table_partition_fused.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1463,22 +1506,24 @@
         "mode": "archive",
         "link_module": "expert_table_partition_fused_linked",
         "primary_sources": [
-          "qwen3_moe/expert_table_partition_fused.loom"
+          "../loom-libs/ops/llm/expert_table_partition_fused.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_dense_linear_q4k_f16_wmma",
       "symbol": "qwen3_moe_dense_linear_q4k_f16_wmma",
-      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1506,30 +1551,32 @@
         "mode": "archive",
         "link_module": "dense_linear_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_dense_linear_q4k_f16_wmma_parameterized",
       "symbol": "qwen3_moe_dense_linear_q4k_f16_wmma_parameterized",
-      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1581,30 +1628,32 @@
         "mode": "archive",
         "link_module": "dense_linear_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_dense_linear_q4k_q8_1_x4",
       "symbol": "qwen3_moe_dense_linear_q4k_q8_1_x4",
-      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1632,30 +1681,32 @@
         "mode": "archive",
         "link_module": "dense_linear_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8",
       "symbol": "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8",
-      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1691,30 +1742,32 @@
         "mode": "archive",
         "link_module": "dense_linear_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_dense_linear_q6k_f16_wmma",
       "symbol": "qwen3_moe_dense_linear_q6k_f16_wmma",
-      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1742,30 +1795,32 @@
         "mode": "archive",
         "link_module": "dense_linear_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_dense_linear_q6k_f16_wmma_parameterized",
       "symbol": "qwen3_moe_dense_linear_q6k_f16_wmma_parameterized",
-      "source": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1817,30 +1872,32 @@
         "mode": "archive",
         "link_module": "dense_linear_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_flash_attention_decode_f32_f16_wmma",
       "symbol": "qwen3_moe_flash_attention_decode_f32_f16_wmma",
-      "source": "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "key_value_token_count",
@@ -1871,7 +1928,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -1880,7 +1937,7 @@
     {
       "name": "qwen3_moe_flash_attention_decode_q128_fused_f32_f16_wmma",
       "symbol": "qwen3_moe_flash_attention_decode_q128_fused_f32_f16_wmma",
-      "source": "qwen3_moe/flash_attention_decode_q128_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_q128_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "key_value_token_count",
@@ -1911,7 +1968,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_q128_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_q128_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -1920,7 +1977,7 @@
     {
       "name": "qwen3_moe_flash_attention_decode_split_f32_f16_wmma",
       "symbol": "qwen3_moe_flash_attention_decode_split_f32_f16_wmma",
-      "source": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "key_value_token_count",
@@ -1959,7 +2016,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -1968,7 +2025,7 @@
     {
       "name": "qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8",
       "symbol": "qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8",
-      "source": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "key_value_token_count",
@@ -2009,7 +2066,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -2018,7 +2075,7 @@
     {
       "name": "qwen3_moe_flash_attention_decode_split_mask_513_of_576",
       "symbol": "qwen3_moe_flash_attention_decode_split_mask_513_of_576",
-      "source": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -2032,22 +2089,24 @@
         "mode": "archive",
         "link_module": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom"
         ],
         "library_sources": [
-          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_flash_attention_decode_split_pack_completed_q8_test",
       "symbol": "qwen3_moe_flash_attention_decode_split_pack_completed_q8_test",
-      "source": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -2063,22 +2122,24 @@
         "mode": "archive",
         "link_module": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom"
         ],
         "library_sources": [
-          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_flash_attention_decode_split_produce_partials_f32_f16_wmma",
       "symbol": "qwen3_moe_flash_attention_decode_split_produce_partials_f32_f16_wmma",
-      "source": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "key_value_token_count",
@@ -2113,7 +2174,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -2122,7 +2183,7 @@
     {
       "name": "qwen3_moe_flash_attention_decode_split_quantize_reference_4096",
       "symbol": "qwen3_moe_flash_attention_decode_split_quantize_reference_4096",
-      "source": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -2138,22 +2199,24 @@
         "mode": "archive",
         "link_module": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom"
         ],
         "library_sources": [
-          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_flash_attention_decode_split_reduce_f32",
       "symbol": "qwen3_moe_flash_attention_decode_split_reduce_f32",
-      "source": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "key_value_token_count",
@@ -2182,7 +2245,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -2191,7 +2254,7 @@
     {
       "name": "qwen3_moe_flash_attention_f32_f16_wmma",
       "symbol": "qwen3_moe_flash_attention_f32_f16_wmma",
-      "source": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "query_token_count",
@@ -2230,7 +2293,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -2239,7 +2302,7 @@
     {
       "name": "qwen3_moe_flash_attention_test_extract_row",
       "symbol": "qwen3_moe_flash_attention_test_extract_row",
-      "source": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "query_token_count",
@@ -2284,7 +2347,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -2293,7 +2356,7 @@
     {
       "name": "qwen3_moe_flash_attention_test_make_causal_mask",
       "symbol": "qwen3_moe_flash_attention_test_make_causal_mask",
-      "source": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -2306,7 +2369,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "qwen3_moe/flash_attention_f32_f16_wmma.loom"
+          "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom"
         ],
         "library_sources": []
       },
@@ -2315,7 +2378,7 @@
     {
       "name": "qwen3_moe_rmsnorm_f32",
       "symbol": "qwen3_moe_rmsnorm_f32",
-      "source": "qwen3_moe/attention_prepare_quantized.loom",
+      "source": "../loom-libs/ops/llm/attention_prepare_quantized.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2343,22 +2406,24 @@
         "mode": "archive",
         "link_module": "attention_prepare_quantized_linked",
         "primary_sources": [
-          "qwen3_moe/attention_prepare_quantized.loom"
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
       "symbol": "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
-      "source": "qwen3_moe/attention_prepare_quantized.loom",
+      "source": "../loom-libs/ops/llm/attention_prepare_quantized.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2388,22 +2453,24 @@
         "mode": "archive",
         "link_module": "attention_prepare_quantized_linked",
         "primary_sources": [
-          "qwen3_moe/attention_prepare_quantized.loom"
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_rmsnorm_quantize_q8_1_x4_wave64_production_check",
       "symbol": "qwen3_moe_rmsnorm_quantize_q8_1_x4_wave64_production_check",
-      "source": "qwen3_moe/routed_down_q6k.loom",
+      "source": "../loom-libs/ops/llm/routed_down_q6k.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -2421,30 +2488,32 @@
         "mode": "archive",
         "link_module": "routed_down_q6k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_q6k.loom"
+          "../loom-libs/ops/llm/routed_down_q6k.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_f32.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_down_next_q8.loom"
+          "../loom-libs/ops/linear_q6k_f32.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_f32.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom"
+        "../loom-libs/ops/linear_q6k_f32.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q4k_f16_wmma_grouped",
       "symbol": "qwen3_moe_routed_down_q4k_f16_wmma_grouped",
-      "source": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2474,36 +2543,38 @@
         "mode": "archive",
         "link_module": "routed_down_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_down_q4k.loom",
-          "qwen3_moe/routed_down_q6k.loom",
-          "qwen3_moe/routed_down_next_q8.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_down_q4k.loom",
+          "../loom-libs/ops/llm/routed_down_q6k.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q4k_q8_1_x4",
       "symbol": "qwen3_moe_routed_down_q4k_q8_1_x4",
-      "source": "qwen3_moe/routed_down_q4k.loom",
+      "source": "../loom-libs/ops/llm/routed_down_q4k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2575,28 +2646,30 @@
         "mode": "archive",
         "link_module": "routed_down_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_q4k.loom"
+          "../loom-libs/ops/llm/routed_down_q4k.loom"
         ],
         "library_sources": [
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_down_next_q8.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q4k_q8_1_x4_next_q8",
       "symbol": "qwen3_moe_routed_down_q4k_q8_1_x4_next_q8",
-      "source": "qwen3_moe/routed_down_q4k.loom",
+      "source": "../loom-libs/ops/llm/routed_down_q4k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2674,28 +2747,30 @@
         "mode": "archive",
         "link_module": "routed_down_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_q4k.loom"
+          "../loom-libs/ops/llm/routed_down_q4k.loom"
         ],
         "library_sources": [
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_down_next_q8.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q6k_f16_wmma_grouped",
       "symbol": "qwen3_moe_routed_down_q6k_f16_wmma_grouped",
-      "source": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2725,36 +2800,38 @@
         "mode": "archive",
         "link_module": "routed_down_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_down_q4k.loom",
-          "qwen3_moe/routed_down_q6k.loom",
-          "qwen3_moe/routed_down_next_q8.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_down_q4k.loom",
+          "../loom-libs/ops/llm/routed_down_q6k.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q6k_f32_wave64",
       "symbol": "qwen3_moe_routed_down_q6k_f32_wave64",
-      "source": "qwen3_moe/routed_down_q6k.loom",
+      "source": "../loom-libs/ops/llm/routed_down_q6k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2826,30 +2903,32 @@
         "mode": "archive",
         "link_module": "routed_down_q6k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_q6k.loom"
+          "../loom-libs/ops/llm/routed_down_q6k.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_f32.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_down_next_q8.loom"
+          "../loom-libs/ops/linear_q6k_f32.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_f32.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom"
+        "../loom-libs/ops/linear_q6k_f32.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q6k_f32_wave64_next_q8",
       "symbol": "qwen3_moe_routed_down_q6k_f32_wave64_next_q8",
-      "source": "qwen3_moe/routed_down_q6k.loom",
+      "source": "../loom-libs/ops/llm/routed_down_q6k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2927,30 +3006,32 @@
         "mode": "archive",
         "link_module": "routed_down_q6k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_q6k.loom"
+          "../loom-libs/ops/llm/routed_down_q6k.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_f32.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_down_next_q8.loom"
+          "../loom-libs/ops/linear_q6k_f32.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_f32.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom"
+        "../loom-libs/ops/linear_q6k_f32.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q6k_q8_1_x4",
       "symbol": "qwen3_moe_routed_down_q6k_q8_1_x4",
-      "source": "qwen3_moe/routed_down_q6k.loom",
+      "source": "../loom-libs/ops/llm/routed_down_q6k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3022,30 +3103,32 @@
         "mode": "archive",
         "link_module": "routed_down_q6k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_q6k.loom"
+          "../loom-libs/ops/llm/routed_down_q6k.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_f32.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_down_next_q8.loom"
+          "../loom-libs/ops/linear_q6k_f32.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_f32.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom"
+        "../loom-libs/ops/linear_q6k_f32.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_q6k_q8_1_x4_next_q8",
       "symbol": "qwen3_moe_routed_down_q6k_q8_1_x4_next_q8",
-      "source": "qwen3_moe/routed_down_q6k.loom",
+      "source": "../loom-libs/ops/llm/routed_down_q6k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3123,30 +3206,32 @@
         "mode": "archive",
         "link_module": "routed_down_q6k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_q6k.loom"
+          "../loom-libs/ops/llm/routed_down_q6k.loom"
         ],
         "library_sources": [
-          "ggml/linear_q6k_f32.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/routed_down_next_q8.loom"
+          "../loom-libs/ops/linear_q6k_f32.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/linear_q6k_f32.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom"
+        "../loom-libs/ops/linear_q6k_f32.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_weighted_reduce_f16_f32",
       "symbol": "qwen3_moe_routed_down_weighted_reduce_f16_f32",
-      "source": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3176,36 +3261,38 @@
         "mode": "archive",
         "link_module": "routed_down_quantized_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+          "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_down_q4k.loom",
-          "qwen3_moe/routed_down_q6k.loom",
-          "qwen3_moe/routed_down_next_q8.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_down_q4k.loom",
+          "../loom-libs/ops/llm/routed_down_q6k.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32",
       "symbol": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32",
-      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
+      "source": "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3237,38 +3324,40 @@
         "mode": "archive",
         "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+          "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_down_q4k.loom",
-          "qwen3_moe/routed_down_q6k.loom",
-          "qwen3_moe/routed_down_next_q8.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_down_q4k.loom",
+          "../loom-libs/ops/llm/routed_down_q6k.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4",
       "symbol": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4",
-      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom",
+      "source": "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3300,38 +3389,40 @@
         "mode": "archive",
         "link_module": "routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_linked",
         "primary_sources": [
-          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-          "qwen3_moe/routed_down_q4k.loom",
-          "qwen3_moe/routed_down_q6k.loom",
-          "qwen3_moe/routed_down_next_q8.loom",
-          "qwen3_moe/attention_prepare_quantized.loom",
-          "qwen3_moe/model_config.loom",
-          "ggml/linear_q6k_q8_1_x4.loom",
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+          "../loom-libs/ops/llm/routed_down_q4k.loom",
+          "../loom-libs/ops/llm/routed_down_q6k.loom",
+          "../loom-libs/ops/llm/routed_down_next_q8.loom",
+          "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma",
       "symbol": "qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma",
-      "source": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3365,22 +3456,24 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom"
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_gate_up_swiglu_q4k_q8",
       "symbol": "qwen3_moe_routed_gate_up_swiglu_q4k_q8",
-      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "source": "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3444,20 +3537,22 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8",
       "symbol": "qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8",
-      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "source": "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3525,20 +3620,22 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_gate_up_swiglu_q4k_q8_grouped",
       "symbol": "qwen3_moe_routed_gate_up_swiglu_q4k_q8_grouped",
-      "source": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
+      "source": "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3594,20 +3691,22 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_linked",
         "primary_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom"
         ],
         "library_sources": [
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_linear_q4k_f16_wmma",
       "symbol": "qwen3_moe_routed_linear_q4k_f16_wmma",
-      "source": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3637,22 +3736,24 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom"
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_swiglu_f16",
       "symbol": "qwen3_moe_routed_swiglu_f16",
-      "source": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3680,22 +3781,24 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom"
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_routed_swiglu_f32",
       "symbol": "qwen3_moe_routed_swiglu_f32",
-      "source": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
+      "source": "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3723,22 +3826,24 @@
         "mode": "archive",
         "link_module": "routed_gate_up_swiglu_q4k_f16_wmma_linked",
         "primary_sources": [
-          "qwen3_moe/routed_linear_q4k_f16_wmma.loom"
+          "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom"
         ],
         "library_sources": [
-          "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-          "ggml/quantize_q8_1_x4.loom"
+          "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+          "../loom-libs/ops/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "qwen3_moe_router_projection_f32_four_row_wave32",
       "symbol": "qwen3_moe_router_projection_f32_four_row_wave32",
-      "source": "qwen3_moe/router_projection_f32.loom",
+      "source": "../loom-libs/ops/llm/router_projection_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3766,20 +3871,20 @@
         "mode": "archive",
         "link_module": "router_projection_f32_linked",
         "primary_sources": [
-          "qwen3_moe/router_projection_f32.loom"
+          "../loom-libs/ops/llm/router_projection_f32.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "qwen3_moe_router_projection_f32_one_row_wave64",
       "symbol": "qwen3_moe_router_projection_f32_one_row_wave64",
-      "source": "qwen3_moe/router_projection_f32.loom",
+      "source": "../loom-libs/ops/llm/router_projection_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3807,20 +3912,20 @@
         "mode": "archive",
         "link_module": "router_projection_f32_linked",
         "primary_sources": [
-          "qwen3_moe/router_projection_f32.loom"
+          "../loom-libs/ops/llm/router_projection_f32.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "qwen3_moe_router_projection_f32_reference",
       "symbol": "qwen3_moe_router_projection_f32_reference",
-      "source": "qwen3_moe/router_projection_f32.loom",
+      "source": "../loom-libs/ops/llm/router_projection_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3848,20 +3953,20 @@
         "mode": "archive",
         "link_module": "router_projection_f32_linked",
         "primary_sources": [
-          "qwen3_moe/router_projection_f32.loom"
+          "../loom-libs/ops/llm/router_projection_f32.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "qwen3_moe_router_projection_top8_fused_decode_f32",
       "symbol": "qwen3_moe_router_projection_top8_fused_decode_f32",
-      "source": "qwen3_moe/router_projection_top8_fused_f32.loom",
+      "source": "../loom-libs/ops/llm/router_projection_top8_fused_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3903,24 +4008,24 @@
         "mode": "archive",
         "link_module": "router_projection_top8_fused_f32_linked",
         "primary_sources": [
-          "qwen3_moe/router_projection_top8_fused_f32.loom"
+          "../loom-libs/ops/llm/router_projection_top8_fused_f32.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom",
-          "qwen3_moe/router_projection_f32.loom",
-          "qwen3_moe/router_top8_f32.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom",
+          "../loom-libs/ops/llm/router_projection_f32.loom",
+          "../loom-libs/ops/llm/router_top8_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/router_projection_f32.loom",
-        "qwen3_moe/router_top8_f32.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/router_projection_f32.loom",
+        "../loom-libs/ops/llm/router_top8_f32.loom"
       ]
     },
     {
       "name": "qwen3_moe_router_top8_f32",
       "symbol": "qwen3_moe_router_top8_f32",
-      "source": "qwen3_moe/router_top8_f32.loom",
+      "source": "../loom-libs/ops/llm/router_top8_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3956,20 +4061,20 @@
         "mode": "archive",
         "link_module": "router_top8_f32_linked",
         "primary_sources": [
-          "qwen3_moe/router_top8_f32.loom"
+          "../loom-libs/ops/llm/router_top8_f32.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "qwen3_moe_router_top8_wide_stride_reference",
       "symbol": "qwen3_moe_router_top8_wide_stride_reference",
-      "source": "qwen3_moe/router_top8_f32.loom",
+      "source": "../loom-libs/ops/llm/router_top8_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -3983,14 +4088,14 @@
         "mode": "archive",
         "link_module": "router_top8_f32_linked",
         "primary_sources": [
-          "qwen3_moe/router_top8_f32.loom"
+          "../loom-libs/ops/llm/router_top8_f32.loom"
         ],
         "library_sources": [
-          "qwen3_moe/model_config.loom"
+          "../loom-libs/motifs/quantized_fusion_config.loom"
         ]
       },
       "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
@@ -4118,55 +4223,56 @@
     {
       "name": "router_projection_f32_linked",
       "srcs": [
-        "qwen3_moe/router_projection_f32.loom"
+        "../loom-libs/ops/llm/router_projection_f32.loom"
       ],
       "libraries": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "router_top8_f32_linked",
       "srcs": [
-        "qwen3_moe/router_top8_f32.loom"
+        "../loom-libs/ops/llm/router_top8_f32.loom"
       ],
       "libraries": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "router_projection_top8_fused_f32_linked",
       "srcs": [
-        "qwen3_moe/router_projection_top8_fused_f32.loom"
+        "../loom-libs/ops/llm/router_projection_top8_fused_f32.loom"
       ],
       "libraries": [
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/router_projection_f32.loom",
-        "qwen3_moe/router_top8_f32.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/router_projection_f32.loom",
+        "../loom-libs/ops/llm/router_top8_f32.loom"
       ]
     },
     {
       "name": "attention_postprocess_f32_f16_linked",
       "srcs": [
-        "qwen3_moe/attention_postprocess_f32_f16.loom"
+        "../loom-libs/ops/llm/attention_postprocess_f32_f16.loom"
       ],
       "libraries": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "attention_prepare_quantized_linked",
       "srcs": [
-        "qwen3_moe/attention_prepare_quantized.loom"
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom"
       ],
       "libraries": [
-        "qwen3_moe/model_config.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "attention_qkv_quantized_linked",
       "srcs": [
-        "qwen3_moe/attention_qkv_quantized.loom"
+        "../loom-libs/ops/llm/attention_qkv_quantized.loom"
       ],
       "libraries": [
         ":dense_linear_quantized_f16_wmma_linked"
@@ -4175,7 +4281,7 @@
     {
       "name": "attention_qkv_postprocess_fused_linked",
       "srcs": [
-        "qwen3_moe/attention_qkv_postprocess_fused.loom"
+        "../loom-libs/ops/llm/attention_qkv_postprocess_fused.loom"
       ],
       "libraries": [
         ":attention_postprocess_f32_f16_linked",
@@ -4185,7 +4291,7 @@
     {
       "name": "attention_qkv_same_format_prefill_linked",
       "srcs": [
-        "qwen3_moe/attention_qkv_same_format_prefill.loom"
+        "../loom-libs/ops/llm/attention_qkv_same_format_prefill.loom"
       ],
       "libraries": [
         ":dense_linear_quantized_f16_wmma_linked"
@@ -4194,16 +4300,17 @@
     {
       "name": "linear_q6k_q8_1_x4_linked",
       "srcs": [
-        "ggml/linear_q6k_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom"
       ],
       "libraries": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "linear_q6k_f32_linked",
       "srcs": [
-        "ggml/linear_q6k_f32.loom"
+        "../loom-libs/ops/linear_q6k_f32.loom"
       ],
       "libraries": [
         ":linear_q6k_q8_1_x4_linked"
@@ -4212,154 +4319,165 @@
     {
       "name": "routed_down_quantized_f16_wmma_linked",
       "srcs": [
-        "qwen3_moe/routed_down_quantized_f16_wmma.loom"
+        "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom"
       ],
       "libraries": [
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
       "srcs": [
-        "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
+        "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
       ],
       "libraries": [
-        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_linked",
       "srcs": [
-        "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_down_weighted_reduce_next_rmsnorm_q8_1_x4.loom"
       ],
       "libraries": [
-        "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_down_q4k.loom",
-        "qwen3_moe/routed_down_q6k.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_down_quantized_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_down_q4k.loom",
+        "../loom-libs/ops/llm/routed_down_q6k.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "routed_down_q4k_linked",
       "srcs": [
-        "qwen3_moe/routed_down_q4k.loom"
+        "../loom-libs/ops/llm/routed_down_q4k.loom"
       ],
       "libraries": [
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "routed_down_q6k_linked",
       "srcs": [
-        "qwen3_moe/routed_down_q6k.loom"
+        "../loom-libs/ops/llm/routed_down_q6k.loom"
       ],
       "libraries": [
-        "ggml/linear_q6k_f32.loom",
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_down_next_q8.loom"
+        "../loom-libs/ops/linear_q6k_f32.loom",
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_down_next_q8.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "routed_gate_up_swiglu_q4k_linked",
       "srcs": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom"
       ],
       "libraries": [
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "batched_decode_expert_dispatch_linked",
       "srcs": [
-        "qwen3_moe/batched_decode_expert_dispatch.loom"
+        "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom"
       ],
       "libraries": [
-        "qwen3_moe/model_config.loom"
+        "../loom-libs/motifs/quantized_fusion_config.loom"
       ]
     },
     {
       "name": "batched_decode_gate_up_q4k_linked",
       "srcs": [
-        "qwen3_moe/batched_decode_gate_up_q4k.loom"
+        "../loom-libs/ops/llm/batched_decode_gate_up_q4k.loom"
       ],
       "libraries": [
-        "ggml/quantize_q8_1_x4.loom",
-        "qwen3_moe/batched_decode_expert_dispatch.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom"
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/ops/llm/batched_decode_expert_dispatch.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "expert_table_partition_fused_linked",
       "srcs": [
-        "qwen3_moe/expert_table_partition_fused.loom"
+        "../loom-libs/ops/llm/expert_table_partition_fused.loom"
       ],
       "libraries": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "routed_gate_up_swiglu_q4k_f16_wmma_linked",
       "srcs": [
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom"
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom"
       ],
       "libraries": [
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "dense_linear_quantized_f16_wmma_linked",
       "srcs": [
-        "qwen3_moe/dense_linear_quantized_f16_wmma.loom"
+        "../loom-libs/ops/llm/dense_linear_quantized_f16_wmma.loom"
       ],
       "libraries": [
-        "ggml/linear_q6k_q8_1_x4.loom",
-        "qwen3_moe/attention_prepare_quantized.loom",
-        "qwen3_moe/model_config.loom",
-        "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-        "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/linear_q6k_q8_1_x4.loom",
+        "../loom-libs/ops/llm/attention_prepare_quantized.loom",
+        "../loom-libs/motifs/quantized_fusion_config.loom",
+        "../loom-libs/ops/llm/routed_linear_q4k_f16_wmma.loom",
+        "../loom-libs/ops/llm/routed_gate_up_swiglu_q4k.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "flash_attention_decode_split_f32_f16_wmma_next_q8_linked",
       "srcs": [
-        "qwen3_moe/flash_attention_decode_split_next_q8_test.loom"
+        "../loom-libs/ops/llm/flash_attention_decode_split_next_q8_test.loom"
       ],
       "libraries": [
-        "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-        "ggml/quantize_q8_1_x4.loom"
+        "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom",
+        "../loom-libs/ops/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4.loom"
       ]
     }
   ],
@@ -4495,7 +4613,7 @@
         "--dry-run",
         "--output-format=jsonl"
       ],
-      "source": "ggml/quantize_q8_1_x4.loom"
+      "source": "../loom-libs/ops/quantize_q8_1_x4.loom"
     },
     {
       "name": "routed_gate_up_swiglu_q4k_plan_test",
@@ -4754,7 +4872,7 @@
         "--dry-run",
         "--output-format=jsonl"
       ],
-      "source": "qwen3_moe/flash_attention_decode_f32_f16_wmma.loom"
+      "source": "../loom-libs/ops/llm/flash_attention_decode_f32_f16_wmma.loom"
     },
     {
       "name": "flash_attention_decode_q128_f32_f16_wmma_plan_test",
@@ -4765,7 +4883,7 @@
         "--dry-run",
         "--output-format=jsonl"
       ],
-      "source": "qwen3_moe/flash_attention_decode_q128_f32_f16_wmma.loom"
+      "source": "../loom-libs/ops/llm/flash_attention_decode_q128_f32_f16_wmma.loom"
     },
     {
       "name": "flash_attention_decode_split_f32_f16_wmma_plan_test",
@@ -4777,7 +4895,7 @@
         "--dry-run",
         "--output-format=jsonl"
       ],
-      "source": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom"
+      "source": "../loom-libs/ops/llm/flash_attention_decode_split_f32_f16_wmma.loom"
     },
     {
       "name": "flash_attention_f32_f16_wmma_plan_test",
@@ -4789,7 +4907,7 @@
         "--dry-run",
         "--output-format=jsonl"
       ],
-      "source": "qwen3_moe/flash_attention_f32_f16_wmma.loom"
+      "source": "../loom-libs/ops/llm/flash_attention_f32_f16_wmma.loom"
     },
     {
       "name": "owned_token_embedding_decode_plan_test",

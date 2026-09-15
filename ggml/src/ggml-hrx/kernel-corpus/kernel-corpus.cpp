@@ -7,6 +7,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace ggml::hrx {
 namespace {
@@ -74,6 +75,21 @@ static bool kernel_variant_contract_equal(const KernelDefinition & lhs, const Ke
 #include "kernel-corpus-qwen.inc"
 // clang-format on
 
+static const std::vector<const KernelDefinition *> & builtin_kernel_index() {
+    static const auto index = [] {
+        std::vector<const KernelDefinition *> entries;
+        entries.reserve(kQwenKernelCorpus.kernels.size());
+        for (const KernelDefinition & kernel : kQwenKernelCorpus.kernels) {
+            entries.push_back(&kernel);
+        }
+        std::stable_sort(entries.begin(), entries.end(), [](const KernelDefinition * a, const KernelDefinition * b) {
+            return a->id < b->id;
+        });
+        return entries;
+    }();
+    return index;
+}
+
 }  // namespace
 
 const KernelSource * get_kernel_source(const char * source_path) {
@@ -98,10 +114,24 @@ KernelResolveResult resolve_kernel_definition(const KernelCorpus & corpus,
     if (kernel_id == kUncatalogedKernelId) {
         return { KernelResolveStatus::UncatalogedKernel, nullptr };
     }
+    const KernelDefinition * const * variants = nullptr;
+    size_t variant_count = corpus.kernels.size();
+    if (&corpus == &kQwenKernelCorpus) {
+        const auto & index = builtin_kernel_index();
+        const auto first = std::lower_bound(index.begin(), index.end(), kernel_id,
+                                            [](const KernelDefinition * kernel, uint64_t id) { return kernel->id < id; });
+        auto last = first;
+        while (last != index.end() && (*last)->id == kernel_id) {
+            ++last;
+        }
+        variants = index.data() + (first - index.begin());
+        variant_count = static_cast<size_t>(last - first);
+    }
     const KernelDefinition * first_match     = nullptr;
     const KernelDefinition * default_variant = nullptr;
     bool                     target_mismatch = false;
-    for (const KernelDefinition & kernel : corpus.kernels) {
+    for (size_t i = 0; i < variant_count; ++i) {
+        const KernelDefinition & kernel = variants != nullptr ? *variants[i] : corpus.kernels[i];
         if (kernel.id != kernel_id) {
             continue;
         }

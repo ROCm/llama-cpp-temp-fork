@@ -112,6 +112,12 @@ static ggml_hrx_loom_jit_source_format to_jit_source_format(ggml::hrx::KernelSou
 static const ggml::hrx::KernelDefinition & find_kernel(const char * name) {
     const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
     for (const ggml::hrx::KernelDefinition & kernel : corpus.kernels) {
+        if (std::strcmp(kernel.family, "loom_libs") == 0 &&
+            (std::strcmp(kernel.name, name) == 0 || std::strcmp(kernel.kernel_export_name(), name) == 0)) {
+            return kernel;
+        }
+    }
+    for (const ggml::hrx::KernelDefinition & kernel : corpus.kernels) {
         if (std::strcmp(kernel.name, name) == 0) {
             return kernel;
         }
@@ -123,11 +129,72 @@ static const ggml::hrx::KernelDefinition & find_kernel(const char * name) {
 static const ggml::hrx::KernelDefinition * find_targeted_kernel(const char * name, const char * target) {
     const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
     for (const ggml::hrx::KernelDefinition & kernel : corpus.kernels) {
+        if (std::strcmp(kernel.family, "loom_libs") == 0 && std::strcmp(kernel.target_selector, target) == 0 &&
+            (std::strcmp(kernel.name, name) == 0 || std::strcmp(kernel.kernel_export_name(), name) == 0)) {
+            return &kernel;
+        }
+    }
+    for (const ggml::hrx::KernelDefinition & kernel : corpus.kernels) {
         if (std::strcmp(kernel.name, name) == 0 && std::strcmp(kernel.target_selector, target) == 0) {
             return &kernel;
         }
     }
     return nullptr;
+}
+
+static void check_indexed_kernel_resolution() {
+    const auto & builtin = ggml::hrx::get_qwen_kernel_corpus();
+    const auto linear = builtin;
+    for (const char * target : {"gfx1100", "gfx1151", "gfx9999", ""}) {
+        auto check = [&](uint64_t id) {
+            const auto expected = ggml::hrx::resolve_kernel_definition(linear, target, id);
+            const auto actual = ggml::hrx::resolve_kernel_definition(builtin, target, id);
+            REQUIRE(expected.status == actual.status);
+            REQUIRE(expected.definition == actual.definition);
+        };
+        for (const auto & kernel : builtin.kernels) {
+            check(kernel.id);
+        }
+        check(ggml::hrx::kUncatalogedKernelId);
+        check(1);
+        check(UINT64_MAX);
+    }
+}
+
+static void check_shared_catalog_aliases() {
+    const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    size_t aliases = 0;
+    for (const auto & shared : corpus.kernels) {
+        if (std::strcmp(shared.family, "loom_libs") != 0) {
+            continue;
+        }
+        for (const auto & legacy : corpus.kernels) {
+            if (std::strcmp(legacy.family, "qwen3_moe") != 0 ||
+                std::strcmp(legacy.name, shared.kernel_export_name()) != 0 ||
+                std::strcmp(legacy.target_selector, shared.target_selector) != 0) {
+                continue;
+            }
+            REQUIRE(legacy.id != shared.id);
+            REQUIRE(std::strcmp(legacy.symbol, shared.symbol) == 0);
+            REQUIRE(std::strcmp(legacy.source, shared.source) == 0);
+            REQUIRE(std::strcmp(legacy.source_digest, shared.source_digest) == 0);
+            REQUIRE(legacy.bindings.size() == shared.bindings.size());
+            for (size_t i = 0; i < legacy.bindings.size(); ++i) {
+                REQUIRE(std::strcmp(legacy.bindings[i].name, shared.bindings[i].name) == 0);
+                REQUIRE(legacy.bindings[i].access == shared.bindings[i].access);
+            }
+            REQUIRE(legacy.compile_recipe.primary_sources.size() == shared.compile_recipe.primary_sources.size());
+            REQUIRE(legacy.compile_recipe.library_sources.size() == shared.compile_recipe.library_sources.size());
+            for (size_t i = 0; i < legacy.compile_recipe.primary_sources.size(); ++i) {
+                REQUIRE(legacy.compile_recipe.primary_sources[i].contents == shared.compile_recipe.primary_sources[i].contents);
+            }
+            for (size_t i = 0; i < legacy.compile_recipe.library_sources.size(); ++i) {
+                REQUIRE(legacy.compile_recipe.library_sources[i].contents == shared.compile_recipe.library_sources[i].contents);
+            }
+            ++aliases;
+        }
+    }
+    REQUIRE(aliases == 70);
 }
 
 static std::map<std::string, std::string> binary_f32_exact_config(const char * op, int64_t element_count) {
@@ -300,7 +367,7 @@ static ggml::hrx::LoomKernelCompileRequest make_compile_request(
     request.source_format        = to_jit_source_format(primary_source.contents->source.format);
     request.source_identifier    = primary_source.path != nullptr ? primary_source.path : "";
     request.symbol               = definition.symbol != nullptr ? definition.symbol : "";
-    request.launch_config_symbol = definition.name != nullptr ? definition.name : "";
+    request.launch_config_symbol = definition.kernel_export_name();
 
     request.dependencies.reserve(definition.compile_recipe.library_sources.size());
     for (const ggml::hrx::KernelSourceRef & dependency_ref : definition.compile_recipe.library_sources) {
@@ -414,6 +481,33 @@ static void run_cache_materialize_case(HrxTestDevice &                     devic
                 device.architecture.c_str());
 }
 
+static void run_catalog_alias_materialize_case(HrxTestDevice & device) {
+    const auto & definition = find_kernel("ggml_llm_rmsnorm_f32_quantize_q8_1_x4");
+    REQUIRE(std::strcmp(definition.name, definition.kernel_export_name()) != 0);
+    ggml::hrx::KernelExecutablePrepareContext context = {};
+    context.device = device.device;
+    context.target = device.architecture.c_str();
+    ggml::hrx::Dispatch dispatch;
+    dispatch.kernel.kernel_id = definition.id;
+    dispatch.kernel.integer_parameters.emplace("token_count", 1);
+    dispatch.kernel.compile_parameters = {
+        {"qwen3_moe.model.hidden_size", "2048"},
+        {"qwen3_moe.model.rms_epsilon", "0.000001"},
+        {"qwen3_moe.workload.token_capacity", "1"},
+        {"ggml.quantize_q8_1_x4.group_capacity", "16"},
+    };
+    for (size_t i = 0; i < definition.bindings.size(); ++i) {
+        dispatch.bindings.push_back({ggml::hrx::ValueId(static_cast<int32_t>(i + 1)), 0, i == 3 ? 2304u : 8192u});
+    }
+    std::vector<uint8_t> constants;
+    ggml::hrx::KernelExecutableCache cache(ggml::hrx::LoomJitMode::Sync);
+    const auto ref = cache.get_or_compile(context, definition, dispatch, constants);
+    REQUIRE(ref.valid());
+    const auto executable = cache.materialize(context, ref, constants);
+    REQUIRE(executable != nullptr && executable->executable != nullptr);
+    REQUIRE(executable->launch.workgroup_count[0] == 1);
+}
+
 static void run_targeted_export_materialize_case(HrxTestDevice & device) {
     const ggml::hrx::KernelDefinition * definition =
         find_targeted_kernel("ggml_linear_q6k_q8_1_x4", device.architecture.c_str());
@@ -447,6 +541,8 @@ static void run_targeted_export_materialize_case(HrxTestDevice & device) {
 }  // namespace
 
 int main() {
+    check_shared_catalog_aliases();
+    check_indexed_kernel_resolution();
     static constexpr const char * kTarget = "gfx1100";
 
     const ggml::hrx::KernelDefinition & binary          = find_kernel("ggml_binary_f32");
@@ -1008,6 +1104,7 @@ int main() {
 
     HrxTestDevice device;
     if (device.open()) {
+        run_catalog_alias_materialize_case(device);
         run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
         run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
         run_targeted_export_materialize_case(device);

@@ -1,6 +1,5 @@
 #include "dispatch-moe-router.h"
 
-#include "dispatch-llm-shapes.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -15,20 +14,22 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kQwenRouterTop8F32Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_top8_f32");
-static constexpr KernelCatalogRef kQwenRouterProjectionTop8FusedDecodeF32Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_projection_top8_fused_decode_f32");
-static constexpr KernelCatalogRef kQwenRouterProjectionF32FourRowWave32Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_router_projection_f32_four_row_wave32");
+static constexpr KernelCatalogRef kRouterTop8F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_router_top8_f32");
+static constexpr KernelCatalogRef kRouterProjectionTop8FusedDecodeF32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_router_projection_top8_fused_decode_f32");
+static constexpr KernelCatalogRef kRouterProjectionF32FourRowWave32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_router_projection_f32_four_row_wave32");
 static constexpr KernelCatalogRef kMoeBuildExpertTableKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_moe_build_expert_table");
 static constexpr KernelCatalogRef kMoeBuildExpertPartitionTableKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_moe_build_expert_partition_table");
-static constexpr KernelCatalogRef kQwenBuildExpertTablePartitionPrefill512Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_build_expert_table_partition_prefill_512");
+static constexpr KernelCatalogRef kBuildExpertTablePartitionPrefill512Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_build_expert_table_partition_prefill_512");
 
-static constexpr const LlmMoeDispatchProfile & kMoeRouterProfile                = kActiveLlmMoeDispatchProfile;
+// Qualified projection and table-partition schedules.
+static constexpr int64_t kRouterProjectionInputSize = 2048;
+static constexpr int64_t kRouterProjectionExpertCount = 128;
 static constexpr size_t                        kMoeRouterPlanTransientAlignment = 256;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -184,10 +185,10 @@ struct RouterTop8Match {
 
 static bool supports_fused_prefill_expert_table_partition(const RouterTop8Match & router_match) {
     // Matches the reference prefill recipe gate; q=1 uses decode routing paths.
-    return is_llm_prefill_512_query_length(kMoeRouterProfile, router_match.token_count) &&
-           router_match.route_count == kMoeRouterProfile.route_count &&
+    return router_match.token_count == 512 &&
+           router_match.route_count == 8 &&
            router_match.route_stride == router_match.route_count &&
-           router_match.expert_count == kMoeRouterProfile.expert_count;
+           router_match.expert_count == kRouterProjectionExpertCount;
 }
 
 static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNode * softmax_node, Status * status) {
@@ -207,7 +208,7 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
     const int64_t expert_count = logits->ne[0];
     const int64_t token_count  = logits->ne[1];
     if (!is_shape(*logits, expert_count, token_count, 1, 1) || !is_supported_expert_count(expert_count) ||
-        !is_llm_supported_query_length(kMoeRouterProfile, token_count)) {
+        (token_count < 1 || token_count > 2048)) {
         log_router_reject(status, graph, softmax_node, "unsupported logits expert/token shape");
         return {};
     }
@@ -411,9 +412,9 @@ static RouterProjectionTop8Match match_moe_router_projection_top8_decode(const D
     const Value * logits = graph_value(context.graph, projection->output);
     if (weight == nullptr || input == nullptr || logits == nullptr || weight->type != GGML_TYPE_F32 ||
         input->type != GGML_TYPE_F32 || logits->type != GGML_TYPE_F32 || !weight->contiguous || !input->contiguous ||
-        !logits->contiguous || !is_shape(*input, kMoeRouterProfile.hidden_size, 1, 1, 1) ||
-        !is_shape(*weight, kMoeRouterProfile.hidden_size, kMoeRouterProfile.expert_count, 1, 1) ||
-        !is_shape(*logits, kMoeRouterProfile.expert_count, 1, 1, 1)) {
+        !logits->contiguous || !is_shape(*input, kRouterProjectionInputSize, 1, 1, 1) ||
+        !is_shape(*weight, kRouterProjectionInputSize, kRouterProjectionExpertCount, 1, 1) ||
+        !is_shape(*logits, kRouterProjectionExpertCount, 1, 1, 1)) {
         return {};
     }
 
@@ -451,9 +452,9 @@ static RouterProjectionMatch match_moe_router_projection_f32(const DispatchMatch
     const int64_t input_size  = weight->ne[0];
     const int64_t output_size = weight->ne[1];
     const int64_t token_count = input->ne[1];
-    if (input_size != kMoeRouterProfile.hidden_size || output_size != kMoeRouterProfile.expert_count ||
+    if (input_size != kRouterProjectionInputSize || output_size != kRouterProjectionExpertCount ||
         input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
-        !is_llm_supported_query_length(kMoeRouterProfile, token_count)) {
+        (token_count < 1 || token_count > 2048)) {
         return {};
     }
 
@@ -496,13 +497,13 @@ static bool match_moe_router_projection_f32_dispatch(const DispatchMatchContext 
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenRouterProjectionF32FourRowWave32Kernel);
+    dispatch.kernel = make_kernel_specialization(kRouterProjectionF32FourRowWave32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(match.token_count));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size",
-                                               to_config_value(kMoeRouterProfile.hidden_size));
+                                               to_config_value(kRouterProjectionInputSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.expert_count",
-                                               to_config_value(kMoeRouterProfile.expert_count));
+                                               to_config_value(kRouterProjectionExpertCount));
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
@@ -521,11 +522,11 @@ static bool match_moe_router_projection_top8_fused_decode_dispatch(const Dispatc
 
     const ValueId completion_counter_value = context.next_plan_value;
     Dispatch      dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenRouterProjectionTop8FusedDecodeF32Kernel);
+    dispatch.kernel = make_kernel_specialization(kRouterProjectionTop8FusedDecodeF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.top8.token_count);
     dispatch.kernel.integer_parameters.emplace("route_id_stride", match.top8.route_stride);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size",
-                                               to_config_value(kMoeRouterProfile.hidden_size));
+                                               to_config_value(kRouterProjectionInputSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.expert_count",
                                                to_config_value(match.top8.expert_count));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.route_count", to_config_value(match.top8.route_count));
@@ -543,7 +544,7 @@ static bool match_moe_router_projection_top8_fused_decode_dispatch(const Dispatc
 
     dispatch_match.completion_counter_requests.push_back({
         completion_counter_value,
-        "qwen.router.decode_projection_top8_completion_counter",
+        "llm.router.decode_projection_top8_completion_counter",
         1,
     });
     if (!append_covered_node(context, match.projection, dispatch_match) ||
@@ -562,7 +563,7 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenRouterTop8F32Kernel);
+    dispatch.kernel = make_kernel_specialization(kRouterTop8F32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", router_match.token_count);
     dispatch.kernel.integer_parameters.emplace("route_id_stride", router_match.route_stride);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.expert_count",
@@ -591,13 +592,13 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
         partition_table_size(router_match.token_count, router_match.route_count, router_match.expert_count);
     const bool use_fused_prefill_expert_table_partition = supports_fused_prefill_expert_table_partition(router_match);
     dispatch_match.transients.push_back(
-        { expert_table_value, "qwen.router.expert_table", expert_table_bytes, kMoeRouterPlanTransientAlignment });
-    dispatch_match.transients.push_back({ partition_table_value, "qwen.router.partition_table", partition_table_bytes,
+        { expert_table_value, "llm.router.expert_table", expert_table_bytes, kMoeRouterPlanTransientAlignment });
+    dispatch_match.transients.push_back({ partition_table_value, "llm.router.partition_table", partition_table_bytes,
                                           kMoeRouterPlanTransientAlignment });
     if (use_fused_prefill_expert_table_partition) {
         dispatch_match.completion_counter_requests.push_back({
             completion_counter_value,
-            "qwen.router.prefill_expert_table_partition_completion_counter",
+            "llm.router.prefill_expert_table_partition_completion_counter",
             1,
         });
     }
@@ -646,7 +647,7 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     if (use_fused_prefill_expert_table_partition) {
         Dispatch expert_table_partition_dispatch;
         expert_table_partition_dispatch.kernel =
-            make_kernel_specialization(kQwenBuildExpertTablePartitionPrefill512Kernel);
+            make_kernel_specialization(kBuildExpertTablePartitionPrefill512Kernel);
         expert_table_partition_dispatch.kernel.integer_parameters.emplace("token_count", router_match.token_count);
         expert_table_partition_dispatch.kernel.integer_parameters.emplace("route_count", router_match.route_count);
         expert_table_partition_dispatch.kernel.integer_parameters.emplace("route_stride", router_match.route_stride);

@@ -1,6 +1,5 @@
 #include "dispatch-routed-ffn.h"
 
-#include "dispatch-llm-shapes.h"
 #include "dispatch_registration/common/dispatch-mul-mat-weight-format.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -17,31 +16,31 @@ namespace {
 
 static constexpr KernelCatalogRef kCommonRoutedGateUpSwiGLUF16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f16_f16_wmma");
-static constexpr KernelCatalogRef kQwenRoutedGateUpSwiGLUQ4KQ8Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_gate_up_swiglu_q4k_q8");
-static constexpr KernelCatalogRef kQwenRoutedGateUpSwiGLUQ4KQ8NextQ8Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8");
+static constexpr KernelCatalogRef kRoutedGateUpSwiGLUQ4KQ8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_routed_gate_up_swiglu_q4k_q8");
+static constexpr KernelCatalogRef kRoutedGateUpSwiGLUQ4KQ8NextQ8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8");
 static constexpr KernelCatalogRef kCommonMulMatIdF16F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_f16_f16_wmma");
-static constexpr KernelCatalogRef kQwenRoutedDownQ4KQ8NextQ8Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_q4k_q8_1_x4_next_q8");
-static constexpr KernelCatalogRef kQwenRoutedDownQ6KF32Wave64NextQ8Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_q6k_f32_wave64_next_q8");
-static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceF16F32Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_f16_f32");
-static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32");
+static constexpr KernelCatalogRef kRoutedDownQ4KQ8NextQ8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_routed_down_q4k_q8_1_x4_next_q8");
+static constexpr KernelCatalogRef kRoutedDownQ6KF32Wave64NextQ8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_routed_down_q6k_f32_wave64_next_q8");
+static constexpr KernelCatalogRef kRoutedDownWeightedReduceF16F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_routed_down_weighted_reduce_f16_f32");
+static constexpr KernelCatalogRef kRoutedDownWeightedReduceNextRmsNormF32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_routed_down_weighted_reduce_next_rmsnorm_f32");
 
-static constexpr const LlmMoeDispatchProfile & kRoutedFfnProfile                 = kActiveLlmMoeDispatchProfile;
-static constexpr int64_t                       kRoutedFfnInputSize               = kRoutedFfnProfile.hidden_size;
-static constexpr int64_t                       kRoutedFfnExpertHiddenSize        = kRoutedFfnProfile.expert_hidden_size;
-static constexpr int64_t                       kRoutedFfnExpertCount             = kRoutedFfnProfile.expert_count;
-static constexpr int64_t                       kRoutedFfnRouteCount              = kRoutedFfnProfile.route_count;
+// Qualified grouped routed-FFN schedule dimensions.
+static constexpr int64_t                       kRoutedFfnInputSize               = 2048;
+static constexpr int64_t                       kRoutedFfnExpertHiddenSize        = 768;
+static constexpr int64_t                       kRoutedFfnExpertCount             = 128;
+static constexpr int64_t                       kRoutedFfnRouteCount              = 8;
 static constexpr size_t                        kRoutedFfnPlanTransientAlignment  = 256;
-static constexpr const char *                  kRoutedFfnF16GateUpOutputName     = "qwen.moe.gate_up_swiglu_f16";
-static constexpr const char *                  kRoutedFfnF16RoutedDownOutputName = "qwen.moe.routed_down_f16";
-static constexpr const char *                  kRoutedFfnQ8GateUpOutputName      = "qwen.decode.moe.gate_up_swiglu_q8";
-static constexpr const char *                  kRoutedFfnQ8HiddenOutputName      = "qwen.decode.moe.hidden_q8";
+static constexpr const char *                  kRoutedFfnF16GateUpOutputName     = "llm.moe.gate_up_swiglu_f16";
+static constexpr const char *                  kRoutedFfnF16RoutedDownOutputName = "llm.moe.routed_down_f16";
+static constexpr const char *                  kRoutedFfnQ8GateUpOutputName      = "llm.decode.moe.gate_up_swiglu_q8";
+static constexpr const char *                  kRoutedFfnQ8HiddenOutputName      = "llm.decode.moe.hidden_q8";
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -60,8 +59,8 @@ static bool same_shape(const Value & lhs, const Value & rhs) {
     return true;
 }
 
-static bool is_profile_rms_norm_epsilon(float eps) {
-    const float expected = kRoutedFfnProfile.rms_norm_epsilon;
+static bool is_fused_rms_norm_epsilon(float eps) {
+    const float expected = 0.000001f;
     return eps >= expected * 0.9f && eps <= expected * 1.1f;
 }
 
@@ -371,7 +370,7 @@ static RoutedDownMatch match_routed_ffn_down_grouped(const DispatchMatchContext 
     }
 
     const int64_t token_count = input->ne[2];
-    if (!is_llm_supported_query_length(kRoutedFfnProfile, token_count) ||
+    if ((token_count < 1 || token_count > 2048) ||
         !is_routed_ffn_down_output(*root_output, token_count)) {
         return {};
     }
@@ -417,7 +416,7 @@ static RoutedGateUpMatch match_routed_ffn_gate_up_swiglu(const DispatchMatchCont
     }
 
     const int64_t token_count = input->ne[2];
-    if (!is_llm_supported_query_length(kRoutedFfnProfile, token_count) ||
+    if ((token_count < 1 || token_count > 2048) ||
         !is_routed_ffn_projection_output(*root_output, token_count)) {
         return {};
     }
@@ -557,7 +556,7 @@ static DecodeRoutedGateUpMatch match_decode_routed_ffn_gate_up_swiglu(const Disp
     return match;
 }
 
-static WeightedReduceNextRmsNormMatch match_qwen_weighted_reduce_next_rmsnorm(const DispatchMatchContext & context,
+static WeightedReduceNextRmsNormMatch match_weighted_reduce_next_rmsnorm(const DispatchMatchContext & context,
                                                                               const Value &                residual) {
     WeightedReduceNextRmsNormMatch match;
     const GraphNode * rms_node = find_single_consumer_with_op(context.graph, residual.id, GGML_OP_RMS_NORM);
@@ -565,7 +564,7 @@ static WeightedReduceNextRmsNormMatch match_qwen_weighted_reduce_next_rmsnorm(co
         return match;
     }
     const RmsNormParams * rms_params = op_params_as<RmsNormParams>(rms_node->params);
-    if (rms_params == nullptr || !is_profile_rms_norm_epsilon(rms_params->eps)) {
+    if (rms_params == nullptr || !is_fused_rms_norm_epsilon(rms_params->eps)) {
         return {};
     }
 
@@ -690,7 +689,7 @@ static WeightedReduceMatch match_routed_ffn_down_weighted_reduce_topology(const 
     }
 
     const int64_t token_count = routed_output->ne[2];
-    if (!is_llm_supported_query_length(kRoutedFfnProfile, token_count)) {
+    if ((token_count < 1 || token_count > 2048)) {
         return {};
     }
 
@@ -803,7 +802,7 @@ static WeightedReduceMatch match_routed_ffn_down_weighted_reduce_topology(const 
     match.views          = std::move(owned_views);
     match.reductions     = std::move(reductions);
     match.residual       = residual;
-    match.next_rmsnorm   = match_qwen_weighted_reduce_next_rmsnorm(context, *output);
+    match.next_rmsnorm   = match_weighted_reduce_next_rmsnorm(context, *output);
     match.token_count    = token_count;
     return match;
 }
@@ -930,8 +929,8 @@ static bool match_decode_routed_ffn_gate_up_swiglu_q4k_q8_dispatch(const Dispatc
     const ValueId completion_counters = match.publish_q8 ? ValueId(context.next_plan_value.value + 1) : ValueId();
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(match.publish_q8 ? kQwenRoutedGateUpSwiGLUQ4KQ8NextQ8Kernel :
-                                                                    kQwenRoutedGateUpSwiGLUQ4KQ8Kernel);
+    dispatch.kernel = make_kernel_specialization(match.publish_q8 ? kRoutedGateUpSwiGLUQ4KQ8NextQ8Kernel :
+                                                                    kRoutedGateUpSwiGLUQ4KQ8Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("route_count", kRoutedFfnRouteCount);
     dispatch.kernel.integer_parameters.emplace("route_stride", match.route_stride);
@@ -959,7 +958,7 @@ static bool match_decode_routed_ffn_gate_up_swiglu_q4k_q8_dispatch(const Dispatc
         dispatch.bindings.push_back({ q8_output, 0, q8_output_bytes });
         dispatch_match.completion_counter_requests.push_back({
             completion_counters,
-            "qwen.decode.moe.gate_up_completion_counters",
+            "llm.decode.moe.gate_up_completion_counters",
             gate_up_completion_counter_count(match.token_count),
         });
         dispatch_match.transients.push_back(
@@ -1043,7 +1042,7 @@ static DecodeRoutedDownMatch match_decode_routed_ffn_down_next_q8(const Dispatch
     match.route_ids         = route_ids;
     match.reduce            = std::move(reduce);
     match.kernel =
-        weight->type == GGML_TYPE_Q4_K ? kQwenRoutedDownQ4KQ8NextQ8Kernel : kQwenRoutedDownQ6KF32Wave64NextQ8Kernel;
+        weight->type == GGML_TYPE_Q4_K ? kRoutedDownQ4KQ8NextQ8Kernel : kRoutedDownQ6KF32Wave64NextQ8Kernel;
     match.token_count  = 1;
     match.route_stride = route_stride;
     match.input_is_q8  = input_is_q8;
@@ -1091,7 +1090,7 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
     dispatch_match.value_aliases.push_back({ match.reduce.residual_input->id, match.output->id });
     dispatch_match.completion_counter_requests.push_back({
         completion_counter_value,
-        "qwen.decode.moe.routed_down_completion_counter",
+        "llm.decode.moe.routed_down_completion_counter",
         1,
     });
     dispatch_match.transients.push_back(
@@ -1173,8 +1172,8 @@ static bool match_routed_ffn_down_weighted_reduce_dispatch(const DispatchMatchCo
                                   residual_input_is_safe_for_in_place(context, match);
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(use_next_rmsnorm ? kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel :
-                                                                    kQwenRoutedDownWeightedReduceF16F32Kernel);
+    dispatch.kernel = make_kernel_specialization(use_next_rmsnorm ? kRoutedDownWeightedReduceNextRmsNormF32Kernel :
+                                                                    kRoutedDownWeightedReduceF16F32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     add_routed_down_compile_parameters(dispatch, match.token_count);
     if (use_next_rmsnorm) {

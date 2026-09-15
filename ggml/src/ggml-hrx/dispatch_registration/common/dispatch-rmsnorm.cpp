@@ -1,4 +1,5 @@
 #include "dispatch-rmsnorm.h"
+#include "dispatch-quantized-fusion-shapes.h"
 
 #include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
@@ -1063,6 +1064,249 @@ void register_rmsnorm_dispatches(DispatchRegistryBuilder & registry) {
         0,
         DispatchSource::Common,
         match_rmsnorm_f32_dispatch,
+    });
+}
+
+// Qualified endpoint and decode-Q8 schedules; other shapes use the common RMS paths.
+static constexpr KernelCatalogRef kRmsNormF32QuantizeQ8_1X4Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_rmsnorm_f32_quantize_q8_1_x4");
+static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_linear_q6k_q8_1_x4");
+
+static RmsNormBinaryMatch match_quantized_rmsnorm_mul(const Graph & graph, const GraphNode * node, size_t index) {
+    RmsNormBinaryMatch match = match_rmsnorm_binary_f32(graph, node, index);
+    if (!match.matched() || match.op != BinaryKind::Mul || match.token_count > 2048 ||
+        std::fabs(match.epsilon - 0.000001f) > 1.0e-12f) {
+        return {};
+    }
+    return match;
+}
+
+static bool has_decode_q8_consumer(const Graph & graph, ValueId value) {
+    if (!graph.has_index()) {
+        return false;
+    }
+    for (const GraphNode * consumer : graph.index().consumers(value)) {
+        if (consumer != nullptr && (consumer->op == GGML_OP_MUL_MAT || consumer->op == GGML_OP_MUL_MAT_ID)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct EndpointProjectionMatch {
+    const GraphNode * projection_node       = nullptr;
+    const Value *     weight                = nullptr;
+    const Value *     output                = nullptr;
+    size_t            projection_node_index = 0;
+
+    bool matched() const { return projection_node != nullptr && weight != nullptr && output != nullptr; }
+};
+
+static EndpointProjectionMatch match_endpoint_projection(const Graph & graph, const RmsNormBinaryMatch & match) {
+    EndpointProjectionMatch projection_match;
+    if (!graph.has_index()) {
+        return projection_match;
+    }
+    const std::vector<const GraphNode *> & consumers = graph.index().consumers(match.output->id);
+    if (consumers.size() != 1) {
+        return {};
+    }
+    const GraphNode * consumer = consumers.front();
+    if (consumer == nullptr || consumer->op != GGML_OP_MUL_MAT || consumer->inputs.size() != 2) {
+        return {};
+    }
+    size_t consumer_index = 0;
+    if (!graph.index().node_index(consumer, consumer_index)) {
+        return {};
+    }
+    const Value * weight = graph_value(graph, consumer->inputs[0]);
+    const Value * input  = graph_value(graph, consumer->inputs[1]);
+    const Value * output = graph_value(graph, consumer->output);
+    if (weight == nullptr || input == nullptr || output == nullptr) {
+        return {};
+    }
+    if (input->id != match.output->id || weight->type != GGML_TYPE_Q6_K || output->type != GGML_TYPE_F32 ||
+        !weight->contiguous || !input->contiguous || !output->contiguous || match.hidden_size != kQuantizedEndpointInputSize ||
+        (match.token_count < 1 || match.token_count > 2048) || weight->ne[0] != match.hidden_size ||
+        weight->ne[1] != kQuantizedEndpointOutputSize || output->ne[0] != kQuantizedEndpointOutputSize ||
+        output->ne[1] != match.token_count || output->ne[2] != 1 || output->ne[3] != 1) {
+        return {};
+    }
+
+    projection_match.projection_node       = consumer;
+    projection_match.projection_node_index = consumer_index;
+    projection_match.weight                = weight;
+    projection_match.output                = output;
+    return projection_match;
+}
+
+static RmsNormBinaryMatch match_endpoint_rmsnorm_from_projection(const Graph & graph, const GraphNode * projection) {
+    if (projection == nullptr || projection->op != GGML_OP_MUL_MAT || projection->inputs.size() != 2 ||
+        !graph.has_index()) {
+        return {};
+    }
+
+    const Value * input = graph_value(graph, projection->inputs[1]);
+    if (input == nullptr) {
+        return {};
+    }
+    const GraphNode * mul_node = graph.index().producer(input->id);
+    size_t            mul_node_index;
+    if (mul_node == nullptr || mul_node->op != GGML_OP_MUL || mul_node->inputs.size() != 2 ||
+        !graph.index().node_index(mul_node, mul_node_index)) {
+        return {};
+    }
+
+    for (const ValueId mul_input : mul_node->inputs) {
+        const GraphNode * rms_node = graph.index().producer(mul_input);
+        size_t            rms_node_index;
+        if (rms_node != nullptr && rms_node->op == GGML_OP_RMS_NORM &&
+            graph.index().node_index(rms_node, rms_node_index)) {
+            return match_quantized_rmsnorm_mul(graph, rms_node, rms_node_index);
+        }
+    }
+    return {};
+}
+
+static Dispatch make_quantized_rmsnorm_dispatch(const RmsNormBinaryMatch & rms_match,
+                                                 ValueId q8_value, size_t q8_byte_count) {
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kRmsNormF32QuantizeQ8_1X4Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size",
+                                                   to_config_value(rms_match.hidden_size));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
+                                                   to_config_value(rms_match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.quantize_q8_1_x4.group_capacity",
+                                                   to_config_value((rms_match.token_count * (rms_match.hidden_size / 128))));
+    dispatch.bindings.push_back({ rms_match.input->id, 0, rms_match.input->byte_count });
+    dispatch.bindings.push_back({ rms_match.rhs->id, 0, rms_match.rhs->byte_count });
+    dispatch.bindings.push_back({ rms_match.output->id, 0, rms_match.output->byte_count });
+    dispatch.bindings.push_back({ q8_value, 0, q8_byte_count });
+
+    return dispatch;
+}
+
+static bool match_rmsnorm_f32_quantize_q8_1_x4_dispatch(const DispatchMatchContext & context,
+                                                             DispatchMatch &              match) {
+    const std::vector<GraphNode> & nodes = context.graph.nodes();
+    if (context.root_index >= nodes.size()) {
+        return false;
+    }
+    const RmsNormBinaryMatch rms_match =
+        context.root_node->op == GGML_OP_MUL_MAT ?
+            match_endpoint_rmsnorm_from_projection(context.graph, context.root_node) :
+            match_quantized_rmsnorm_mul(context.graph, &nodes[context.root_index], context.root_index);
+    const EndpointProjectionMatch projection_match =
+        rms_match.matched() ? match_endpoint_projection(context.graph, rms_match) : EndpointProjectionMatch{};
+    if (!rms_match.matched() || rms_match.rms_node_index >= context.covered_nodes.size() ||
+        rms_match.binary_node_index >= context.covered_nodes.size() || context.covered_nodes[rms_match.rms_node_index] ||
+        context.covered_nodes[rms_match.binary_node_index] || !projection_match.matched() ||
+        projection_match.projection_node_index >= context.covered_nodes.size() ||
+        context.covered_nodes[projection_match.projection_node_index] ||
+        (context.root_node->op == GGML_OP_MUL_MAT && projection_match.projection_node != context.root_node)) {
+        return false;
+    }
+
+    const size_t q8_byte_count = q8_1_x4_byte_count(rms_match.token_count, rms_match.hidden_size);
+    if (q8_byte_count == 0) {
+        return false;
+    }
+
+    const ValueId q8_value = context.next_plan_value;
+
+    Dispatch rms_dispatch = make_quantized_rmsnorm_dispatch(rms_match, q8_value, q8_byte_count);
+
+    Dispatch projection_dispatch;
+    projection_dispatch.kernel = make_kernel_specialization(kGgmlLinearQ6KQ8_1X4Kernel);
+    projection_dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
+    projection_dispatch.kernel.integer_parameters.emplace("input_size", rms_match.hidden_size);
+    projection_dispatch.kernel.integer_parameters.emplace("output_size", kQuantizedEndpointOutputSize);
+    projection_dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.token_capacity",
+                                                          to_config_value(rms_match.token_count));
+    projection_dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.output_capacity",
+                                                          to_config_value(kQuantizedEndpointOutputSize));
+    projection_dispatch.bindings.push_back({ q8_value, 0, q8_byte_count });
+    projection_dispatch.bindings.push_back({ projection_match.weight->id, 0, projection_match.weight->byte_count });
+    projection_dispatch.bindings.push_back({ projection_match.output->id, 0, projection_match.output->byte_count });
+
+    match.covered_nodes.push_back(rms_match.rms_node_index);
+    match.covered_nodes.push_back(rms_match.binary_node_index);
+    match.covered_nodes.push_back(projection_match.projection_node_index);
+    match.dispatches.push_back(std::move(rms_dispatch));
+    match.dispatches.push_back(std::move(projection_dispatch));
+    match.transients.push_back({ q8_value, "common.rmsnorm.q8_1_x4", q8_byte_count, 256 });
+    return match.status.success();
+}
+
+static bool match_decode_rmsnorm_f32_quantize_q8_1_x4_dispatch(const DispatchMatchContext & context,
+                                                                    DispatchMatch &              match) {
+    const std::vector<GraphNode> & nodes = context.graph.nodes();
+    if (context.root_index >= nodes.size()) {
+        return false;
+    }
+    const RmsNormBinaryMatch rms_match =
+        match_quantized_rmsnorm_mul(context.graph, &nodes[context.root_index], context.root_index);
+    if (!rms_match.matched() || rms_match.token_count != 1 || rms_match.hidden_size != kQuantizedEndpointInputSize ||
+        rms_match.rms_node_index >= context.covered_nodes.size() ||
+        rms_match.binary_node_index >= context.covered_nodes.size() || context.covered_nodes[rms_match.rms_node_index] ||
+        context.covered_nodes[rms_match.binary_node_index]) {
+        return false;
+    }
+    if (!has_decode_q8_consumer(context.graph, rms_match.output->id)) {
+        return false;
+    }
+
+    const size_t q8_byte_count = q8_1_x4_byte_count(rms_match.token_count, rms_match.hidden_size);
+    if (q8_byte_count == 0) {
+        return false;
+    }
+
+    const ValueId q8_value = context.next_plan_value;
+
+    Dispatch dispatch = make_quantized_rmsnorm_dispatch(rms_match, q8_value, q8_byte_count);
+
+    Status metadata_status;
+    if (!match.metadata.append_alternate_value(
+            { rms_match.output->id, q8_value, GGML_TYPE_Q8_1, q8_byte_count, "common.decode.q8_hidden" },
+            metadata_status)) {
+        match.status.append(metadata_status);
+        return false;
+    }
+
+    match.covered_nodes.push_back(rms_match.rms_node_index);
+    match.covered_nodes.push_back(rms_match.binary_node_index);
+    match.dispatches.push_back(std::move(dispatch));
+    match.transients.push_back({ q8_value, "common.decode.q8_hidden", q8_byte_count, 256 });
+    return match.status.success();
+}
+
+void register_rmsnorm_quantized_fusion_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.endpoint_rmsnorm_q6k_q8_1_x4",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        1200,
+        DispatchSource::Common,
+        match_rmsnorm_f32_quantize_q8_1_x4_dispatch,
+    });
+    registry.add({
+        "common.decode_rmsnorm_f32_quantize_q8_1_x4",
+        GGML_OP_RMS_NORM,
+        DispatchMatchKind::Fused,
+        1150,
+        DispatchSource::Common,
+        match_decode_rmsnorm_f32_quantize_q8_1_x4_dispatch,
+    });
+    registry.add({
+        "common.rmsnorm_f32_quantize_q8_1_x4",
+        GGML_OP_RMS_NORM,
+        DispatchMatchKind::Fused,
+        1100,
+        DispatchSource::Common,
+        match_rmsnorm_f32_quantize_q8_1_x4_dispatch,
     });
 }
 

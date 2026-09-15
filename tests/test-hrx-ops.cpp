@@ -1945,7 +1945,7 @@ static void run_router_projection_case(int64_t token_count) {
     ggml_build_forward_expand(graph, output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(graph),
-                               { "qwen3_moe:qwen3_moe_router_projection_f32_four_row_wave32" });
+                               { "loom_libs:ggml_llm_router_projection_f32_four_row_wave32" });
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
@@ -1991,7 +1991,7 @@ static void run_router_top8_case(int64_t token_count) {
     REQUIRE(graph != nullptr);
     ggml_build_forward_expand(graph, output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "qwen3_moe:qwen3_moe_router_top8_f32" });
+    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_llm_router_top8_f32" });
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
@@ -2285,7 +2285,7 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
 
     const ggml::hrx::Dispatch * metadata_dispatch = nullptr;
     for (const ggml::hrx::Dispatch & dispatch : plan.initialization_dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata") {
+        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_attention_metadata") {
             metadata_dispatch = &dispatch;
         }
     }
@@ -2481,7 +2481,7 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
 
     const ggml::hrx::Dispatch & projection_dispatch = plan.dispatches.back();
     REQUIRE(kernel_name_for_id(projection_dispatch.kernel.kernel_id) ==
-            "qwen3_moe:qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
+            "loom_libs:ggml_llm_dense_linear_q4k_q8_1_x4_next_q8");
     REQUIRE(projection_dispatch.kernel.integer_parameters.at("token_count") == query_token_count);
     REQUIRE(projection_dispatch.kernel.compile_parameters.at("qwen3_moe.dense_quantized.input_size") ==
             std::to_string(attention_hidden_size));
@@ -2998,7 +2998,7 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     require_kernel_subsequence(sequence, { expected_kernel });
     if (normalize_input && (weight_type == GGML_TYPE_Q4_K || square_output)) {
         require_kernel_subsequence(sequence, { "loom_libs:ggml_rmsnorm_binary_q8_1_x4", expected_kernel });
-        REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
+        REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_quantize_q8_1_x4_f32") == sequence.end());
     } else if (normalize_input) {
         REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_rmsnorm_binary_q8_1_x4") == sequence.end());
     }
@@ -3523,7 +3523,7 @@ static void run_endpoint_rmsnorm_q6k_q8_cpu_reference_case() {
 
     require_kernel_subsequence(
         scheduled_kernel_sequence(hrx_graph),
-        { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4", "qwen3_moe:ggml_linear_q6k_q8_1_x4" });
+        { "loom_libs:ggml_llm_rmsnorm_f32_quantize_q8_1_x4", "loom_libs:ggml_linear_q6k_q8_1_x4" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -4110,7 +4110,7 @@ static void run_attention_postprocess_cpu_reference_case() {
     ggml_build_forward_expand(hrx_graph, hrx.value_output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
-                               { "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16" });
+                               { "loom_libs:ggml_llm_attention_postprocess_f32_f16" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -4198,13 +4198,13 @@ static void run_routed_moe_cpu_reference_case(ggml_type down_weight_type, bool i
     ggml_build_forward_expand(hrx_graph, hrx.output);
 
     std::vector<std::string> expected = {
-        "qwen3_moe:qwen3_moe_router_top8_f32",
+        "loom_libs:ggml_llm_router_top8_f32",
         "loom_libs:ggml_moe_build_expert_table",
         "loom_libs:ggml_moe_build_expert_partition_table",
         "loom_libs:ggml_mul_mat_id_swiglu_f16_f16_wmma",
         "loom_libs:ggml_mul_mat_id_f16_f16_wmma",
-        include_next_rmsnorm ? "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32" :
-                               "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32",
+        include_next_rmsnorm ? "loom_libs:ggml_llm_routed_down_weighted_reduce_next_rmsnorm_f32" :
+                               "loom_libs:ggml_llm_routed_down_weighted_reduce_f16_f32",
     };
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), expected);
 
@@ -4336,12 +4336,12 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     ggml_build_forward_expand(graph, output);
 
     std::vector<std::string> expected = {
-        "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
-        "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32",
-        down_weight_type == GGML_TYPE_Q4_K ? "qwen3_moe:qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8" :
-                                             "qwen3_moe:qwen3_moe_routed_gate_up_swiglu_q4k_q8",
-        down_weight_type == GGML_TYPE_Q4_K ? "qwen3_moe:qwen3_moe_routed_down_q4k_q8_1_x4_next_q8" :
-                                             "qwen3_moe:qwen3_moe_routed_down_q6k_f32_wave64_next_q8",
+        "loom_libs:ggml_llm_rmsnorm_f32_quantize_q8_1_x4",
+        "loom_libs:ggml_llm_router_projection_top8_fused_decode_f32",
+        down_weight_type == GGML_TYPE_Q4_K ? "loom_libs:ggml_llm_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8" :
+                                             "loom_libs:ggml_llm_routed_gate_up_swiglu_q4k_q8",
+        down_weight_type == GGML_TYPE_Q4_K ? "loom_libs:ggml_llm_routed_down_q4k_q8_1_x4_next_q8" :
+                                             "loom_libs:ggml_llm_routed_down_q6k_f32_wave64_next_q8",
     };
     require_kernel_subsequence(scheduled_kernel_sequence(graph), expected);
     ggml_free(ctx);
@@ -4362,8 +4362,8 @@ static void run_decode_attention_qkv_scheduling_case() {
     ggml_build_forward_expand(cgraph, graph.value_output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(cgraph),
-                               { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
-                                 "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" });
+                               { "loom_libs:ggml_llm_rmsnorm_f32_quantize_q8_1_x4",
+                                 "loom_libs:ggml_llm_attention_qkv_postprocess_fused_decode" });
     ggml_free(ctx);
 }
 

@@ -88,6 +88,12 @@ struct KernelDefinition {
     KernelSpan<KernelScalarDefinition>  workload_parameters;
     KernelSpan<KernelScalarDefinition>  launch_parameters;
     KernelCompileRecipe                 compile_recipe;
+    const char *                        export_name = "";
+
+    const char * kernel_export_name() const {
+        return export_name != nullptr && export_name[0] != '\0' ? export_name :
+               name != nullptr ? name : "";
+    }
 };
 
 struct KernelCorpus {

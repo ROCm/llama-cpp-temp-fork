@@ -548,7 +548,7 @@ inline bool common_prepare_q8_1_x4_input(const DispatchMatchContext & context,
         return false;
     }
 
-    constexpr KernelCatalogRef kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_quantize_q8_1_x4_f32");
+    constexpr KernelCatalogRef kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_quantize_q8_1_x4_f32");
     constexpr const char * name = "common.mul_mat.q8_1_x4";
     const ValueId activation = context.next_plan_value;
     match.transients.push_back({ activation, name, bytes, 256 });

@@ -676,11 +676,11 @@ static void run_dispatch_registry_checks() {
                                            "common.mul_mat.f32_f32_decode", ggml::hrx::DispatchMatchKind::Fused));
     REQUIRE(has_dispatch_registration_kind(registry.registrations_for_root(GGML_OP_MUL_MAT),
                                            "common.mul_mat_postops.f32_f32_wmma", ggml::hrx::DispatchMatchKind::Fused));
-    REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT), "qwen.matmul.q6k_q8_1_x4"));
+    REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT), "common.matmul.q6k_q8_1_x4"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_MUL_MAT),
                                       "llm.moe_router.projection_f32_four_row_wave32"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_RMS_NORM),
-                                      "qwen.rmsnorm_f32_quantize_q8_1_x4"));
+                                      "common.rmsnorm_f32_quantize_q8_1_x4"));
     REQUIRE(
         has_dispatch_registration(registry.registrations_for_root(GGML_OP_RMS_NORM), "common.rmsnorm_binary_q8_1_x4"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_RMS_NORM), "common.rmsnorm_binary_f32"));
@@ -690,7 +690,7 @@ static void run_dispatch_registry_checks() {
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_FLASH_ATTN_EXT),
                                       "common.flash_attention_decode_split_next_q8"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_RESHAPE),
-                                      "qwen.attention_postprocess_f32_f16"));
+                                      "llm.attention_postprocess_f32_f16"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_GET_ROWS), "common.get_rows.f32"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_GET_ROWS), "common.get_rows.f32_next"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_GET_ROWS), "common.gather_add_f32"));
@@ -741,7 +741,7 @@ static void run_dispatch_registry_checks() {
                                            ggml::hrx::DispatchMatchKind::SingleOp));
     REQUIRE(has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_SET_ROWS), "common.set_rows"));
     REQUIRE(!has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_RMS_NORM),
-                                       "qwen.rmsnorm_f32_quantize_q8_1_x4"));
+                                       "common.rmsnorm_f32_quantize_q8_1_x4"));
     REQUIRE(has_dispatch_registration_kind(generic_registry.registrations_for_root(GGML_OP_MUL_MAT),
                                            "common.mul_mat_swiglu.f32_f32_wmma", ggml::hrx::DispatchMatchKind::Fused));
     REQUIRE(has_dispatch_registration_kind(generic_registry.registrations_for_root(GGML_OP_MUL_MAT),
@@ -754,13 +754,13 @@ static void run_dispatch_registry_checks() {
     REQUIRE(has_dispatch_registration_kind(generic_registry.registrations_for_root(GGML_OP_MUL_MAT),
                                            "common.mul_mat_postops.f32_f32_wmma", ggml::hrx::DispatchMatchKind::Fused));
     REQUIRE(!has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_MUL_MAT),
-                                       "qwen.matmul.q6k_q8_1_x4"));
+                                       "common.matmul.q6k_q8_1_x4"));
     REQUIRE(has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_FLASH_ATTN_EXT),
                                       "common.flash_attention_f32_f16_wmma"));
     REQUIRE(has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_FLASH_ATTN_EXT),
                                       "common.flash_attention_decode_split_next_q8"));
     REQUIRE(!has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_RESHAPE),
-                                       "qwen.attention_postprocess_f32_f16"));
+                                       "llm.attention_postprocess_f32_f16"));
     REQUIRE(!has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_GET_ROWS),
                                        "qwen.preamble.token_embedding_q4k"));
     REQUIRE(!has_dispatch_registration(generic_registry.registrations_for_root(GGML_OP_SOFT_MAX),
@@ -2568,7 +2568,7 @@ static void schedule_single_matmul_command(ggml_context * ctx,
     REQUIRE(scheduler.plan().dispatches.size() == command_count);
     if (q8_input) {
         REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
+                "loom_libs:ggml_quantize_q8_1_x4_f32");
     }
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
@@ -2655,7 +2655,7 @@ static void schedule_fused_matmul_unary_command(ggml_context *       ctx,
     REQUIRE(scheduler.plan().dispatches.size() == command_count);
     if (q8_input) {
         REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
+                "loom_libs:ggml_quantize_q8_1_x4_f32");
     }
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
@@ -2718,7 +2718,7 @@ static void schedule_fused_matmul_swiglu_command(
     REQUIRE(scheduler.plan().dispatches.size() == command_count);
     if (q8_input) {
         REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
+                "loom_libs:ggml_quantize_q8_1_x4_f32");
     }
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
@@ -3069,7 +3069,7 @@ static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     REQUIRE(scheduler.plan().transients.size() == 1);
 
     const ggml::hrx::Dispatch & rms_dispatch = scheduler.plan().dispatches[0];
-    REQUIRE(kernel_name_for_id(rms_dispatch.kernel.kernel_id) == "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4");
+    REQUIRE(kernel_name_for_id(rms_dispatch.kernel.kernel_id) == "loom_libs:ggml_llm_rmsnorm_f32_quantize_q8_1_x4");
     REQUIRE(rms_dispatch.kernel.integer_parameters.at("token_count") == token_count);
     require_compile_parameter(rms_dispatch, "qwen3_moe.model.hidden_size", "2048");
     require_compile_parameter(rms_dispatch, "qwen3_moe.workload.token_capacity", std::to_string(token_count));
@@ -3081,7 +3081,7 @@ static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     REQUIRE(rms_dispatch.bindings[3].length == q8_transient.size);
 
     const ggml::hrx::Dispatch & vocab_dispatch = scheduler.plan().dispatches[1];
-    REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) == "qwen3_moe:ggml_linear_q6k_q8_1_x4");
+    REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) == "loom_libs:ggml_linear_q6k_q8_1_x4");
     REQUIRE(vocab_dispatch.kernel.integer_parameters.at("token_count") == token_count);
     REQUIRE(vocab_dispatch.kernel.integer_parameters.at("input_size") == 2048);
     REQUIRE(vocab_dispatch.kernel.integer_parameters.at("output_size") == 151936);
@@ -3165,7 +3165,7 @@ static void schedule_get_rows_q8_1_alternate_command(ggml_type embedding_weight_
     REQUIRE(alternate->alternate_value == q8_transient.value);
 
     const ggml::hrx::Dispatch & vocab_dispatch = scheduler.plan().dispatches[1];
-    REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) == "qwen3_moe:ggml_linear_q6k_q8_1_x4");
+    REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) == "loom_libs:ggml_linear_q6k_q8_1_x4");
     REQUIRE(vocab_dispatch.bindings.size() == 3);
     REQUIRE(vocab_dispatch.bindings[0].value == alternate->alternate_value);
     REQUIRE(vocab_dispatch.bindings[0].length == alternate->byte_count);
@@ -4033,12 +4033,12 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(scheduler.plan().dispatches.size() == (q8_input ? 5 : 4));
     if (q8_input) {
         REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
+                "loom_libs:ggml_quantize_q8_1_x4_f32");
     }
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    REQUIRE(kernel_name == "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16");
+    REQUIRE(kernel_name == "loom_libs:ggml_llm_attention_postprocess_f32_f16");
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("cache_row_count") == cache_row_count);
     REQUIRE(dispatch.bindings.size() == 12);
@@ -4139,7 +4139,7 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
         REQUIRE(scheduler.plan().valid());
         for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
             REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) !=
-                    "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16");
+                    "loom_libs:ggml_llm_attention_postprocess_f32_f16");
         }
     }
 
@@ -4232,7 +4232,7 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
         const ggml::hrx::Dispatch & context_capture = plan.initialization_dispatches[0];
         const ggml::hrx::Dispatch & metadata        = plan.initialization_dispatches[1];
         REQUIRE(kernel_name_for_id(context_capture.kernel.kernel_id) == "qwen:qwen_attention_context_base_capture");
-        REQUIRE(kernel_name_for_id(metadata.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata");
+        REQUIRE(kernel_name_for_id(metadata.kernel.kernel_id) == "loom_libs:ggml_attention_metadata");
         REQUIRE(context_capture.bindings.size() == 2);
         REQUIRE(metadata.bindings.size() == 5);
         REQUIRE(context_capture.bindings[1].value == metadata.bindings[0].value);
@@ -4438,7 +4438,7 @@ static void run_swiglu_q8_output_checks() {
             REQUIRE(producer->bindings[3].value == output->id);
             REQUIRE(producer->bindings[4].value == alternate->alternate_value);
             REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
-                return kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:ggml_quantize_q8_1_x4_f32" &&
+                return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_quantize_q8_1_x4_f32" &&
                        dispatch.bindings.front().value == output->id;
             }) == 0);
             REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
@@ -4765,7 +4765,7 @@ static void run_rmsnorm_gate_q8_output_checks() {
             REQUIRE(producer->bindings.back().value == alternate->alternate_value);
             REQUIRE(producer->bindings.back().length == bytes);
             REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
-                return kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:ggml_quantize_q8_1_x4_f32";
+                return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_quantize_q8_1_x4_f32";
             }) == 0);
             REQUIRE(std::any_of(std::next(producer), plan.dispatches.end(), [&](const auto & dispatch) {
                 return std::any_of(dispatch.bindings.begin(), dispatch.bindings.end(), [&](const auto & binding) {
@@ -6034,7 +6034,7 @@ static void run_qwen_matmul_dispatch_checks() {
         REQUIRE(input != nullptr);
         ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
         REQUIRE(output != nullptr);
-        schedule_single_matmul_command(ctx, output, "qwen3_moe:qwen3_moe_router_projection_f32_four_row_wave32", 4,
+        schedule_single_matmul_command(ctx, output, "loom_libs:ggml_llm_router_projection_f32_four_row_wave32", 4,
                                        2048, 128);
     }
 
@@ -6045,7 +6045,7 @@ static void run_qwen_matmul_dispatch_checks() {
         REQUIRE(input != nullptr);
         ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
         REQUIRE(output != nullptr);
-        schedule_single_matmul_command(ctx, output, "qwen3_moe:qwen3_moe_router_projection_f32_four_row_wave32", 1,
+        schedule_single_matmul_command(ctx, output, "loom_libs:ggml_llm_router_projection_f32_four_row_wave32", 1,
                                        2048, 128);
     }
 
@@ -6115,7 +6115,7 @@ static void run_quantized_value_projection_dispatch_checks() {
             REQUIRE(plan.valid());
             REQUIRE(plan.dispatches.size() == 2);
             REQUIRE(kernel_name_for_id(plan.dispatches.front().kernel.kernel_id) ==
-                    "qwen3_moe:ggml_quantize_q8_1_x4_f32");
+                    "loom_libs:ggml_quantize_q8_1_x4_f32");
             const auto & dispatch = plan.dispatches.back();
             REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
                     "loom_libs:llm_attention_v_matmul_set_rows_f32_f32_wmma");
@@ -6286,22 +6286,22 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
     const ggml::hrx::CommandPlanTransient & expert_table_transient    = scheduler.plan().transients[0];
     const ggml::hrx::CommandPlanTransient & partition_table_transient = scheduler.plan().transients[1];
     REQUIRE(expert_table_transient.value.value == static_cast<int32_t>(imported.graph.values().size()));
-    REQUIRE(expert_table_transient.name == "qwen.router.expert_table");
+    REQUIRE(expert_table_transient.name == "llm.router.expert_table");
     REQUIRE(expert_table_transient.size == expert_table_bytes);
     REQUIRE(partition_table_transient.value.value == expert_table_transient.value.value + 1);
-    REQUIRE(partition_table_transient.name == "qwen.router.partition_table");
+    REQUIRE(partition_table_transient.name == "llm.router.partition_table");
     REQUIRE(partition_table_transient.size == partition_table_bytes);
     if (uses_fused_prefill_expert_table_partition) {
         const ggml::hrx::CommandPlanCompletionCounterRequest & completion_counter_request =
             scheduler.plan().completion_counter_requests[0];
         REQUIRE(completion_counter_request.value.value == partition_table_transient.value.value + 1);
-        REQUIRE(completion_counter_request.name == "qwen.router.prefill_expert_table_partition_completion_counter");
+        REQUIRE(completion_counter_request.name == "llm.router.prefill_expert_table_partition_completion_counter");
         REQUIRE(completion_counter_request.count == 1);
     }
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches[0];
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    REQUIRE(kernel_name == "qwen3_moe:qwen3_moe_router_top8_f32");
+    REQUIRE(kernel_name == "loom_libs:ggml_llm_router_top8_f32");
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("route_id_stride") == route_ids->nb[1] / sizeof(int32_t));
     REQUIRE(dispatch.bindings.size() == 3);
@@ -6317,7 +6317,7 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
             scheduler.plan().completion_counter_requests[0];
         const ggml::hrx::Dispatch & expert_table_partition_dispatch = scheduler.plan().dispatches[1];
         REQUIRE(kernel_name_for_id(expert_table_partition_dispatch.kernel.kernel_id) ==
-                "qwen3_moe:qwen3_moe_build_expert_table_partition_prefill_512");
+                "loom_libs:ggml_llm_build_expert_table_partition_prefill_512");
         REQUIRE(expert_table_partition_dispatch.kernel.integer_parameters.at("token_count") == token_count);
         REQUIRE(expert_table_partition_dispatch.kernel.integer_parameters.at("route_count") == expected_route_count);
         REQUIRE(expert_table_partition_dispatch.kernel.integer_parameters.at("route_stride") ==
@@ -6457,7 +6457,7 @@ static void schedule_manual_qwen_router_top8_command(ggml::hrx::Graph & graph,
     const size_t partition_table_bytes = qwen_partition_table_size(token_count, route_count, expert_count);
 
     const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches[0];
-    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen3_moe_router_top8_f32");
+    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_llm_router_top8_f32");
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("route_id_stride") == route_count);
     REQUIRE(dispatch.bindings.size() == 3);
@@ -6719,7 +6719,7 @@ static void append_qwen_routed_down_for_graph(ggml::hrx::Graph &              gr
     REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == expected_kernel_name);
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == tensors.output->ne[2]);
     REQUIRE(dispatch.bindings.size() == 4);
-    REQUIRE(routed_down_transient.name == "qwen.moe.routed_down_f16");
+    REQUIRE(routed_down_transient.name == "llm.moe.routed_down_f16");
     REQUIRE(routed_down_transient.size == qwen_routed_down_f16_output_size(tensors.output->ne[2]));
     REQUIRE(dispatch.bindings[0].value == gate_up_alternate->alternate_value);
     REQUIRE(dispatch.bindings[0].length == qwen_routed_gate_up_f16_output_size(tensors.output->ne[2]));
@@ -7387,7 +7387,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(plan.transients.size() == 3);
         REQUIRE(plan.metadata.alternate_values().size() == 1);
         const ggml::hrx::CommandPlanTransient & f16_output_transient = plan.transients.back();
-        REQUIRE(f16_output_transient.name == "qwen.moe.gate_up_swiglu_f16");
+        REQUIRE(f16_output_transient.name == "llm.moe.gate_up_swiglu_f16");
         REQUIRE(f16_output_transient.size == qwen_routed_gate_up_f16_output_size(token_count));
         REQUIRE(plan.metadata.alternate_values().front().graph_value == glu_value->id);
         REQUIRE(plan.metadata.alternate_values().front().alternate_value == f16_output_transient.value);
@@ -7563,7 +7563,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         append_qwen_routed_down_for_graph(imported.graph, tensors, covered_nodes, plan,
                                           "loom_libs:ggml_mul_mat_id_f16_f16_wmma");
         append_qwen_weighted_reduce_for_graph(imported.graph, tensors, covered_nodes, plan,
-                                              "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32");
+                                              "loom_libs:ggml_llm_routed_down_weighted_reduce_f16_f32");
 
         REQUIRE(plan.dispatches.size() == 6);
         REQUIRE(plan.transients.size() == 4);
@@ -7593,7 +7593,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         append_qwen_routed_down_for_graph(imported.graph, tensors, covered_nodes, plan,
                                           "loom_libs:ggml_mul_mat_id_f16_f16_wmma");
         append_qwen_weighted_reduce_for_graph(imported.graph, tensors, covered_nodes, plan,
-                                              "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32");
+                                              "loom_libs:ggml_llm_routed_down_weighted_reduce_f16_f32");
 
         REQUIRE(plan.dispatches.size() == 6);
         REQUIRE(plan.dispatches.back().kernel.integer_parameters.at("token_count") == 1);
@@ -7614,7 +7614,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         append_qwen_routed_down_for_graph(imported.graph, tensors, covered_nodes, plan,
                                           "loom_libs:ggml_mul_mat_id_f16_f16_wmma");
         append_qwen_weighted_reduce_for_graph(imported.graph, tensors, covered_nodes, plan,
-                                              "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32");
+                                              "loom_libs:ggml_llm_routed_down_weighted_reduce_next_rmsnorm_f32");
 
         REQUIRE(plan.dispatches.size() == 6);
         REQUIRE(plan.transients.size() == 4);
@@ -7664,7 +7664,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
 
         REQUIRE(plan.dispatches.size() == 6);
         REQUIRE(kernel_name_for_id(plan.dispatches.back().kernel.kernel_id) ==
-                "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32");
+                "loom_libs:ggml_llm_routed_down_weighted_reduce_f16_f32");
         REQUIRE(weighted_match.value_aliases.empty());
         REQUIRE(plan.dispatches.back().bindings.size() == 4);
         const ggml::hrx::Value * hidden_state_value = imported.graph.values().find_tensor(tensors.hidden_state);

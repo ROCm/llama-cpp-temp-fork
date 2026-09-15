@@ -1,7 +1,6 @@
-#include "dispatch-qwen-attention-postprocess.h"
+#include "dispatch-attention-postprocess.h"
 
 #include "../common/dispatch-rope-utils.h"
-#include "dispatch-llm-shapes.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -17,15 +16,15 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kQwenAttentionPostprocessF32F16Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_attention_postprocess_f32_f16");
-static constexpr KernelCatalogRef kQwenAttentionQkvPostprocessFusedDecodeKernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_attention_qkv_postprocess_fused_decode");
-static constexpr KernelCatalogRef kQwenAttentionContextBaseCaptureKernel =
+static constexpr KernelCatalogRef kAttentionPostprocessF32F16Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_attention_postprocess_f32_f16");
+static constexpr KernelCatalogRef kAttentionQkvPostprocessFusedDecodeKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_attention_qkv_postprocess_fused_decode");
+static constexpr KernelCatalogRef kAttentionContextBaseCaptureKernel =
     GGML_HRX_KERNEL_REF("qwen", "qwen_attention_context_base_capture");
-static constexpr KernelCatalogRef kQwenAttentionMetadataKernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_attention_metadata");
-static constexpr int64_t kQwenAttentionHeadSize = 128;
+static constexpr KernelCatalogRef kAttentionMetadataKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_metadata");
+static constexpr int64_t kAttentionHeadSize = 128;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -54,19 +53,19 @@ static bool is_supported_head_count(int64_t head_count) {
     return head_count >= 1 && head_count <= 64;
 }
 
-static bool is_qwen_rms_norm_epsilon(float eps) {
+static bool is_rms_norm_epsilon(float eps) {
     return eps >= 0.0000009f && eps <= 0.0000011f;
 }
 
-static bool is_qwen_implicit_rope_contract(const RopeParams & params) {
-    return params.n_dims == kQwenAttentionHeadSize && params.mode == GGML_ROPE_TYPE_NEOX &&
+static bool is_implicit_rope_contract(const RopeParams & params) {
+    return params.n_dims == kAttentionHeadSize && params.mode == GGML_ROPE_TYPE_NEOX &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
 }
 
 static bool build_inverse_frequency_table(const GraphNode & rope, std::vector<uint8_t> & data, float & rope_mscale) {
     const RopeParams * params = op_params_as<RopeParams>(rope.params);
-    if (params == nullptr || !is_qwen_implicit_rope_contract(*params)) {
+    if (params == nullptr || !is_implicit_rope_contract(*params)) {
         return false;
     }
 
@@ -163,7 +162,7 @@ static bool is_attention_postprocess_candidate_root(const Graph & graph, const G
     const Value *     raw_input  = graph_value(graph, root->inputs[0]);
     const Value *     reshaped   = graph_value(graph, root->output);
     return projection != nullptr && raw_input != nullptr && reshaped != nullptr && raw_input->type == GGML_TYPE_F32 &&
-           reshaped->type == GGML_TYPE_F32 && raw_input->ne[1] > 0 && reshaped->ne[0] == kQwenAttentionHeadSize &&
+           reshaped->type == GGML_TYPE_F32 && raw_input->ne[1] > 0 && reshaped->ne[0] == kAttentionHeadSize &&
            reshaped->ne[2] == raw_input->ne[1];
 }
 
@@ -292,20 +291,20 @@ static bool matching_inverse_frequencies(const NormRopeChain & lhs, const NormRo
 
 static bool has_qwen_rope_params(const GraphNode & node) {
     const RopeParams * params = op_params_as<RopeParams>(node.params);
-    return params != nullptr && params->n_dims == kQwenAttentionHeadSize && params->mode == GGML_ROPE_TYPE_NEOX;
+    return params != nullptr && params->n_dims == kAttentionHeadSize && params->mode == GGML_ROPE_TYPE_NEOX;
 }
 
 static bool has_qwen_rms_params(const GraphNode & node) {
     const RmsNormParams * params = op_params_as<RmsNormParams>(node.params);
-    return params != nullptr && is_qwen_rms_norm_epsilon(params->eps);
+    return params != nullptr && is_rms_norm_epsilon(params->eps);
 }
 
 static bool is_norm_weight(const Value & value) {
-    return value.type == GGML_TYPE_F32 && is_shape(value, kQwenAttentionHeadSize, 1, 1, 1);
+    return value.type == GGML_TYPE_F32 && is_shape(value, kAttentionHeadSize, 1, 1, 1);
 }
 
 static bool is_inverse_frequency_table(const Value & value) {
-    return value.type == GGML_TYPE_F32 && is_shape(value, kQwenAttentionHeadSize / 2, 1, 1, 1);
+    return value.type == GGML_TYPE_F32 && is_shape(value, kAttentionHeadSize / 2, 1, 1, 1);
 }
 
 static bool match_projection_reshape(const Graph &       graph,
@@ -328,7 +327,7 @@ static bool match_projection_reshape(const Graph &       graph,
         return false;
     }
     if (raw_input->type != GGML_TYPE_F32 || reshaped->type != GGML_TYPE_F32 || !is_2d(*raw_input) ||
-        reshaped->ne[0] != kQwenAttentionHeadSize || reshaped->ne[3] != 1) {
+        reshaped->ne[0] != kAttentionHeadSize || reshaped->ne[3] != 1) {
         log_attention_reject(status, graph, reshape,
                              label + " projection reshape has incompatible type, rank, or head size");
         return false;
@@ -337,7 +336,7 @@ static bool match_projection_reshape(const Graph &       graph,
     const int64_t head_count  = reshaped->ne[1];
     const int64_t token_count = reshaped->ne[2];
     if (!is_supported_head_count(head_count) || !is_supported_token_count(token_count) ||
-        raw_input->ne[0] != head_count * kQwenAttentionHeadSize || raw_input->ne[1] != token_count) {
+        raw_input->ne[0] != head_count * kAttentionHeadSize || raw_input->ne[1] != token_count) {
         log_attention_reject(status, graph, reshape, label + " projection reshape has unsupported head/token shape");
         return false;
     }
@@ -410,7 +409,7 @@ static bool match_norm_rope_chain_from_reshape(const Graph &       graph,
             return false;
         }
         const RopeParams * params = op_params_as<RopeParams>(rope->params);
-        if (params == nullptr || !is_qwen_implicit_rope_contract(*params)) {
+        if (params == nullptr || !is_implicit_rope_contract(*params)) {
             log_attention_reject(status, graph, reshape,
                                  label + " explicit inverse-frequency table has unsupported ROPE params=" +
                                      rope_params_summary(*rope));
@@ -432,7 +431,7 @@ static bool match_norm_rope_chain_from_reshape(const Graph &       graph,
     }
     if (positions == nullptr || output == nullptr || positions->type != GGML_TYPE_I32 ||
         !is_shape(*positions, chain.token_count, 1, 1, 1) || output->type != GGML_TYPE_F32 ||
-        !is_shape(*output, kQwenAttentionHeadSize, chain.head_count, chain.token_count, 1)) {
+        !is_shape(*output, kAttentionHeadSize, chain.head_count, chain.token_count, 1)) {
         log_attention_reject(status, graph, reshape, label + " positions or ROPE output shape is incompatible");
         return false;
     }
@@ -454,7 +453,7 @@ static const GraphNode * find_cache_read_layout(const Graph & graph, const Value
     const GraphNode * match = nullptr;
     for (const GraphNode * consumer : layout_alias_consumers(graph, cache.id)) {
         const Value * output = graph_value(graph, consumer->output);
-        if (output == nullptr || output->type != GGML_TYPE_F16 || output->ne[0] != kQwenAttentionHeadSize ||
+        if (output == nullptr || output->type != GGML_TYPE_F16 || output->ne[0] != kAttentionHeadSize ||
             output->ne[1] != head_count || output->ne[3] != 1) {
             continue;
         }
@@ -470,10 +469,10 @@ static int64_t cache_row_count_for_value(const Value & cache, int64_t head_count
     if (cache.type != GGML_TYPE_F16 || head_count <= 0) {
         return 0;
     }
-    if (cache.ne[0] == kQwenAttentionHeadSize * head_count && cache.ne[2] == 1 && cache.ne[3] == 1) {
+    if (cache.ne[0] == kAttentionHeadSize * head_count && cache.ne[2] == 1 && cache.ne[3] == 1) {
         return cache.ne[1];
     }
-    if (cache.ne[0] == kQwenAttentionHeadSize && cache.ne[2] == head_count && cache.ne[3] == 1) {
+    if (cache.ne[0] == kAttentionHeadSize && cache.ne[2] == head_count && cache.ne[3] == 1) {
         return cache.ne[1];
     }
     return 0;
@@ -635,7 +634,7 @@ static FlashInputLayoutChain match_flash_input_layouts(const Graph & graph, cons
     return layouts;
 }
 
-static AttentionPostprocessMatch match_qwen_attention_postprocess(const Graph &     graph,
+static AttentionPostprocessMatch match_attention_postprocess(const Graph &     graph,
                                                                   const GraphNode * root,
                                                                   Status *          status) {
     AttentionPostprocessMatch match;
@@ -733,7 +732,7 @@ static bool append_postprocess_covered_nodes(const DispatchMatchContext &      c
 
 static bool has_attention_metadata_initialization(const CommandPlan & plan) {
     for (const Dispatch & dispatch : plan.initialization_dispatches) {
-        if (dispatch.kernel.kernel_id == kQwenAttentionMetadataKernel.id) {
+        if (dispatch.kernel.kernel_id == kAttentionMetadataKernel.id) {
             return true;
         }
     }
@@ -767,7 +766,7 @@ static bool append_attention_metadata_initialization(const DispatchMatchContext 
                           sizeof(ggml_fp16_t);
         Status metadata_status;
         if (!dispatch_match.metadata.append_alternate_value(
-                { mask->id, mask->id, GGML_TYPE_F16, mask_byte_count, "qwen.attention.compact_mask" },
+                { mask->id, mask->id, GGML_TYPE_F16, mask_byte_count, "llm.attention.compact_mask" },
                 metadata_status)) {
             dispatch_match.status.append(metadata_status);
             return false;
@@ -775,16 +774,16 @@ static bool append_attention_metadata_initialization(const DispatchMatchContext 
     }
 
     const ValueId control = next_match_transient_value(context, dispatch_match);
-    dispatch_match.transients.push_back({ control, "qwen.attention.control", sizeof(int32_t), 16 });
+    dispatch_match.transients.push_back({ control, "llm.attention.control", sizeof(int32_t), 16 });
 
     Dispatch context_capture;
-    context_capture.kernel = make_kernel_specialization(kQwenAttentionContextBaseCaptureKernel);
+    context_capture.kernel = make_kernel_specialization(kAttentionContextBaseCaptureKernel);
     context_capture.bindings.push_back({ match.query.positions->id, 0, match.query.positions->byte_count });
     context_capture.bindings.push_back({ control, 0, sizeof(int32_t) });
     dispatch_match.initialization_dispatches.push_back(std::move(context_capture));
 
     Dispatch metadata;
-    metadata.kernel = make_kernel_specialization(kQwenAttentionMetadataKernel);
+    metadata.kernel = make_kernel_specialization(kAttentionMetadataKernel);
     metadata.kernel.integer_parameters.emplace("token_count", match.query.token_count);
     metadata.kernel.integer_parameters.emplace("context_capacity", context_capacity);
     metadata.bindings.push_back({ control, 0, sizeof(int32_t) });
@@ -801,7 +800,7 @@ static const Value * projection_weight(const Graph & graph, const GraphNode * pr
                                                                      graph_value(graph, projection->inputs[0]);
 }
 
-static bool is_qwen_attention_projection_weight(const Value & weight, int64_t input_size, int64_t output_size) {
+static bool is_attention_projection_weight(const Value & weight, int64_t input_size, int64_t output_size) {
     return (weight.type == GGML_TYPE_Q4_K || weight.type == GGML_TYPE_Q6_K) && weight.contiguous &&
            is_shape(weight, input_size, output_size, 1, 1);
 }
@@ -812,15 +811,15 @@ static uint32_t attention_qkv_completion_counter_count(const AttentionPostproces
 
 }  // namespace
 
-static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const DispatchMatchContext & context,
+static bool match_attention_qkv_postprocess_fused_decode_dispatch(const DispatchMatchContext & context,
                                                                        DispatchMatch &              dispatch_match) {
     const GraphNode * root = context.root_node;
     if (root != nullptr && root->op == GGML_OP_MUL_MAT) {
         root = find_single_consumer_with_op(context.graph, root->output, GGML_OP_RESHAPE);
     }
     const AttentionPostprocessMatch match =
-        match_qwen_attention_postprocess(context.graph, root, &dispatch_match.status);
-    if (!match.matched() || !is_qwen_decode_query_length(match.query.token_count)) {
+        match_attention_postprocess(context.graph, root, &dispatch_match.status);
+    if (!match.matched() || match.query.token_count != 1) {
         return false;
     }
     if (match.query.projection_input->id != match.key.key.projection_input->id ||
@@ -829,8 +828,8 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
     }
 
     const int64_t hidden_size    = match.query.projection_input->ne[0];
-    const int64_t query_size     = match.query.head_count * kQwenAttentionHeadSize;
-    const int64_t key_value_size = match.key.key.head_count * kQwenAttentionHeadSize;
+    const int64_t query_size     = match.query.head_count * kAttentionHeadSize;
+    const int64_t key_value_size = match.key.key.head_count * kAttentionHeadSize;
     if (hidden_size != 2048 || match.query.head_count != 32 || match.key.key.head_count != 4 ||
         match.value.head_count != match.key.key.head_count) {
         return false;
@@ -842,9 +841,9 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
     if (query_weight == nullptr || key_weight == nullptr || value_weight == nullptr ||
         query_weight->type != GGML_TYPE_Q4_K || key_weight->type != GGML_TYPE_Q4_K ||
         (value_weight->type != GGML_TYPE_Q4_K && value_weight->type != GGML_TYPE_Q6_K) ||
-        !is_qwen_attention_projection_weight(*query_weight, hidden_size, query_size) ||
-        !is_qwen_attention_projection_weight(*key_weight, hidden_size, key_value_size) ||
-        !is_qwen_attention_projection_weight(*value_weight, hidden_size, key_value_size)) {
+        !is_attention_projection_weight(*query_weight, hidden_size, query_size) ||
+        !is_attention_projection_weight(*key_weight, hidden_size, key_value_size) ||
+        !is_attention_projection_weight(*value_weight, hidden_size, key_value_size)) {
         return false;
     }
 
@@ -876,11 +875,11 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
     const size_t  inverse_frequencies_size      = match.query.inverse_freqs_byte_count;
     if (synthetic_inverse_frequencies) {
         dispatch_match.transients.push_back({ inverse_frequencies_value,
-                                              "qwen.attention_qkv_decode.inverse_frequencies", inverse_frequencies_size,
+                                              "llm.attention_qkv_decode.inverse_frequencies", inverse_frequencies_size,
                                               256 });
         dispatch_match.constant_initializations.push_back({
             inverse_frequencies_value,
-            "qwen.attention_qkv_decode.inverse_frequencies",
+            "llm.attention_qkv_decode.inverse_frequencies",
             0,
             match.query.inverse_freqs_data,
         });
@@ -890,7 +889,7 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
     const uint32_t completion_counter_count = attention_qkv_completion_counter_count(match);
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenAttentionQkvPostprocessFusedDecodeKernel);
+    dispatch.kernel = make_kernel_specialization(kAttentionQkvPostprocessFusedDecodeKernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.query.token_count);
     dispatch.kernel.integer_parameters.emplace("cache_row_count", match.key.cache_row_count);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", to_config_value(hidden_size));
@@ -899,7 +898,7 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.value_uses_q6",
                                                value_weight->type == GGML_TYPE_Q6_K ? "1" : "0");
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.head_size",
-                                               to_config_value(kQwenAttentionHeadSize));
+                                               to_config_value(kAttentionHeadSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.rope_mscale",
                                                rope_mscale_config_value(match.query.rope_mscale));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
@@ -926,17 +925,17 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
 
     dispatch_match.completion_counter_requests.push_back({
         completion_counters,
-        "qwen.attention_qkv_decode.completion_counters",
+        "llm.attention_qkv_decode.completion_counters",
         completion_counter_count,
     });
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
 }
 
-static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext & context,
+static bool match_attention_postprocess_dispatch(const DispatchMatchContext & context,
                                                       DispatchMatch &              dispatch_match) {
     const AttentionPostprocessMatch match =
-        match_qwen_attention_postprocess(context.graph, context.root_node, &dispatch_match.status);
+        match_attention_postprocess(context.graph, context.root_node, &dispatch_match.status);
     if (!match.matched()) {
         return false;
     }
@@ -953,16 +952,16 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
                                                       next_match_transient_value(context, dispatch_match) :
                                                       match.query.inverse_freqs->id;
     const size_t  inverse_frequencies_size      = match.query.inverse_freqs_byte_count;
-    dispatch.kernel                             = make_kernel_specialization(kQwenAttentionPostprocessF32F16Kernel);
+    dispatch.kernel                             = make_kernel_specialization(kAttentionPostprocessF32F16Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.query.token_count);
     dispatch.kernel.integer_parameters.emplace("cache_row_count", match.key.cache_row_count);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.head_size",
-                                               to_config_value(kQwenAttentionHeadSize));
+                                               to_config_value(kAttentionHeadSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.query_size",
-                                               to_config_value(match.query.head_count * kQwenAttentionHeadSize));
+                                               to_config_value(match.query.head_count * kAttentionHeadSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.key_value_size",
-                                               to_config_value(match.key.key.head_count * kQwenAttentionHeadSize));
+                                               to_config_value(match.key.key.head_count * kAttentionHeadSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.rope_mscale",
                                                rope_mscale_config_value(match.query.rope_mscale));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
@@ -983,11 +982,11 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
     dispatch_match.dispatches.push_back(std::move(dispatch));
     if (synthetic_inverse_frequencies) {
         dispatch_match.transients.push_back({ inverse_frequencies_value,
-                                              "qwen.attention_postprocess.inverse_frequencies",
+                                              "llm.attention_postprocess.inverse_frequencies",
                                               inverse_frequencies_size, 256 });
         dispatch_match.constant_initializations.push_back({
             inverse_frequencies_value,
-            "qwen.attention_postprocess.inverse_frequencies",
+            "llm.attention_postprocess.inverse_frequencies",
             0,
             match.query.inverse_freqs_data,
         });
@@ -995,30 +994,30 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
     return true;
 }
 
-void register_qwen_attention_postprocess_dispatches(DispatchRegistryBuilder & registry) {
+void register_llm_attention_postprocess_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({
-        "qwen.attention_qkv_postprocess_fused_decode",
+        "llm.attention_qkv_postprocess_fused_decode",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         300,
-        DispatchSource::Qwen,
-        match_qwen_attention_qkv_postprocess_fused_decode_dispatch,
+        DispatchSource::Llm,
+        match_attention_qkv_postprocess_fused_decode_dispatch,
     });
     registry.add({
-        "qwen.attention_qkv_postprocess_fused_decode",
+        "llm.attention_qkv_postprocess_fused_decode",
         GGML_OP_RESHAPE,
         DispatchMatchKind::Fused,
         200,
-        DispatchSource::Qwen,
-        match_qwen_attention_qkv_postprocess_fused_decode_dispatch,
+        DispatchSource::Llm,
+        match_attention_qkv_postprocess_fused_decode_dispatch,
     });
     registry.add({
-        "qwen.attention_postprocess_f32_f16",
+        "llm.attention_postprocess_f32_f16",
         GGML_OP_RESHAPE,
         DispatchMatchKind::Fused,
         100,
-        DispatchSource::Qwen,
-        match_qwen_attention_postprocess_dispatch,
+        DispatchSource::Llm,
+        match_attention_postprocess_dispatch,
     });
 }
 

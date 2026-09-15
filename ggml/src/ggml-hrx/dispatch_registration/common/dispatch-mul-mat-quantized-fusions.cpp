@@ -1,6 +1,7 @@
-#include "dispatch-qwen-matmul.h"
+#include "dispatch-mul-mat-quantized-fusions.h"
 
-#include "dispatch-llm-shapes.h"
+#include "dispatch-mul-mat-common.h"
+#include "dispatch-quantized-fusion-shapes.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -12,23 +13,15 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kQwenDenseLinearQ6KF16WmmaKernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q6k_f16_wmma");
-static constexpr KernelCatalogRef kQwenDenseLinearQ4KQ8NextQ8Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
+static constexpr KernelCatalogRef kDenseLinearQ6KF16WmmaKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_dense_linear_q6k_f16_wmma");
+static constexpr KernelCatalogRef kDenseLinearQ4KQ8NextQ8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_llm_dense_linear_q4k_q8_1_x4_next_q8");
 static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4");
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_linear_q6k_q8_1_x4");
 
-static constexpr int64_t kQwenHiddenSize      = kQwen30BMoeDispatchProfile.hidden_size;
-static constexpr int64_t kQwenVocabularyCount = 151936;
 
-static const Value * graph_value(const Graph & graph, ValueId id) {
-    return graph.values().find(id);
-}
 
-static bool is_2d(const Value & value) {
-    return value.ne[0] > 0 && value.ne[1] > 0 && value.ne[2] == 1 && value.ne[3] == 1;
-}
 
 static bool is_supported_dense_input_size(int64_t input_size) {
     return input_size >= 256 && input_size <= 32768 && input_size % 256 == 0;
@@ -38,32 +31,18 @@ static bool is_supported_dense_output_size(int64_t output_size) {
     return output_size >= 1 && output_size <= 262144;
 }
 
-static bool is_qwen_endpoint_projection(int64_t input_size, int64_t output_size) {
-    return input_size == kQwenHiddenSize && output_size == kQwenVocabularyCount;
-}
 
 static std::string to_config_value(int64_t value) {
     return std::to_string(value);
 }
 
-struct QwenMatmulMatch {
-    const Value *    input       = nullptr;
-    const Value *    weight      = nullptr;
-    const Value *    output      = nullptr;
-    KernelCatalogRef kernel      = {};
-    ValueId          input_value = {};
-    size_t           input_bytes = 0;
-    int64_t          input_size  = 0;
-    int64_t          output_size = 0;
-    int64_t          token_count = 0;
-    bool             dense       = false;
-
-    bool matched() const {
-        return input != nullptr && weight != nullptr && output != nullptr && kernel.id != kUncatalogedKernelId;
-    }
+struct QuantizedMatmulMatch : CommonMulMatMatch {
+    ValueId input_value = {};
+    size_t input_bytes = 0;
+    bool dense = false;
 };
 
-struct QwenAttentionOutputNextQ8Match {
+struct AttentionOutputNextQ8Match {
     const Value *                     input               = nullptr;
     const CommandPlanAlternateValue * input_alternate     = nullptr;
     const Value *                     weight              = nullptr;
@@ -142,117 +121,71 @@ static const Value * get_rows_source_with_same_layout(const Graph & graph, const
     if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
         return nullptr;
     }
-    const Value * source = graph_value(graph, node->inputs[0]);
-    const Value * output = graph_value(graph, node->output);
+    const Value * source = common_graph_value(graph, node->inputs[0]);
+    const Value * output = common_graph_value(graph, node->output);
     if (source == nullptr || output == nullptr || !same_value_layout(*source, *output)) {
         return nullptr;
     }
     return source;
 }
 
-static QwenMatmulMatch match_qwen_q6k_q8_matmul(const Graph & graph, const GraphNode * node, const CommandPlan & plan) {
-    QwenMatmulMatch match;
+static QuantizedMatmulMatch match_endpoint_q6k_matmul(const Graph & graph,
+                                                       const GraphNode * node,
+                                                       KernelCatalogRef kernel) {
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
-        return match;
+        return {};
     }
+    const Value * weight = common_graph_value(graph, node->inputs[0]);
+    if (weight == nullptr || weight->type != GGML_TYPE_Q6_K ||
+        !is_quantized_endpoint_shape(weight->ne[0], weight->ne[1])) {
+        return {};
+    }
+    const CommonMulMatMatch common = common_match_mul_mat_any_format(graph, node, kernel, true);
+    if (!common.matched() || common.token_count != 1) {
+        return {};
+    }
+    QuantizedMatmulMatch match;
+    static_cast<CommonMulMatMatch &>(match) = common;
+    match.input_value = common.input->id;
+    match.input_bytes = common.input->byte_count;
+    return match;
+}
 
-    const Value * weight = graph_value(graph, node->inputs[0]);
-    const Value * input  = graph_value(graph, node->inputs[1]);
-    const Value * output = graph_value(graph, node->output);
-    if (weight == nullptr || input == nullptr || output == nullptr) {
+static QuantizedMatmulMatch match_q6k_q8_matmul(const Graph & graph, const GraphNode * node, const CommandPlan & plan) {
+    QuantizedMatmulMatch match = match_endpoint_q6k_matmul(graph, node, kGgmlLinearQ6KQ8_1X4Kernel);
+    if (!match.matched()) {
         return {};
     }
-    if (!is_2d(*weight) || !is_2d(*input) || !is_2d(*output)) {
-        return {};
-    }
-    if (!weight->contiguous || !input->contiguous || !output->contiguous) {
-        return {};
-    }
-    if (weight->type != GGML_TYPE_Q6_K || input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
-        return {};
-    }
-
-    const int64_t input_size  = weight->ne[0];
-    const int64_t output_size = weight->ne[1];
-    const int64_t token_count = input->ne[1];
-    if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count) {
-        return {};
-    }
-    if (!is_qwen_decode_query_length(token_count) || input_size != kQwenHiddenSize ||
-        output_size != kQwenVocabularyCount || !is_supported_dense_input_size(input_size) ||
-        !is_supported_dense_output_size(output_size)) {
-        return {};
-    }
-
-    const size_t                      q8_byte_count = q8_1_x4_byte_count(token_count, input_size);
+    const size_t bytes = q8_1_x4_byte_count(match.token_count, match.input_size);
     const CommandPlanAlternateValue * alternate =
-        find_alternate_value(graph, plan, input->id, GGML_TYPE_Q8_1, q8_byte_count);
+        find_alternate_value(graph, plan, match.input->id, GGML_TYPE_Q8_1, bytes);
     if (alternate == nullptr) {
         return {};
     }
-
-    match.input       = input;
-    match.weight      = weight;
-    match.output      = output;
     match.input_value = alternate->alternate_value;
     match.input_bytes = alternate->byte_count;
-    match.kernel      = kGgmlLinearQ6KQ8_1X4Kernel;
-    match.input_size  = input_size;
-    match.output_size = output_size;
-    match.token_count = token_count;
     return match;
 }
 
-static QwenMatmulMatch match_qwen_decode_endpoint_q6k_matmul(const Graph & graph, const GraphNode * node) {
-    QwenMatmulMatch match;
-    if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
-        return match;
-    }
-
-    const Value * weight = graph_value(graph, node->inputs[0]);
-    const Value * input  = graph_value(graph, node->inputs[1]);
-    const Value * output = graph_value(graph, node->output);
-    if (weight == nullptr || input == nullptr || output == nullptr || !is_2d(*weight) || !is_2d(*input) ||
-        !is_2d(*output) || !weight->contiguous || !input->contiguous || !output->contiguous ||
-        weight->type != GGML_TYPE_Q6_K || input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
-        return {};
-    }
-
-    const int64_t input_size  = weight->ne[0];
-    const int64_t output_size = weight->ne[1];
-    const int64_t token_count = input->ne[1];
-    if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
-        !is_qwen_decode_query_length(token_count) || !is_qwen_endpoint_projection(input_size, output_size) ||
-        !is_supported_dense_input_size(input_size) || !is_supported_dense_output_size(output_size)) {
-        return {};
-    }
-
-    match.input       = input;
-    match.weight      = weight;
-    match.output      = output;
-    match.input_value = input->id;
-    match.input_bytes = input->byte_count;
-    match.kernel      = kQwenDenseLinearQ6KF16WmmaKernel;
-    match.input_size  = input_size;
-    match.output_size = output_size;
-    match.token_count = token_count;
-    match.dense       = true;
+static QuantizedMatmulMatch match_decode_endpoint_q6k_matmul(const Graph & graph, const GraphNode * node) {
+    QuantizedMatmulMatch match = match_endpoint_q6k_matmul(graph, node, kDenseLinearQ6KF16WmmaKernel);
+    match.dense = true;
     return match;
 }
 
-static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const DispatchMatchContext & context) {
-    QwenAttentionOutputNextQ8Match match;
+static AttentionOutputNextQ8Match match_attention_output_next_q8(const DispatchMatchContext & context) {
+    AttentionOutputNextQ8Match match;
     const Graph &                  graph = context.graph;
     const GraphNode *              node  = context.root_node;
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2 || !graph.has_index()) {
         return match;
     }
 
-    const Value * weight            = graph_value(graph, node->inputs[0]);
-    const Value * input             = graph_value(graph, node->inputs[1]);
-    const Value * projection_output = graph_value(graph, node->output);
-    if (weight == nullptr || input == nullptr || projection_output == nullptr || !is_2d(*weight) || !is_2d(*input) ||
-        !is_2d(*projection_output)) {
+    const Value * weight            = common_graph_value(graph, node->inputs[0]);
+    const Value * input             = common_graph_value(graph, node->inputs[1]);
+    const Value * projection_output = common_graph_value(graph, node->output);
+    if (weight == nullptr || input == nullptr || projection_output == nullptr || !common_is_2d(*weight) || !common_is_2d(*input) ||
+        !common_is_2d(*projection_output)) {
         return {};
     }
     if (weight->type != GGML_TYPE_Q4_K || input->type != GGML_TYPE_F32 || projection_output->type != GGML_TYPE_F32 ||
@@ -264,7 +197,7 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
     const int64_t output_size = weight->ne[1];
     const int64_t token_count = input->ne[1];
     if (token_count != 1 || input->ne[0] != input_size || projection_output->ne[0] != output_size ||
-        projection_output->ne[1] != token_count || input_size != 4096 || output_size != kQwenHiddenSize) {
+        projection_output->ne[1] != token_count || input_size != 4096 || output_size != kQuantizedEndpointInputSize) {
         return {};
     }
 
@@ -282,7 +215,7 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
         if (get_rows_source_with_same_layout(graph, projection_get_rows) != projection_output) {
             return {};
         }
-        selected_projection = graph_value(graph, projection_get_rows->output);
+        selected_projection = common_graph_value(graph, projection_get_rows->output);
         add_node            = find_single_consumer_with_op(graph, projection_get_rows->output, GGML_OP_ADD);
     }
     if (add_node == nullptr || add_node->inputs.size() != 2) {
@@ -293,9 +226,9 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
     const GraphNode * residual_get_rows = nullptr;
     const GraphNode * residual_consumer = add_node;
     if (add_node->inputs[0] == selected_projection->id) {
-        selected_residual = graph_value(graph, add_node->inputs[1]);
+        selected_residual = common_graph_value(graph, add_node->inputs[1]);
     } else if (add_node->inputs[1] == selected_projection->id) {
-        selected_residual = graph_value(graph, add_node->inputs[0]);
+        selected_residual = common_graph_value(graph, add_node->inputs[0]);
     }
     if (selected_residual == nullptr) {
         return {};
@@ -308,7 +241,7 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
     } else {
         residual_input = selected_residual;
     }
-    const Value * residual_output = graph_value(graph, add_node->output);
+    const Value * residual_output = common_graph_value(graph, add_node->output);
     if (residual_input == nullptr || residual_output == nullptr || residual_input->type != GGML_TYPE_F32 ||
         residual_output->type != GGML_TYPE_F32 || !same_value_layout(*selected_projection, *selected_residual) ||
         !same_value_layout(*selected_projection, *residual_input) ||
@@ -321,7 +254,7 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
     if (rms_node == nullptr || rms_node->inputs.size() != 1) {
         return {};
     }
-    const Value *     rms_output = graph_value(graph, rms_node->output);
+    const Value *     rms_output = common_graph_value(graph, rms_node->output);
     const GraphNode * mul_node   = find_single_consumer_with_op(graph, rms_node->output, GGML_OP_MUL);
     if (rms_output == nullptr || mul_node == nullptr || mul_node->inputs.size() != 2) {
         return {};
@@ -329,11 +262,11 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
 
     const Value * norm_weight = nullptr;
     if (mul_node->inputs[0] == rms_node->output) {
-        norm_weight = graph_value(graph, mul_node->inputs[1]);
+        norm_weight = common_graph_value(graph, mul_node->inputs[1]);
     } else if (mul_node->inputs[1] == rms_node->output) {
-        norm_weight = graph_value(graph, mul_node->inputs[0]);
+        norm_weight = common_graph_value(graph, mul_node->inputs[0]);
     }
-    const Value * normalized_output = graph_value(graph, mul_node->output);
+    const Value * normalized_output = common_graph_value(graph, mul_node->output);
     if (norm_weight == nullptr || normalized_output == nullptr || norm_weight->type != GGML_TYPE_F32 ||
         normalized_output->type != GGML_TYPE_F32 || !norm_weight->contiguous || !normalized_output->contiguous ||
         norm_weight->ne[0] != output_size || normalized_output->ne[0] != output_size ||
@@ -362,7 +295,7 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
 
 }  // namespace
 
-static void build_qwen_matmul_dispatch(const QwenMatmulMatch & match,
+static void build_matmul_dispatch(const QuantizedMatmulMatch & match,
                                        DispatchMatch &         dispatch_match,
                                        size_t                  root_index) {
     Dispatch dispatch;
@@ -394,28 +327,28 @@ static void build_qwen_matmul_dispatch(const QwenMatmulMatch & match,
     dispatch_match.dispatches.push_back(std::move(dispatch));
 }
 
-static bool match_qwen_q6k_q8_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const QwenMatmulMatch match = match_qwen_q6k_q8_matmul(context.graph, context.root_node, context.plan);
+static bool match_q6k_q8_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const QuantizedMatmulMatch match = match_q6k_q8_matmul(context.graph, context.root_node, context.plan);
     if (!match.matched()) {
         return false;
     }
-    build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
+    build_matmul_dispatch(match, dispatch_match, context.root_index);
     return true;
 }
 
-static bool match_qwen_decode_endpoint_q6k_dispatch(const DispatchMatchContext & context,
+static bool match_decode_endpoint_q6k_dispatch(const DispatchMatchContext & context,
                                                     DispatchMatch &              dispatch_match) {
-    const QwenMatmulMatch match = match_qwen_decode_endpoint_q6k_matmul(context.graph, context.root_node);
+    const QuantizedMatmulMatch match = match_decode_endpoint_q6k_matmul(context.graph, context.root_node);
     if (!match.matched()) {
         return false;
     }
-    build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
+    build_matmul_dispatch(match, dispatch_match, context.root_index);
     return true;
 }
 
-static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchContext & context,
+static bool match_attention_output_next_q8_dispatch(const DispatchMatchContext & context,
                                                          DispatchMatch &              dispatch_match) {
-    const QwenAttentionOutputNextQ8Match match = match_qwen_attention_output_next_q8(context);
+    const AttentionOutputNextQ8Match match = match_attention_output_next_q8(context);
     if (!match.matched()) {
         return false;
     }
@@ -425,7 +358,7 @@ static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchCont
     const size_t  q8_output_bytes = q8_1_x4_byte_count(match.token_count, match.output_size);
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenDenseLinearQ4KQ8NextQ8Kernel);
+    dispatch.kernel = make_kernel_specialization(kDenseLinearQ4KQ8NextQ8Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.input_size",
                                                to_config_value(match.input_size));
@@ -446,15 +379,15 @@ static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchCont
     dispatch_match.value_aliases.push_back({ match.residual_input->id, match.residual_output->id });
     dispatch_match.completion_counter_requests.push_back({
         completion_counter,
-        "qwen.decode.attention_output.completion_counter",
+        "common.decode.attention_output.completion_counter",
         1,
     });
     dispatch_match.transients.push_back(
-        { q8_output, "qwen.decode.attention_output.next_q8_output", q8_output_bytes, 256 });
+        { q8_output, "common.decode.attention_output.next_q8_output", q8_output_bytes, 256 });
     Status metadata_status;
     if (!dispatch_match.metadata.append_alternate_value(
             { match.normalized_output->id, q8_output, GGML_TYPE_Q8_1, q8_output_bytes,
-              "qwen.decode.attention_output.next_q8_output" },
+              "common.decode.attention_output.next_q8_output" },
             metadata_status)) {
         dispatch_match.status.append(metadata_status);
         return false;
@@ -480,30 +413,30 @@ static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchCont
     return true;
 }
 
-void register_qwen_matmul_dispatches(DispatchRegistryBuilder & registry) {
+void register_mul_mat_quantized_fusion_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({
-        "qwen.matmul.attention_output_q4k_q8_1_x4_next_q8",
+        "common.matmul.attention_output_q4k_q8_1_x4_next_q8",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         300,
-        DispatchSource::Qwen,
-        match_qwen_attention_output_next_q8_dispatch,
+        DispatchSource::Common,
+        match_attention_output_next_q8_dispatch,
     });
     registry.add({
-        "qwen.matmul.q6k_q8_1_x4",
+        "common.matmul.q6k_q8_1_x4",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         305,
-        DispatchSource::Qwen,
-        match_qwen_q6k_q8_dispatch,
+        DispatchSource::Common,
+        match_q6k_q8_dispatch,
     });
     registry.add({
-        "qwen.matmul.decode_endpoint_q6k_f16_wmma",
+        "common.matmul.decode_endpoint_q6k_f16_wmma",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         100,
-        DispatchSource::Qwen,
-        match_qwen_decode_endpoint_q6k_dispatch,
+        DispatchSource::Common,
+        match_decode_endpoint_q6k_dispatch,
     });
 }
 
