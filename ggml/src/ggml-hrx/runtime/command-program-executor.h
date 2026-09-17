@@ -25,7 +25,6 @@ namespace ggml::hrx {
 class KernelExecutableCache;
 struct KernelExecutable;
 class TransientArena;
-class HostBufferRegistry;
 
 struct CommandProgramExecutionContext {
     hrx_device_t            device             = nullptr;
@@ -36,7 +35,6 @@ struct CommandProgramExecutionContext {
     TransientArena *        transient_arena    = nullptr;
     HostTransferManager *   host_transfers     = nullptr;
     HostWeightCache *       host_weights       = nullptr;
-    HostBufferRegistry *    host_buffers       = nullptr;
 };
 
 struct PreparedCommandBinding {

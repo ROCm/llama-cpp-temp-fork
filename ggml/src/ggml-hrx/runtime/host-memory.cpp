@@ -1514,7 +1514,6 @@ HostStagingBuffer & HostStagingBuffer::operator=(HostStagingBuffer && other) noe
     clear();
     buffer          = other.buffer;
     host_data       = other.host_data;
-    source_host_buffer = std::move(other.source_host_buffer);
     value           = other.value;
     length          = other.length;
     upload          = other.upload;
@@ -1534,7 +1533,6 @@ void HostStagingBuffer::clear() {
         buffer = nullptr;
     }
     host_data = nullptr;
-    source_host_buffer = HostBufferRef{};
     value     = -1;
     length    = 0;
     upload    = false;

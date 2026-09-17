@@ -117,7 +117,6 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.transient_arena,
         &context_.host_transfers,
         &context_.host_weights,
-        &context_.device->host_buffers,
     };
     const PreparedCommandProgramCacheExecutionResult execution =
         use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings) :

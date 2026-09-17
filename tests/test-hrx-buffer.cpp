@@ -7,6 +7,7 @@
 #include "hrx-interop-utils.h"
 #include "runtime/host-memory.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -352,6 +353,58 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(weight_stats.resident_bytes == 0);
 }
 
+static void run_host_input_snapshot_checks(ggml_backend_t backend) {
+    ggml_backend_hrx_context * hrx = backend_context(backend);
+    const auto buft = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend));
+    REQUIRE(buft != nullptr);
+    const bool direct = hrx->device->use_direct_host_bindings;
+    hrx->device->use_direct_host_bindings = false;
+    ggml_backend_buffer_t host_buffer = ggml_backend_buft_alloc_buffer(buft, 4096);
+    hrx->device->use_direct_host_bindings = direct;
+    REQUIRE(host_buffer != nullptr);
+
+    ggml_context * ctx = ggml_init({ 256 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 64);
+    input->buffer = host_buffer;
+    input->data = ggml_backend_buffer_get_base(host_buffer);
+    REQUIRE(ggml_backend_buffer_init_tensor(host_buffer, input) == GGML_STATUS_SUCCESS);
+    ggml_tensor * output = ggml_scale(ctx, input, 2.0f);
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx, 32, false);
+    ggml_build_forward_expand(graph, output);
+    ggml_backend_buffer_t device_buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(device_buffer != nullptr);
+
+    auto * host = static_cast<float *>(input->data);
+    for (size_t i = 0; i < 64; ++i) {
+        host[i] = static_cast<float>(i);
+    }
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+
+    std::array<float, 64> expected;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        host[i] = static_cast<float>(i) + 0.25f;
+        expected[i] = 2.0f * host[i];
+    }
+
+    hrx_semaphore_t gate = nullptr;
+    require_hrx_status(hrx_semaphore_create(hrx->device->device, 0, &gate));
+    require_hrx_status(hrx_stream_wait_on(hrx->stream, { gate, 1 }));
+    REQUIRE(ggml_backend_graph_compute_async(backend, graph) == GGML_STATUS_SUCCESS);
+    // Reuse the host input while the GPU is held behind the semaphore.
+    std::fill(host, host + expected.size(), -100.0f);
+    require_hrx_status(hrx_semaphore_signal(gate, 1));
+    ggml_backend_synchronize(backend);
+
+    std::array<float, 64> actual;
+    ggml_backend_tensor_get(output, actual.data(), 0, sizeof(actual));
+    REQUIRE(actual == expected);
+    hrx_semaphore_release(gate);
+    ggml_backend_buffer_free(device_buffer);
+    ggml_backend_buffer_free(host_buffer);
+    ggml_free(ctx);
+}
+
 int main() {
     if (ggml_backend_hrx_get_device_count() == 0) {
         std::fprintf(stderr, "test skipped: no HRX devices available\n");
@@ -367,6 +420,7 @@ int main() {
     run_host_transfer_checks(context);
     run_host_staging_checks(context);
     run_host_weight_cache_checks(context);
+    run_host_input_snapshot_checks(backend);
 
     ggml_backend_free(backend);
     return 0;

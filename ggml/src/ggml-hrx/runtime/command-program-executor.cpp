@@ -604,9 +604,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
         staging.download                     = access.write;
-        if (staging.upload && context.host_buffers != nullptr) {
-            staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
-        }
         CommandProgramBinding device_binding = binding;
         device_binding.buffer                = staging.buffer;
         device_binding.host_data             = nullptr;
@@ -797,9 +794,7 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
     return status;
 }
 
-static Status rebind_prepared_host_staging(const CommandProgramExecutionContext & context,
-                                           const CommandProgramBindings &         bindings,
-                                           PreparedCommandProgram &               prepared) {
+static Status rebind_prepared_host_staging(const CommandProgramBindings & bindings, PreparedCommandProgram & prepared) {
     Status status;
     for (HostStagingBuffer & staging : prepared.host_staging) {
         const CommandProgramBinding * binding = bindings.find(ValueId(staging.value));
@@ -809,10 +804,6 @@ static Status rebind_prepared_host_staging(const CommandProgramExecutionContext 
             continue;
         }
         staging.host_data = static_cast<uint8_t *>(binding->host_data) + binding->offset;
-        staging.source_host_buffer = HostBufferRef{};
-        if (staging.upload && context.host_buffers != nullptr) {
-            staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
-        }
     }
     return status;
 }
@@ -838,17 +829,9 @@ static Status upload_prepared_host_staging(const CommandProgramExecutionContext 
             status.log("debug serial sync before host-staging upload failed for value %d", staging.value);
             return status;
         }
-        Status upload_status;
-        if (staging.source_host_buffer.valid()) {
-            if (ErrorResult error = take_status(hrx_stream_copy_buffer(context.stream, staging.source_host_buffer.buffer(),
-                                                                       staging.source_host_buffer.offset(),
-                                                                       staging.buffer, 0, staging.length))) {
-                upload_status.log("HRX host staging buffer copy failed: %s", error->c_str());
-            }
-        } else {
-            upload_status =
-                context.host_transfers->upload_async(context.stream, staging.host_data, staging.buffer, 0, staging.length);
-        }
+        // Snapshot host inputs before GGML reuses them for the next microbatch.
+        Status upload_status =
+            context.host_transfers->upload_async(context.stream, staging.host_data, staging.buffer, 0, staging.length);
         status.append(upload_status);
         if (!debug.sync("host-staging-upload-buffer-post", detail)) {
             status.log("debug serial sync after host-staging upload failed for value %d", staging.value);
@@ -1556,7 +1539,7 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     const DebugSerialExecutionTrace debug(context, commands);
     debug.log_program_begin();
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-rebind-pre");
-    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
+    Status rebind_status = rebind_prepared_host_staging(bindings, prepared);
     if (!rebind_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(rebind_status));
         return false;
@@ -1647,7 +1630,7 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         return result;
     }
 
-    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
+    Status rebind_status = rebind_prepared_host_staging(bindings, prepared);
     if (!rebind_status.success()) {
         result.status.append(rebind_status);
         result.event = HrxGraphReplayEvent::BuildFailed;
