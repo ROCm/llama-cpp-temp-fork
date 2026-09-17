@@ -9947,6 +9947,7 @@ static void run_lowtoken_residual_dispatch_checks() {
         bool alias_weight;
         bool second_add;
         bool fused;
+        bool decode_fused = false;
     };
     const Case cases[] = {
         { GGML_TYPE_Q4_K, 6144, 5120, 1, 0, 0, false, false, true },
@@ -9971,12 +9972,12 @@ static void run_lowtoken_residual_dispatch_checks() {
         { GGML_TYPE_Q4_K, 6144, 5120, 5, 2, 0, false, false, false },
         { GGML_TYPE_Q4_K, 6144, 5120, 1, 3, 0, false, false, false },
         { GGML_TYPE_Q4_K, 6144, 5120, 5, 3, 0, false, false, false },
-        { GGML_TYPE_Q4_K, 6144, 5120, 1, 0, 0, true, false, false },
+        { GGML_TYPE_Q4_K, 6144, 5120, 1, 0, 0, true, false, false, true },
         { GGML_TYPE_Q4_K, 6144, 5120, 5, 1, 0, true, false, false },
-        { GGML_TYPE_Q4_K, 3840, 4096, 1, 0, 0, false, false, false },
-        { GGML_TYPE_Q4_K, 6144, 4032, 1, 0, 0, false, false, false },
-        { GGML_TYPE_Q4_K, 4096, 8192, 1, 0, 0, false, false, false },
-        { GGML_TYPE_F16, 6144, 5120, 1, 0, 0, false, false, false },
+        { GGML_TYPE_Q4_K, 3840, 4096, 1, 0, 0, false, false, false, true },
+        { GGML_TYPE_Q4_K, 6144, 4032, 1, 0, 0, false, false, false, true },
+        { GGML_TYPE_Q4_K, 4096, 8192, 1, 0, 0, false, false, false, true },
+        { GGML_TYPE_F16, 6144, 5120, 1, 0, 0, false, false, false, true },
         { GGML_TYPE_Q4_K, 6144, 5120, 6, 1, 0, false, false, false },
         { GGML_TYPE_Q4_K, 6144, 5120, 256, 1, 0, false, false, false },
     };
@@ -10015,10 +10016,20 @@ static void run_lowtoken_residual_dispatch_checks() {
             imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(program.valid());
         REQUIRE(command_program_verifies(program));
-        size_t fused = 0, binary = 0;
+        size_t fused = 0, decode_fused = 0, binary = 0;
         for (const auto & command : program.commands) {
             const std::string name = kernel_name_for_id(command.kernel.kernel_id);
             binary += name == "loom_libs:ggml_binary_f32";
+            if (name == "loom_libs:ggml_mul_mat_add_f32_f32_decode_wave64") {
+                ++decode_fused;
+                REQUIRE(command.bindings.size() == 4);
+                REQUIRE(command.kernel.integer_parameters.at("token_count") == c.tokens);
+                REQUIRE(command.kernel.integer_parameters.at("input_size") == c.k);
+                REQUIRE(command.kernel.integer_parameters.at("output_size") == c.n);
+                REQUIRE(command.kernel.compile_parameters.at("ggml.mul_mat_f32_f32_decode.weight_format") ==
+                        (c.type == GGML_TYPE_F16 ? "16" : "4"));
+                continue;
+            }
             if (name != "loom_libs:ggml_mul_mat_bias_f32_f32_wmma" && name != "loom_libs:ggml_mul_mat_add_f32_f32_wmma") {
                 continue;
             }
@@ -10030,7 +10041,8 @@ static void run_lowtoken_residual_dispatch_checks() {
             REQUIRE(command.kernel.compile_parameters.at("ggml.mul_mat.activation_format") == "9");
         }
         REQUIRE(fused == (c.fused ? 1 : 0));
-        REQUIRE(binary == (c.fused ? (c.second_add ? 1 : 0) : 1));
+        REQUIRE(decode_fused == (c.decode_fused ? 1 : 0));
+        REQUIRE(binary == (c.fused || c.decode_fused ? (c.second_add ? 1 : 0) : 1));
         ggml_free(ctx);
     }
 }
